@@ -127,10 +127,31 @@ endif()
 
 add_executable(finder-linux
     src/main.cpp
+    src/resources/resources.qrc
 )
 target_link_libraries(finder-linux PRIVATE
     finder_ui
     finder_core
+)
+
+include(GNUInstallDirs)
+
+install(TARGETS finder-linux
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES data/finder-linux.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+
+foreach(SIZE 16 24 32 48 64 128 256 512)
+    install(FILES data/icons/hicolor/${SIZE}x${SIZE}/apps/finder-linux.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${SIZE}x${SIZE}/apps
+    )
+endforeach()
+
+install(FILES data/icons/hicolor/scalable/apps/finder-linux.svg
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
 )
 
 enable_testing()

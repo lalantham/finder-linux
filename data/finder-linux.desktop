@@ -1,0 +1,18 @@
+[Desktop Entry]
+Type=Application
+Name=Finder
+GenericName=File Manager
+Comment=Browse the file system and manage files
+Exec=finder-linux %U
+Icon=finder-linux
+Terminal=false
+Categories=System;FileTools;FileManager;Qt;
+MimeType=inode/directory;
+Keywords=folder;manager;explore;disk;filesystem;finder;mac;
+StartupNotify=true
+StartupWMClass=finder-linux
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=New Window
+Exec=finder-linux

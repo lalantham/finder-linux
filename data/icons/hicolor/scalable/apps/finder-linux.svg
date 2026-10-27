@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Outer squircle shadow -->
+    <filter id="drop-shadow" x="-10%" y="-10%" width="125%" height="130%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.32" />
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.2" />
+    </filter>
+
+    <!-- Squircle clip path -->
+    <clipPath id="squircle-clip">
+      <rect x="36" y="36" width="440" height="440" rx="100" ry="100" />
+    </clipPath>
+
+    <!-- Left face gradient (Cyan to Sky Blue) -->
+    <linearGradient id="left-face" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4fd8ff" />
+      <stop offset="40%" stop-color="#2caeff" />
+      <stop offset="100%" stop-color="#0a81f6" />
+    </linearGradient>
+
+    <!-- Right face gradient (Medium to Deep Royal Blue) -->
+    <linearGradient id="right-face" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e78f0" />
+      <stop offset="50%" stop-color="#0b59d6" />
+      <stop offset="100%" stop-color="#053ea6" />
+    </linearGradient>
+
+    <!-- Glossy border overlay -->
+    <linearGradient id="border-gloss" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5" />
+      <stop offset="20%" stop-color="#ffffff" stop-opacity="0.1" />
+      <stop offset="80%" stop-color="#000000" stop-opacity="0.05" />
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.35" />
+    </linearGradient>
+
+    <!-- Eye gloss -->
+    <linearGradient id="eye-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#141416" />
+      <stop offset="100%" stop-color="#222328" />
+    </linearGradient>
+  </defs>
+
+  <!-- Shadowed Base Squircle -->
+  <rect x="36" y="36" width="440" height="440" rx="100" ry="100" fill="#0b59d6" filter="url(#drop-shadow)" />
+
+  <!-- Clipped Face Area -->
+  <g clip-path="url(#squircle-clip)">
+    <!-- Right side background (fills whole area first) -->
+    <rect x="36" y="36" width="440" height="440" fill="url(#right-face)" />
+
+    <!-- Left side shape with classic Finder nose profile -->
+    <path d="M 36 36
+             L 256 36
+             L 256 220
+             C 256 220 286 244 286 268
+             C 286 292 256 308 256 308
+             L 256 476
+             L 36 476
+             Z" fill="url(#left-face)" />
+
+    <!-- Subtle divider line shadow & highlight between face halves -->
+    <path d="M 256 36 L 256 220 C 256 220 286 244 286 268 C 286 292 256 308 256 308 L 256 476"
+          stroke="rgba(0, 0, 0, 0.22)" stroke-width="3" fill="none" />
+    <path d="M 254.5 36 L 254.5 220 C 254.5 220 284.5 244 284.5 268 C 284.5 292 254.5 308 254.5 308 L 254.5 476"
+          stroke="rgba(255, 255, 255, 0.28)" stroke-width="1.5" fill="none" />
+
+    <!-- Left Eye -->
+    <ellipse cx="168" cy="204" rx="15" ry="24" fill="url(#eye-fill)" />
+    <!-- Left Eye Highlight -->
+    <circle cx="164" cy="194" r="5" fill="#ffffff" opacity="0.85" />
+
+    <!-- Right Eye -->
+    <ellipse cx="344" cy="204" rx="15" ry="24" fill="url(#eye-fill)" />
+    <!-- Right Eye Highlight -->
+    <circle cx="340" cy="194" r="5" fill="#ffffff" opacity="0.85" />
+
+    <!-- Smile (Classic Apple Finder Smile) -->
+    <path d="M 148 336
+             C 176 394 336 394 364 336"
+          fill="none"
+          stroke="#16171b"
+          stroke-width="17"
+          stroke-linecap="round" />
+
+    <!-- Smile glossy bottom highlight -->
+    <path d="M 148 338
+             C 176 396 336 396 364 338"
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.3)"
+          stroke-width="3"
+          stroke-linecap="round" />
+
+    <!-- Inner bezel border / glossy edge -->
+    <rect x="36" y="36" width="440" height="440" rx="100" ry="100" fill="none" stroke="url(#border-gloss)" stroke-width="3" />
+  </g>
+</svg>

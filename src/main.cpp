@@ -14,6 +14,8 @@ int main(int argc, char* argv[])
     app.setOrganizationName(QStringLiteral("FinderLinux"));
     app.setOrganizationDomain(QStringLiteral("finder.linux"));
     app.setApplicationVersion(QStringLiteral("1.0.0"));
+    app.setDesktopFileName(QStringLiteral("finder-linux"));
+    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("finder-linux"), QIcon(QStringLiteral(":/icons/finder-linux.svg"))));
 
     // Apply configured theme
     ThemeManager::instance().applyTheme(AppSettings::instance().theme());
