@@ -103,34 +103,46 @@ void FileItem::initFromInfo(const QFileInfo& info)
 
 QIcon FileItem::icon() const
 {
+    QFileInfo info(m_path);
     if (m_isDir) {
         QString clean = QDir::cleanPath(m_path);
         if (clean == QDir::homePath()) {
-            return QIcon(QStringLiteral(":/icons/user-home.svg"));
+            return QIcon::fromTheme(QStringLiteral("user-home"),
+                   QIcon::fromTheme(QStringLiteral("folder")));
         }
         if (clean == QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)) {
-            return QIcon(QStringLiteral(":/icons/user-desktop.svg"));
+            return QIcon::fromTheme(QStringLiteral("user-desktop"),
+                   QIcon::fromTheme(QStringLiteral("folder")));
         }
         if (clean == QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)) {
-            return QIcon(QStringLiteral(":/icons/folder-documents.svg"));
+            return QIcon::fromTheme(QStringLiteral("folder-documents"),
+                   QIcon::fromTheme(QStringLiteral("folder")));
         }
         if (clean == QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)) {
-            return QIcon(QStringLiteral(":/icons/folder-download.svg"));
+            return QIcon::fromTheme(QStringLiteral("folder-download"),
+                   QIcon::fromTheme(QStringLiteral("folder")));
         }
         if (clean == QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)) {
-            return QIcon(QStringLiteral(":/icons/folder-pictures.svg"));
+            return QIcon::fromTheme(QStringLiteral("folder-pictures"),
+                   QIcon::fromTheme(QStringLiteral("folder")));
         }
         if (clean == QStandardPaths::writableLocation(QStandardPaths::MusicLocation)) {
-            return QIcon(QStringLiteral(":/icons/folder-music.svg"));
+            return QIcon::fromTheme(QStringLiteral("folder-music"),
+                   QIcon::fromTheme(QStringLiteral("folder")));
         }
         if (clean == QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)) {
-            return QIcon(QStringLiteral(":/icons/folder-videos.svg"));
+            return QIcon::fromTheme(QStringLiteral("folder-videos"),
+                   QIcon::fromTheme(QStringLiteral("folder-movies"),
+                   QIcon::fromTheme(QStringLiteral("folder"))));
         }
-        return QIcon(QStringLiteral(":/icons/folder.svg"));
+
+        QIcon icon = QIcon::fromTheme(QStringLiteral("folder"));
+        if (!icon.isNull()) {
+            return icon;
+        }
     }
 
     static QFileIconProvider iconProvider;
-    QFileInfo info(m_path);
     return iconProvider.icon(info);
 }
 

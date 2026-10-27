@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <QApplication>
 #include <QPainterPath>
+#include <QFileIconProvider>
 
 FileItemDelegate::FileItemDelegate(QObject* parent)
     : QStyledItemDelegate(parent)
@@ -39,6 +40,12 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
                        iconAreaHeight);
 
         QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        if (icon.isNull()) {
+            static QFileIconProvider fallbackProv;
+            bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
+            icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"), fallbackProv.icon(QFileIconProvider::Folder))
+                         : QIcon::fromTheme(QStringLiteral("text-x-generic"), fallbackProv.icon(QFileIconProvider::File));
+        }
         icon.paint(painter, iconRect, Qt::AlignCenter);
 
         // Draw text below icon
@@ -92,6 +99,12 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
         int textLeft = option.rect.left() + 6;
         if (index.column() == 0) {
             QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+            if (icon.isNull()) {
+                static QFileIconProvider fallbackProv;
+                bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
+                icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"), fallbackProv.icon(QFileIconProvider::Folder))
+                             : QIcon::fromTheme(QStringLiteral("text-x-generic"), fallbackProv.icon(QFileIconProvider::File));
+            }
             QRect iconRect(textLeft, option.rect.top() + (option.rect.height() - 18) / 2, 18, 18);
             icon.paint(painter, iconRect);
             textLeft += 24;
