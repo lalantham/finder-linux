@@ -5,7 +5,6 @@ QString StyleHelper::lightThemeStyle()
     return QStringLiteral(
         "QWidget {"
         "  color: #1d1d1f;"
-        "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;"
         "}"
         "QMainWindow {"
         "  background-color: #f6f6f6;"
@@ -160,7 +159,6 @@ QString StyleHelper::darkThemeStyle()
     return QStringLiteral(
         "QWidget {"
         "  color: #f5f5f7;"
-        "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;"
         "}"
         "QMainWindow {"
         "  background-color: #1e1e1f;"
