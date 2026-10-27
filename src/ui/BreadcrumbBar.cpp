@@ -1,11 +1,18 @@
 #include "BreadcrumbBar.h"
 #include "StyleHelper.h"
 #include "ThemeManager.h"
+#include "AppSettings.h"
 #include <QPushButton>
 #include <QLabel>
 #include <QDir>
 #include <QFileInfo>
 #include <QMouseEvent>
+#include <QTimer>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 BreadcrumbBar::BreadcrumbBar(QWidget* parent)
     : QWidget(parent)
@@ -21,6 +28,10 @@ BreadcrumbBar::BreadcrumbBar(QWidget* parent)
     m_pathEdit = new QLineEdit(this);
     m_pathEdit->setStyleSheet(StyleHelper::searchBarStyle(ThemeManager::instance().isDark()));
     connect(m_pathEdit, &QLineEdit::returnPressed, this, &BreadcrumbBar::onPathEditFinished);
+
+    m_springTimer = new QTimer(this);
+    m_springTimer->setSingleShot(true);
+    connect(m_springTimer, &QTimer::timeout, this, &BreadcrumbBar::onSpringTimeout);
 
     m_stackLayout->addWidget(m_breadcrumbContainer);
     m_stackLayout->addWidget(m_pathEdit);
@@ -64,6 +75,9 @@ void BreadcrumbBar::rebuildBreadcrumbs()
     // Root button
     auto* rootBtn = new QPushButton(QStringLiteral("/"), m_breadcrumbContainer);
     rootBtn->setStyleSheet(StyleHelper::breadcrumbButtonStyle(isDark));
+    rootBtn->setAcceptDrops(true);
+    rootBtn->setProperty("crumbPath", QStringLiteral("/"));
+    rootBtn->installEventFilter(this);
     connect(rootBtn, &QPushButton::clicked, this, [this]() {
         onSegmentClicked(QStringLiteral("/"));
     });
@@ -80,7 +94,10 @@ void BreadcrumbBar::rebuildBreadcrumbs()
 
         auto* btn = new QPushButton(segments.at(i), m_breadcrumbContainer);
         btn->setStyleSheet(StyleHelper::breadcrumbButtonStyle(isDark));
+        btn->setAcceptDrops(true);
         QString target = accumPath;
+        btn->setProperty("crumbPath", target);
+        btn->installEventFilter(this);
         connect(btn, &QPushButton::clicked, this, [this, target]() {
             onSegmentClicked(target);
         });
@@ -88,6 +105,85 @@ void BreadcrumbBar::rebuildBreadcrumbs()
     }
 
     m_breadcrumbLayout->addStretch();
+}
+
+bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
+{
+    if (!AppSettings::instance().springLoadedFoldersEnabled()) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    auto* btn = qobject_cast<QPushButton*>(watched);
+    if (!btn || !btn->property("crumbPath").isValid()) {
+        return QWidget::eventFilter(watched, event);
+    }
+
+    QString crumbPath = btn->property("crumbPath").toString();
+
+    if (event->type() == QEvent::DragEnter) {
+        auto* dragEvent = static_cast<QDragEnterEvent*>(event);
+        if (dragEvent->mimeData()->hasUrls()) {
+            bool safe = true;
+            for (const auto& url : dragEvent->mimeData()->urls()) {
+                if (url.isLocalFile()) {
+                    QString src = url.toLocalFile();
+                    if (crumbPath == src || crumbPath.startsWith(src + QLatin1Char('/'))) {
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+            if (safe) {
+                dragEvent->acceptProposedAction();
+                return true;
+            }
+        }
+    } else if (event->type() == QEvent::DragMove) {
+        auto* dragEvent = static_cast<QDragMoveEvent*>(event);
+        if (dragEvent->mimeData()->hasUrls()) {
+            if (m_springHoverPath != crumbPath) {
+                resetSpringTimer();
+                m_springHoverPath = crumbPath;
+                m_springHoverWidget = btn;
+                bool isDark = ThemeManager::instance().isDark();
+                QColor acc = ThemeManager::instance().accentColor();
+                btn->setStyleSheet(StyleHelper::breadcrumbButtonStyle(isDark) +
+                    QStringLiteral("QPushButton { border: 1.5px solid %1; background: rgba(%2,%3,%4,0.22); }")
+                    .arg(acc.name()).arg(acc.red()).arg(acc.green()).arg(acc.blue()));
+                m_springTimer->start(AppSettings::instance().springLoadDelayMs());
+            }
+            dragEvent->acceptProposedAction();
+            return true;
+        }
+    } else if (event->type() == QEvent::DragLeave) {
+        resetSpringTimer();
+    } else if (event->type() == QEvent::Drop) {
+        resetSpringTimer();
+    }
+
+    return QWidget::eventFilter(watched, event);
+}
+
+void BreadcrumbBar::resetSpringTimer()
+{
+    if (m_springTimer && m_springTimer->isActive()) {
+        m_springTimer->stop();
+    }
+    if (m_springHoverWidget) {
+        bool isDark = ThemeManager::instance().isDark();
+        m_springHoverWidget->setStyleSheet(StyleHelper::breadcrumbButtonStyle(isDark));
+        m_springHoverWidget = nullptr;
+    }
+    m_springHoverPath.clear();
+}
+
+void BreadcrumbBar::onSpringTimeout()
+{
+    if (!m_springHoverPath.isEmpty()) {
+        QString target = m_springHoverPath;
+        resetSpringTimer();
+        onSegmentClicked(target);
+    }
 }
 
 void BreadcrumbBar::onSegmentClicked(const QString& path)

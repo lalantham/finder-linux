@@ -17,6 +17,11 @@
 #include <QTimer>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 // ColumnItemDelegate
 ColumnItemDelegate::ColumnItemDelegate(QObject* parent)
@@ -33,9 +38,16 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     bool isHovered = option.state & QStyle::State_MouseOver;
     bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
     bool isDark = ThemeManager::instance().isDark();
+    QString itemPath = index.data(FileSystemModel::FilePathRole).toString();
+    bool isSpringHover = (!m_springHoverPath.isEmpty() && m_springHoverPath == itemPath);
 
     // Row selection or hover background
-    if (isSelected) {
+    if (isSpringHover) {
+        QColor acc = ThemeManager::instance().accentColor();
+        painter->setPen(QPen(acc, 1.5));
+        painter->setBrush(QColor(acc.red(), acc.green(), acc.blue(), 45));
+        painter->drawRoundedRect(option.rect.adjusted(4, 1, -4, -1), 5, 5);
+    } else if (isSelected) {
         painter->setPen(Qt::NoPen);
         painter->setBrush(ThemeManager::instance().accentColor());
         painter->drawRoundedRect(option.rect.adjusted(4, 1, -4, -1), 5, 5);
@@ -122,13 +134,18 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     setFixedWidth(240);
     setUniformItemSizes(true);
     setEditTriggers(QAbstractItemView::NoEditTriggers);
-    setItemDelegate(new ColumnItemDelegate(this));
+    m_delegate = new ColumnItemDelegate(this);
+    setItemDelegate(m_delegate);
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setDragEnabled(true);
     setAcceptDrops(true);
     setDropIndicatorShown(true);
     setDefaultDropAction(Qt::MoveAction);
+
+    m_springTimer = new QTimer(this);
+    m_springTimer->setSingleShot(true);
+    connect(m_springTimer, &QTimer::timeout, this, &ColumnBrowserList::onSpringTimeout);
 
     setStyleSheet(QStringLiteral(
         "QListView {"
@@ -156,6 +173,94 @@ void ColumnBrowserList::onSelectionChanged()
     QString itemPath = idx.data(FileSystemModel::FilePathRole).toString();
     bool isDir = idx.data(FileSystemModel::FileIsDirRole).toBool();
     emit itemSelected(itemPath, isDir);
+}
+
+void ColumnBrowserList::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    } else {
+        QListView::dragEnterEvent(event);
+    }
+}
+
+void ColumnBrowserList::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (!AppSettings::instance().springLoadedFoldersEnabled() || !event->mimeData()->hasUrls()) {
+        resetSpringTimer();
+        QListView::dragMoveEvent(event);
+        return;
+    }
+
+    QModelIndex idx = indexAt(event->position().toPoint());
+    if (idx.isValid() && idx.data(FileSystemModel::FileIsDirRole).toBool()) {
+        QString targetPath = idx.data(FileSystemModel::FilePathRole).toString();
+
+        bool safe = true;
+        for (const auto& url : event->mimeData()->urls()) {
+            if (url.isLocalFile()) {
+                QString src = url.toLocalFile();
+                if (targetPath == src || targetPath.startsWith(src + QLatin1Char('/'))) {
+                    safe = false;
+                    break;
+                }
+            }
+        }
+
+        if (safe) {
+            if (m_springHoverPath != targetPath) {
+                m_springHoverPath = targetPath;
+                m_delegate->setSpringHoverPath(targetPath);
+                viewport()->update();
+                m_springTimer->start(AppSettings::instance().springLoadDelayMs());
+            }
+            event->acceptProposedAction();
+            return;
+        }
+    }
+
+    resetSpringTimer();
+    QListView::dragMoveEvent(event);
+}
+
+void ColumnBrowserList::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    resetSpringTimer();
+    QListView::dragLeaveEvent(event);
+}
+
+void ColumnBrowserList::dropEvent(QDropEvent* event)
+{
+    resetSpringTimer();
+    QListView::dropEvent(event);
+}
+
+void ColumnBrowserList::resetSpringTimer()
+{
+    if (m_springTimer && m_springTimer->isActive()) {
+        m_springTimer->stop();
+    }
+    if (!m_springHoverPath.isEmpty()) {
+        m_springHoverPath.clear();
+        m_delegate->setSpringHoverPath(QString());
+        viewport()->update();
+    }
+}
+
+void ColumnBrowserList::onSpringTimeout()
+{
+    if (!m_springHoverPath.isEmpty()) {
+        QString target = m_springHoverPath;
+        resetSpringTimer();
+        for (int row = 0; row < m_model->rowCount(); ++row) {
+            QModelIndex idx = m_model->index(row, 0);
+            if (idx.data(FileSystemModel::FilePathRole).toString() == target) {
+                setCurrentIndex(idx);
+                scrollTo(idx);
+                break;
+            }
+        }
+    }
 }
 
 void ColumnBrowserList::keyPressEvent(QKeyEvent* event)

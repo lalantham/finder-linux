@@ -21,6 +21,7 @@ private slots:
     void testMoveLocationToTop();
     void testMoveLocationUpAndDown();
     void testReorderLocation();
+    void testSpringLoadedSettings();
 };
 
 void TestFavorites::init()
@@ -161,6 +162,24 @@ void TestFavorites::testReorderLocation()
         QStringList afterReorder = AppSettings::instance().locationOrder();
         QCOMPARE(afterReorder.at(2), firstItem);
     }
+}
+
+void TestFavorites::testSpringLoadedSettings()
+{
+    // Default values
+    QVERIFY(AppSettings::instance().springLoadedFoldersEnabled());
+    QCOMPARE(AppSettings::instance().springLoadDelayMs(), 750);
+
+    // Modify and verify
+    AppSettings::instance().setSpringLoadedFoldersEnabled(false);
+    QVERIFY(!AppSettings::instance().springLoadedFoldersEnabled());
+
+    AppSettings::instance().setSpringLoadDelayMs(500);
+    QCOMPARE(AppSettings::instance().springLoadDelayMs(), 500);
+
+    // Restore
+    AppSettings::instance().setSpringLoadedFoldersEnabled(true);
+    AppSettings::instance().setSpringLoadDelayMs(750);
 }
 
 QTEST_MAIN(TestFavorites)

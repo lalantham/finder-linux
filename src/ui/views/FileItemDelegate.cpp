@@ -20,14 +20,21 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
 
     bool isSelected = option.state & QStyle::State_Selected;
     bool isHovered = option.state & QStyle::State_MouseOver;
+    QString itemPath = index.data(FileSystemModel::FilePathRole).toString();
+    bool isSpringHover = (!m_springHoverPath.isEmpty() && m_springHoverPath == itemPath);
 
     // Check if drawing in icon mode or table/tree mode
     if (option.decorationPosition == QStyleOptionViewItem::Top) {
         // Finder Icon Mode
         QRect itemRect = option.rect;
 
-        // Hover highlight
-        if (isHovered && !isSelected) {
+        // Hover or Spring-loaded hover highlight
+        if (isSpringHover) {
+            QColor acc = ThemeManager::instance().accentColor();
+            painter->setPen(QPen(acc, 2.0));
+            painter->setBrush(QColor(acc.red(), acc.green(), acc.blue(), 45));
+            painter->drawRoundedRect(itemRect.adjusted(3, 3, -3, -3), 8, 8);
+        } else if (isHovered && !isSelected) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(128, 128, 128, 30));
             painter->drawRoundedRect(itemRect.adjusted(4, 4, -4, -4), 8, 8);
@@ -100,7 +107,13 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
 
     } else {
         // List / Table Mode
-        if (isSelected) {
+        if (isSpringHover) {
+            QColor acc = ThemeManager::instance().accentColor();
+            painter->setPen(QPen(acc, 1.5));
+            painter->setBrush(QColor(acc.red(), acc.green(), acc.blue(), 45));
+            painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
+            painter->setPen(ThemeManager::instance().textColor());
+        } else if (isSelected) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(ThemeManager::instance().accentColor());
             painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);

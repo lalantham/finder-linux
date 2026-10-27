@@ -16,7 +16,7 @@ SidebarSettingsDialog::SidebarSettingsDialog(QWidget* parent)
     : QDialog(parent)
 {
     setWindowTitle(QStringLiteral("Sidebar Preferences"));
-    resize(460, 520);
+    resize(520, 560);
     setupUi();
 }
 
@@ -35,12 +35,12 @@ void SidebarSettingsDialog::setupUi()
     contentLayout->setSpacing(14);
     contentLayout->setContentsMargins(0, 0, 0, 0);
 
-    // 1. Favorites Group
-    auto* favGroup = new QGroupBox(QStringLiteral("Favorites (Reorder & Visibility)"), scrollContent);
+    // 1. Places / Favorites Group
+    auto* favGroup = new QGroupBox(QStringLiteral("Places (Reorder & Visibility)"), scrollContent);
     auto* favLayout = new QVBoxLayout(favGroup);
     favLayout->setSpacing(8);
 
-    auto* favHint = new QLabel(QStringLiteral("Arrange favorites order using <b>Top</b>, <b>▲</b>, <b>▼</b>:"), favGroup);
+    auto* favHint = new QLabel(QStringLiteral("Arrange Places order using <b>Top</b>, <b>▲</b>, <b>▼</b>:"), favGroup);
     favHint->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     favLayout->addWidget(favHint);
 
@@ -67,12 +67,12 @@ void SidebarSettingsDialog::setupUi()
 
     contentLayout->addWidget(favGroup);
 
-    // 2. Locations / Partitions Group
-    auto* locGroup = new QGroupBox(QStringLiteral("Locations && Partitions (Reorder & Visibility)"), scrollContent);
+    // 2. Devices / Partitions Group
+    auto* locGroup = new QGroupBox(QStringLiteral("Devices & Partitions (Reorder & Visibility)"), scrollContent);
     auto* locLayout = new QVBoxLayout(locGroup);
     locLayout->setSpacing(8);
 
-    auto* locHint = new QLabel(QStringLiteral("Arrange locations order using <b>Top</b>, <b>▲</b>, <b>▼</b>:"), locGroup);
+    auto* locHint = new QLabel(QStringLiteral("Arrange Devices order using <b>Top</b>, <b>▲</b>, <b>▼</b>:"), locGroup);
     locHint->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     locLayout->addWidget(locHint);
 
@@ -81,8 +81,8 @@ void SidebarSettingsDialog::setupUi()
     locLayout->addWidget(m_locationsList);
 
     auto* locBtnRow = new QHBoxLayout();
-    auto* resetLocOrderBtn = new QPushButton(QStringLiteral("Reset Locations Order"), locGroup);
-    resetLocOrderBtn->setToolTip(QStringLiteral("Reset locations order back to defaults"));
+    auto* resetLocOrderBtn = new QPushButton(QStringLiteral("Reset Order"), locGroup);
+    resetLocOrderBtn->setToolTip(QStringLiteral("Reset devices order back to defaults"));
     connect(resetLocOrderBtn, &QPushButton::clicked, this, [this]() {
         AppSettings::instance().setLocationOrder({});
         populateLocationsList();
@@ -190,9 +190,11 @@ void SidebarSettingsDialog::populateFavoritesList()
         iconLabel->setPixmap(icon.pixmap(18, 18));
         rowLayout->addWidget(iconLabel);
 
-        auto* nameLabel = new QLabel(isCustom ? QStringLiteral("<b>%1</b> <span style='color:#888;'>(%2)</span>").arg(name, path) : QStringLiteral("<b>%1</b>").arg(name), rowWidget);
-        rowLayout->addWidget(nameLabel);
-        rowLayout->addStretch();
+        auto* nameLabel = new QLabel(rowWidget);
+        nameLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        nameLabel->setText(isCustom ? QStringLiteral("<b>%1</b> <span style='color:#888;'>(%2)</span>").arg(name, path) : QStringLiteral("<b>%1</b>").arg(name));
+        nameLabel->setToolTip(path);
+        rowLayout->addWidget(nameLabel, 1);
 
         // Top button
         auto* topBtn = new QPushButton(QStringLiteral("Top"), rowWidget);
@@ -319,9 +321,11 @@ void SidebarSettingsDialog::populateLocationsList()
         iconLabel->setPixmap(info.icon.pixmap(18, 18));
         rowLayout->addWidget(iconLabel);
 
-        auto* nameLabel = new QLabel(QStringLiteral("<b>%1</b> <span style='color:#888;'>(%2)</span>").arg(info.name, path), rowWidget);
-        rowLayout->addWidget(nameLabel);
-        rowLayout->addStretch();
+        auto* nameLabel = new QLabel(rowWidget);
+        nameLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        nameLabel->setText(info.name != path ? QStringLiteral("<b>%1</b> <span style='color:#888;'>(%2)</span>").arg(info.name, path) : QStringLiteral("<b>%1</b>").arg(info.name));
+        nameLabel->setToolTip(path);
+        rowLayout->addWidget(nameLabel, 1);
 
         // Top button
         auto* topBtn = new QPushButton(QStringLiteral("Top"), rowWidget);

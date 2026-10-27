@@ -1,5 +1,6 @@
 #include "ListView.h"
 #include "DesktopAppsManager.h"
+#include "AppSettings.h"
 #include <QHeaderView>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -7,6 +8,12 @@
 #include <QMenu>
 #include <QDesktopServices>
 #include <QUrl>
+#include <QTimer>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 ListView::ListView(QWidget* parent)
     : QTreeView(parent)
@@ -24,6 +31,13 @@ ListView::ListView(QWidget* parent)
     setDefaultDropAction(Qt::MoveAction);
     header()->setSectionsMovable(true);
     header()->setStretchLastSection(true);
+
+    m_delegate = new FileItemDelegate(this);
+    setItemDelegateForColumn(FileSystemModel::ColName, m_delegate);
+
+    m_springTimer = new QTimer(this);
+    m_springTimer->setSingleShot(true);
+    connect(m_springTimer, &QTimer::timeout, this, &ListView::onSpringTimeout);
 
     connect(this, &QTreeView::activated, this, &ListView::onItemActivated);
     connect(header(), &QHeaderView::sectionClicked, this, &ListView::onHeaderClicked);
@@ -110,4 +124,88 @@ void ListView::contextMenuEvent(QContextMenuEvent* event)
         }
     }
     emit contextMenuRequested(event->globalPos(), paths);
+}
+
+void ListView::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    } else {
+        QTreeView::dragEnterEvent(event);
+    }
+}
+
+void ListView::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (!AppSettings::instance().springLoadedFoldersEnabled() || !event->mimeData()->hasUrls()) {
+        resetSpringTimer();
+        QTreeView::dragMoveEvent(event);
+        return;
+    }
+
+    QModelIndex idx = indexAt(event->position().toPoint());
+    if (idx.isValid()) {
+        QModelIndex nameIdx = idx.sibling(idx.row(), FileSystemModel::ColName);
+        if (nameIdx.data(FileSystemModel::FileIsDirRole).toBool()) {
+            QString targetPath = nameIdx.data(FileSystemModel::FilePathRole).toString();
+
+            bool safe = true;
+            for (const auto& url : event->mimeData()->urls()) {
+                if (url.isLocalFile()) {
+                    QString src = url.toLocalFile();
+                    if (targetPath == src || targetPath.startsWith(src + QLatin1Char('/'))) {
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+
+            if (safe) {
+                if (m_springHoverPath != targetPath) {
+                    m_springHoverPath = targetPath;
+                    m_delegate->setSpringHoverPath(targetPath);
+                    viewport()->update();
+                    m_springTimer->start(AppSettings::instance().springLoadDelayMs());
+                }
+                event->acceptProposedAction();
+                return;
+            }
+        }
+    }
+
+    resetSpringTimer();
+    QTreeView::dragMoveEvent(event);
+}
+
+void ListView::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    resetSpringTimer();
+    QTreeView::dragLeaveEvent(event);
+}
+
+void ListView::dropEvent(QDropEvent* event)
+{
+    resetSpringTimer();
+    QTreeView::dropEvent(event);
+}
+
+void ListView::resetSpringTimer()
+{
+    if (m_springTimer && m_springTimer->isActive()) {
+        m_springTimer->stop();
+    }
+    if (!m_springHoverPath.isEmpty()) {
+        m_springHoverPath.clear();
+        m_delegate->setSpringHoverPath(QString());
+        viewport()->update();
+    }
+}
+
+void ListView::onSpringTimeout()
+{
+    if (!m_springHoverPath.isEmpty()) {
+        QString target = m_springHoverPath;
+        resetSpringTimer();
+        emit openPathRequested(target);
+    }
 }

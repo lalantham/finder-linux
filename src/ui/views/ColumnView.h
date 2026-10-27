@@ -16,6 +16,12 @@ public:
     explicit ColumnItemDelegate(QObject* parent = nullptr);
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
     [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+
+    void setSpringHoverPath(const QString& path) { m_springHoverPath = path; }
+    [[nodiscard]] QString springHoverPath() const noexcept { return m_springHoverPath; }
+
+private:
+    QString m_springHoverPath;
 };
 
 class ColumnBrowserList : public QListView {
@@ -39,13 +45,23 @@ signals:
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     void onSelectionChanged();
+    void onSpringTimeout();
 
 private:
+    void resetSpringTimer();
+
     QString m_path;
     FileSystemModel* m_model{nullptr};
+    ColumnItemDelegate* m_delegate{nullptr};
+    QTimer* m_springTimer{nullptr};
+    QString m_springHoverPath;
 };
 
 class ColumnPreviewPane : public QWidget {

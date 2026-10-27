@@ -21,6 +21,9 @@
 #include <QFileInfo>
 #include <QDrag>
 #include <QPainter>
+#include <QTimer>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
 
 static constexpr int PathRole = Qt::UserRole + 10;
 static constexpr int IsCustomFavRole = Qt::UserRole + 11;
@@ -74,10 +77,16 @@ void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
 
     bool isSelected = option.state & QStyle::State_Selected;
     bool isHovered = option.state & QStyle::State_MouseOver;
+    QString itemPath = index.data(PathRole).toString();
+    bool isSpringHover = (!m_springHoverPath.isEmpty() && m_springHoverPath == itemPath);
 
     // Draw background pill (compact margins)
     QRect itemRect = option.rect.adjusted(3, 1, -3, -1);
-    if (isSelected) {
+    if (isSpringHover) {
+        painter->setPen(QPen(c.accent, 1.5));
+        painter->setBrush(QColor(c.accent.red(), c.accent.green(), c.accent.blue(), 50));
+        painter->drawRoundedRect(itemRect, 4, 4);
+    } else if (isSelected) {
         painter->setPen(Qt::NoPen);
         QColor selBg = c.isDark ? QColor(c.accent.red(), c.accent.green(), c.accent.blue(), 90) : c.accent;
         painter->setBrush(selBg);
@@ -151,7 +160,8 @@ Sidebar::Sidebar(QWidget* parent)
     setRootIsDecorated(false);
     setIndentation(0);
     setIconSize(QSize(16, 16));
-    setItemDelegate(new SidebarItemDelegate(this));
+    m_delegate = new SidebarItemDelegate(this);
+    setItemDelegate(m_delegate);
     setAnimated(true);
     setAcceptDrops(true);
     setDragEnabled(true);
@@ -162,6 +172,10 @@ Sidebar::Sidebar(QWidget* parent)
     setFocusPolicy(Qt::NoFocus);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    m_springTimer = new QTimer(this);
+    m_springTimer->setSingleShot(true);
+    connect(m_springTimer, &QTimer::timeout, this, &Sidebar::onSpringTimeout);
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
@@ -777,15 +791,50 @@ void Sidebar::dragMoveEvent(QDragMoveEvent* event)
         QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
         if (item) {
             setCurrentItem(item);
+            if (AppSettings::instance().springLoadedFoldersEnabled()) {
+                QString path = item->data(0, PathRole).toString();
+                if (!path.isEmpty()) {
+                    bool safe = true;
+                    for (const auto& url : event->mimeData()->urls()) {
+                        if (url.isLocalFile()) {
+                            QString src = url.toLocalFile();
+                            if (path == src || path.startsWith(src + QLatin1Char('/'))) {
+                                safe = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (safe) {
+                        if (m_springHoverPath != path) {
+                            m_springHoverPath = path;
+                            m_delegate->setSpringHoverPath(path);
+                            viewport()->update();
+                            m_springTimer->start(AppSettings::instance().springLoadDelayMs());
+                        }
+                    } else {
+                        resetSpringTimer();
+                    }
+                } else {
+                    resetSpringTimer();
+                }
+            }
         } else {
             clearSelection();
+            resetSpringTimer();
         }
         event->acceptProposedAction();
     }
 }
 
+void Sidebar::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    resetSpringTimer();
+    QTreeWidget::dragLeaveEvent(event);
+}
+
 void Sidebar::dropEvent(QDropEvent* event)
 {
+    resetSpringTimer();
     // 1. Reordering favorite items inside sidebar
     if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item"))) {
         QString draggedPath = QString::fromUtf8(event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-item")));
@@ -915,5 +964,27 @@ void Sidebar::dropEvent(QDropEvent* event)
         }
         refresh();
         event->acceptProposedAction();
+    }
+}
+
+void Sidebar::resetSpringTimer()
+{
+    if (m_springTimer && m_springTimer->isActive()) {
+        m_springTimer->stop();
+    }
+    if (!m_springHoverPath.isEmpty()) {
+        m_springHoverPath.clear();
+        m_delegate->setSpringHoverPath(QString());
+        viewport()->update();
+    }
+}
+
+void Sidebar::onSpringTimeout()
+{
+    if (!m_springHoverPath.isEmpty()) {
+        QString target = m_springHoverPath;
+        resetSpringTimer();
+        selectPath(target);
+        emit pathSelected(target);
     }
 }

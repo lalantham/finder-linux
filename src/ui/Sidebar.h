@@ -12,6 +12,12 @@ public:
     explicit SidebarItemDelegate(QObject* parent = nullptr);
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
     [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+
+    void setSpringHoverPath(const QString& path) { m_springHoverPath = path; }
+    [[nodiscard]] QString springHoverPath() const noexcept { return m_springHoverPath; }
+
+private:
+    QString m_springHoverPath;
 };
 
 class Sidebar : public QTreeWidget {
@@ -41,16 +47,23 @@ protected:
     void startDrag(Qt::DropActions supportedActions) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
+    void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
 
 private slots:
     void onItemClicked(QTreeWidgetItem* item, int column);
+    void onSpringTimeout();
 
 private:
+    void resetSpringTimer();
+
     void populateFavorites();
     void populateLocations();
     void populateTags();
 
+    SidebarItemDelegate* m_delegate{nullptr};
+    QTimer* m_springTimer{nullptr};
+    QString m_springHoverPath;
     QTreeWidgetItem* m_favoritesHeader{nullptr};
     QTreeWidgetItem* m_locationsHeader{nullptr};
     QTreeWidgetItem* m_tagsHeader{nullptr};

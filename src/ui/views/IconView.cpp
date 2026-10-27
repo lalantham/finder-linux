@@ -1,11 +1,18 @@
 #include "IconView.h"
 #include "DesktopAppsManager.h"
+#include "AppSettings.h"
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QDesktopServices>
 #include <QUrl>
+#include <QTimer>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDragLeaveEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 IconView::IconView(QWidget* parent)
     : QListView(parent)
@@ -24,6 +31,10 @@ IconView::IconView(QWidget* parent)
 
     m_delegate = new FileItemDelegate(this);
     setItemDelegate(m_delegate);
+
+    m_springTimer = new QTimer(this);
+    m_springTimer->setSingleShot(true);
+    connect(m_springTimer, &QTimer::timeout, this, &IconView::onSpringTimeout);
 
     connect(this, &QListView::activated, this, &IconView::onItemActivated);
 }
@@ -102,4 +113,85 @@ void IconView::contextMenuEvent(QContextMenuEvent* event)
         }
     }
     emit contextMenuRequested(event->globalPos(), paths);
+}
+
+void IconView::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    } else {
+        QListView::dragEnterEvent(event);
+    }
+}
+
+void IconView::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (!AppSettings::instance().springLoadedFoldersEnabled() || !event->mimeData()->hasUrls()) {
+        resetSpringTimer();
+        QListView::dragMoveEvent(event);
+        return;
+    }
+
+    QModelIndex idx = indexAt(event->position().toPoint());
+    if (idx.isValid() && idx.data(FileSystemModel::FileIsDirRole).toBool()) {
+        QString targetPath = idx.data(FileSystemModel::FilePathRole).toString();
+
+        bool safe = true;
+        for (const auto& url : event->mimeData()->urls()) {
+            if (url.isLocalFile()) {
+                QString src = url.toLocalFile();
+                if (targetPath == src || targetPath.startsWith(src + QLatin1Char('/'))) {
+                    safe = false;
+                    break;
+                }
+            }
+        }
+
+        if (safe) {
+            if (m_springHoverPath != targetPath) {
+                m_springHoverPath = targetPath;
+                m_delegate->setSpringHoverPath(targetPath);
+                viewport()->update();
+                m_springTimer->start(AppSettings::instance().springLoadDelayMs());
+            }
+            event->acceptProposedAction();
+            return;
+        }
+    }
+
+    resetSpringTimer();
+    QListView::dragMoveEvent(event);
+}
+
+void IconView::dragLeaveEvent(QDragLeaveEvent* event)
+{
+    resetSpringTimer();
+    QListView::dragLeaveEvent(event);
+}
+
+void IconView::dropEvent(QDropEvent* event)
+{
+    resetSpringTimer();
+    QListView::dropEvent(event);
+}
+
+void IconView::resetSpringTimer()
+{
+    if (m_springTimer && m_springTimer->isActive()) {
+        m_springTimer->stop();
+    }
+    if (!m_springHoverPath.isEmpty()) {
+        m_springHoverPath.clear();
+        m_delegate->setSpringHoverPath(QString());
+        viewport()->update();
+    }
+}
+
+void IconView::onSpringTimeout()
+{
+    if (!m_springHoverPath.isEmpty()) {
+        QString target = m_springHoverPath;
+        resetSpringTimer();
+        emit openPathRequested(target);
+    }
 }

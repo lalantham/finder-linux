@@ -84,6 +84,11 @@ public:
 
     void resetSidebarDefaults();
 
+    [[nodiscard]] bool springLoadedFoldersEnabled() const noexcept { return m_springLoadedFolders; }
+    void setSpringLoadedFoldersEnabled(bool enabled) { m_springLoadedFolders = enabled; }
+    [[nodiscard]] int springLoadDelayMs() const noexcept { return m_springLoadDelayMs; }
+    void setSpringLoadDelayMs(int delayMs) { m_springLoadDelayMs = delayMs; }
+
     [[nodiscard]] QByteArray windowGeometry() const noexcept { return m_windowGeometry; }
     void setWindowGeometry(const QByteArray& geom) { m_windowGeometry = geom; }
 
@@ -106,4 +111,6 @@ private:
     QStringList m_locationOrder;
     QByteArray m_windowGeometry;
     QByteArray m_windowState;
+    bool m_springLoadedFolders{true};
+    int m_springLoadDelayMs{750};
 };

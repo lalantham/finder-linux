@@ -34,6 +34,8 @@ void AppSettings::load()
     m_locationOrder = s.value(QStringLiteral("locationOrder")).toStringList();
     m_windowGeometry = s.value(QStringLiteral("windowGeometry")).toByteArray();
     m_windowState = s.value(QStringLiteral("windowState")).toByteArray();
+    m_springLoadedFolders = s.value(QStringLiteral("springLoadedFolders"), true).toBool();
+    m_springLoadDelayMs = s.value(QStringLiteral("springLoadDelayMs"), 750).toInt();
 }
 
 void AppSettings::save()
@@ -51,6 +53,8 @@ void AppSettings::save()
     s.setValue(QStringLiteral("locationOrder"), m_locationOrder);
     s.setValue(QStringLiteral("windowGeometry"), m_windowGeometry);
     s.setValue(QStringLiteral("windowState"), m_windowState);
+    s.setValue(QStringLiteral("springLoadedFolders"), m_springLoadedFolders);
+    s.setValue(QStringLiteral("springLoadDelayMs"), m_springLoadDelayMs);
 }
 
 void AppSettings::addFavorite(const QString& path)
