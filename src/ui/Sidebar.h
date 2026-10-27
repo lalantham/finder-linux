@@ -3,6 +3,16 @@
 #include "VolumeManager.h"
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
+#include <QStyledItemDelegate>
+
+class SidebarItemDelegate : public QStyledItemDelegate {
+    Q_OBJECT
+
+public:
+    explicit SidebarItemDelegate(QObject* parent = nullptr);
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+    [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+};
 
 class Sidebar : public QTreeWidget {
     Q_OBJECT

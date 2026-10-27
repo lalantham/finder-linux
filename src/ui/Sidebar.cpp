@@ -1,6 +1,7 @@
 #include "Sidebar.h"
 #include "SidebarSettingsDialog.h"
 #include "AppSettings.h"
+#include "ThemeManager.h"
 #include "XdgTrash.h"
 #include "TagManager.h"
 #include <QApplication>
@@ -29,6 +30,118 @@ static constexpr int IsStandardFavRole = Qt::UserRole + 14;
 static constexpr int HeaderTypeRole = Qt::UserRole + 15; // 1 = Favorites, 2 = Locations, 3 = Tags
 static constexpr int IsTagRole = Qt::UserRole + 16;
 static constexpr int TagNameRole = Qt::UserRole + 17;
+static constexpr int TotalBytesRole = Qt::UserRole + 18;
+static constexpr int AvailableBytesRole = Qt::UserRole + 19;
+
+SidebarItemDelegate::SidebarItemDelegate(QObject* parent)
+    : QStyledItemDelegate(parent)
+{
+}
+
+QSize SidebarItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    int headerType = index.data(HeaderTypeRole).toInt();
+    if (headerType > 0) {
+        return QSize(option.rect.width(), 26);
+    }
+    qint64 totalBytes = index.data(TotalBytesRole).toLongLong();
+    if (totalBytes > 0) {
+        return QSize(option.rect.width(), 28);
+    }
+    return QSize(option.rect.width(), 24);
+}
+
+void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+
+    int headerType = index.data(HeaderTypeRole).toInt();
+    const auto& c = ThemeManager::instance().colors();
+
+    if (headerType > 0) {
+        QString title = index.data(Qt::DisplayRole).toString();
+        QRect textRect = option.rect.adjusted(8, 4, -8, 0);
+        QFont hf = option.font;
+        hf.setBold(true);
+        hf.setPointSize(9);
+        painter->setFont(hf);
+        painter->setPen(c.subText);
+        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, title);
+        painter->restore();
+        return;
+    }
+
+    bool isSelected = option.state & QStyle::State_Selected;
+    bool isHovered = option.state & QStyle::State_MouseOver;
+
+    // Draw background pill (compact margins)
+    QRect itemRect = option.rect.adjusted(3, 1, -3, -1);
+    if (isSelected) {
+        painter->setPen(Qt::NoPen);
+        QColor selBg = c.isDark ? QColor(c.accent.red(), c.accent.green(), c.accent.blue(), 90) : c.accent;
+        painter->setBrush(selBg);
+        painter->drawRoundedRect(itemRect, 4, 4);
+    } else if (isHovered) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(c.isDark ? QColor(255, 255, 255, 14) : QColor(0, 0, 0, 10));
+        painter->drawRoundedRect(itemRect, 4, 4);
+    }
+
+    // Draw 16x16 icon
+    QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+    int iconX = itemRect.left() + 5;
+    int iconY = itemRect.top() + (itemRect.height() - 16) / 2;
+    QRect iconRect(iconX, iconY, 16, 16);
+    if (!icon.isNull()) {
+        icon.paint(painter, iconRect);
+    }
+
+    // Draw label
+    QString text = index.data(Qt::DisplayRole).toString();
+    qint64 totalBytes = index.data(TotalBytesRole).toLongLong();
+    qint64 availBytes = index.data(AvailableBytesRole).toLongLong();
+    bool hasDiskBar = (totalBytes > 0);
+
+    QFont font = option.font;
+    font.setPointSize(10);
+    painter->setFont(font);
+    painter->setPen(isSelected ? Qt::white : c.text);
+
+    int textX = iconX + 22;
+    int textW = itemRect.right() - textX - 6;
+
+    if (hasDiskBar) {
+        QRect labelRect(textX, itemRect.top() + 2, textW, 14);
+        QFontMetrics fm(font);
+        QString elided = fm.elidedText(text, Qt::ElideMiddle, textW);
+        painter->drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, elided);
+
+        int barY = itemRect.bottom() - 4;
+        int barH = 2;
+        int barW = qMax(20, textW - 8);
+        QRect barBgRect(textX, barY, barW, barH);
+
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(c.isDark ? QColor(58, 62, 68) : QColor(200, 203, 207));
+        painter->drawRoundedRect(barBgRect, 1, 1);
+
+        double usedRatio = qBound(0.0, 1.0 - static_cast<double>(availBytes) / static_cast<double>(totalBytes), 1.0);
+        int usedW = static_cast<int>(barW * usedRatio);
+        if (usedW > 0) {
+            QRect usedRect(textX, barY, usedW, barH);
+            painter->setBrush(c.accent);
+            painter->drawRoundedRect(usedRect, 1, 1);
+        }
+    } else {
+        QRect labelRect(textX, itemRect.top(), textW, itemRect.height());
+        QFontMetrics fm(font);
+        QString elided = fm.elidedText(text, Qt::ElideMiddle, textW);
+        painter->drawText(labelRect, Qt::AlignLeft | Qt::AlignVCenter, elided);
+    }
+
+    painter->restore();
+}
 
 Sidebar::Sidebar(QWidget* parent)
     : QTreeWidget(parent)
@@ -36,7 +149,9 @@ Sidebar::Sidebar(QWidget* parent)
     setObjectName(QStringLiteral("sidebar"));
     setHeaderHidden(true);
     setRootIsDecorated(false);
-    setIndentation(12);
+    setIndentation(0);
+    setIconSize(QSize(16, 16));
+    setItemDelegate(new SidebarItemDelegate(this));
     setAnimated(true);
     setAcceptDrops(true);
     setDragEnabled(true);
@@ -50,6 +165,9 @@ Sidebar::Sidebar(QWidget* parent)
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this]() {
+        viewport()->update();
+    });
 
     refresh();
 }
@@ -78,11 +196,11 @@ void Sidebar::refresh()
 void Sidebar::populateFavorites()
 {
     m_favoritesHeader = new QTreeWidgetItem(this);
-    m_favoritesHeader->setText(0, QStringLiteral("Favorites"));
+    m_favoritesHeader->setText(0, QStringLiteral("Places"));
     m_favoritesHeader->setData(0, HeaderTypeRole, 1);
     QFont hf = m_favoritesHeader->font(0);
     hf.setBold(true);
-    hf.setPointSize(10);
+    hf.setPointSize(9);
     m_favoritesHeader->setFont(0, hf);
     m_favoritesHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
     m_favoritesHeader->setFlags(Qt::ItemIsEnabled);
@@ -111,6 +229,7 @@ void Sidebar::populateFavorites()
     const QString picsPath = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     const QString musicPath = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
     const QString vidsPath = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+    const QString trashPath = XdgTrash::trashFilesDirectory();
 
     for (const auto& path : orderedFavs) {
         if (!QDir(path).exists()) continue;
@@ -135,57 +254,63 @@ void Sidebar::populateFavorites()
             addFavItem(fi.fileName().isEmpty() ? path : fi.fileName(), path, QStringLiteral("folder"), true);
         }
     }
+
+    // Add Trash to Places right after standard items if not hidden
+    bool trashHidden = AppSettings::instance().isLocationHidden(QStringLiteral("Trash")) ||
+                       AppSettings::instance().isLocationHidden(trashPath) ||
+                       AppSettings::instance().isFavoriteHidden(QStringLiteral("Trash"));
+    if (!trashHidden) {
+        QFileIconProvider iconProv;
+        auto* item = new QTreeWidgetItem(m_favoritesHeader);
+        item->setText(0, QStringLiteral("Trash"));
+        item->setData(0, PathRole, trashPath);
+        item->setData(0, IsTrashRole, true);
+        item->setData(0, IsStandardFavRole, true);
+        item->setIcon(0, QIcon::fromTheme(QStringLiteral("user-trash"),
+                         QIcon::fromTheme(QStringLiteral("trash-empty"),
+                         QIcon::fromTheme(QStringLiteral("edit-delete"),
+                         iconProv.icon(QFileIconProvider::Trashcan)))));
+    }
 }
 
 void Sidebar::populateLocations()
 {
     m_locationsHeader = new QTreeWidgetItem(this);
-    m_locationsHeader->setText(0, QStringLiteral("Locations"));
+    m_locationsHeader->setText(0, QStringLiteral("Devices"));
     m_locationsHeader->setData(0, HeaderTypeRole, 2);
     QFont hf = m_locationsHeader->font(0);
     hf.setBold(true);
-    hf.setPointSize(10);
+    hf.setPointSize(9);
     m_locationsHeader->setFont(0, hf);
     m_locationsHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
     m_locationsHeader->setFlags(Qt::ItemIsEnabled);
 
     QFileIconProvider iconProv;
-
     QVector<VolumeEntry> volumes = VolumeManager::mountedVolumes();
-    QString trashPath = XdgTrash::trashFilesDirectory();
 
     struct LocData {
         QString name;
         QIcon icon;
-        bool isTrash{false};
+        qint64 totalBytes{0};
+        qint64 availableBytes{0};
     };
     QMap<QString, LocData> map;
     for (const auto& vol : volumes) {
-        map[vol.path] = {vol.name, vol.icon, false};
+        map[vol.path] = {vol.name, vol.icon, vol.totalBytes, vol.availableBytes};
     }
-    map[trashPath] = {
-        QStringLiteral("Trash"),
-        QIcon::fromTheme(QStringLiteral("user-trash"),
-        QIcon::fromTheme(QStringLiteral("trash-empty"),
-        QIcon::fromTheme(QStringLiteral("edit-delete"),
-        iconProv.icon(QFileIconProvider::Trashcan)))),
-        true
-    };
 
     const QStringList orderedLocs = AppSettings::instance().locationOrder();
     for (const auto& path : orderedLocs) {
         if (!map.contains(path)) continue;
         if (AppSettings::instance().isLocationHidden(path)) continue;
-        if (path == trashPath && AppSettings::instance().isLocationHidden(QStringLiteral("Trash"))) continue;
 
         const auto& data = map[path];
         auto* item = new QTreeWidgetItem(m_locationsHeader);
         item->setText(0, data.name);
         item->setData(0, PathRole, path);
         item->setData(0, IsLocationRole, true);
-        if (data.isTrash) {
-            item->setData(0, IsTrashRole, true);
-        }
+        item->setData(0, TotalBytesRole, data.totalBytes);
+        item->setData(0, AvailableBytesRole, data.availableBytes);
         item->setIcon(0, data.icon);
     }
 }
@@ -197,7 +322,7 @@ void Sidebar::populateTags()
     m_tagsHeader->setData(0, HeaderTypeRole, 3);
     QFont hf = m_tagsHeader->font(0);
     hf.setBold(true);
-    hf.setPointSize(10);
+    hf.setPointSize(9);
     m_tagsHeader->setFont(0, hf);
     m_tagsHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
     m_tagsHeader->setFlags(Qt::ItemIsEnabled);
