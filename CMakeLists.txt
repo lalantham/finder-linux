@@ -67,6 +67,8 @@ set(FINDER_UI_SOURCES
     src/ui/Toolbar.h
     src/ui/Sidebar.cpp
     src/ui/Sidebar.h
+    src/ui/SidebarSettingsDialog.cpp
+    src/ui/SidebarSettingsDialog.h
     src/ui/TabPage.cpp
     src/ui/TabPage.h
     src/ui/TabManager.cpp

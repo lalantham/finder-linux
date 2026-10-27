@@ -48,6 +48,22 @@ public:
     void addFavorite(const QString& path);
     void removeFavorite(const QString& path);
 
+    [[nodiscard]] QStringList hiddenFavorites() const noexcept { return m_hiddenFavorites; }
+    void setHiddenFavorites(const QStringList& list);
+    void hideFavorite(const QString& path);
+    void unhideFavorite(const QString& path);
+    void unhideAllFavorites();
+    [[nodiscard]] bool isFavoriteHidden(const QString& path) const { return m_hiddenFavorites.contains(path); }
+
+    [[nodiscard]] QStringList hiddenLocations() const noexcept { return m_hiddenLocations; }
+    void setHiddenLocations(const QStringList& list);
+    void hideLocation(const QString& pathOrName);
+    void unhideLocation(const QString& pathOrName);
+    void unhideAllLocations();
+    [[nodiscard]] bool isLocationHidden(const QString& pathOrName) const { return m_hiddenLocations.contains(pathOrName); }
+
+    void resetSidebarDefaults();
+
     [[nodiscard]] QByteArray windowGeometry() const noexcept { return m_windowGeometry; }
     void setWindowGeometry(const QByteArray& geom) { m_windowGeometry = geom; }
 
@@ -64,6 +80,8 @@ private:
     AppTheme m_theme{AppTheme::System};
     QString m_defaultPath;
     QStringList m_customFavorites;
+    QStringList m_hiddenFavorites;
+    QStringList m_hiddenLocations;
     QByteArray m_windowGeometry;
     QByteArray m_windowState;
 };

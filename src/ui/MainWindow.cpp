@@ -93,6 +93,14 @@ void MainWindow::setupUi()
     m_sidebar = new Sidebar(m_mainSplitter);
     m_sidebar->setFixedWidth(210);
     connect(m_sidebar, &Sidebar::pathSelected, this, &MainWindow::onPathChanged);
+    connect(m_sidebar, &Sidebar::openInNewTabRequested, this, [this](const QString& p) {
+        m_tabManager->createTab(p);
+    });
+    connect(m_sidebar, &Sidebar::getInfoRequested, this, [this](const QString& p) {
+        auto* dlg = new GetInfoDialog(p, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+    });
     connect(m_sidebar, &Sidebar::emptyTrashRequested, this, &MainWindow::onEmptyTrash);
 
     m_tabManager = new TabManager(m_mainSplitter);
@@ -178,6 +186,7 @@ void MainWindow::setupMenusAndShortcuts()
     viewMenu->addAction(QStringLiteral("as Gallery"), QKeySequence(Qt::CTRL | Qt::Key_4), this, [this]() { onViewModeChanged(ViewMode::Gallery); });
     viewMenu->addSeparator();
     viewMenu->addAction(QStringLiteral("Toggle Hidden Files"), QKeySequence(Qt::CTRL | Qt::Key_H), this, &MainWindow::onToggleHidden);
+    viewMenu->addAction(QStringLiteral("Customize Sidebar..."), m_sidebar, &Sidebar::openManageSidebarDialog);
 
     // Go Menu
     auto* goMenu = mBar->addMenu(QStringLiteral("&Go"));
@@ -667,6 +676,19 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                 menu.addAction(QStringLiteral("Open in New Tab"), this, [this, primaryPath]() {
                     m_tabManager->createTab(primaryPath);
                 });
+
+                bool isPinned = AppSettings::instance().customFavorites().contains(primaryPath);
+                if (isPinned) {
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-remove")), QStringLiteral("Unpin from Sidebar"), this, [this, primaryPath]() {
+                        AppSettings::instance().removeFavorite(primaryPath);
+                        m_sidebar->refresh();
+                    });
+                } else {
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-new")), QStringLiteral("Pin to Sidebar"), this, [this, primaryPath]() {
+                        AppSettings::instance().addFavorite(primaryPath);
+                        m_sidebar->refresh();
+                    });
+                }
             } else {
                 // Open With submenu
                 QMimeDatabase mimeDb;
@@ -807,6 +829,20 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             dlg->show();
         });
+
+        // Pin / Unpin current directory to Sidebar
+        bool isPinned = AppSettings::instance().customFavorites().contains(currentDir);
+        if (isPinned) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-remove")), QStringLiteral("Unpin Current Folder from Sidebar"), this, [this, currentDir]() {
+                AppSettings::instance().removeFavorite(currentDir);
+                m_sidebar->refresh();
+            });
+        } else {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-new")), QStringLiteral("Pin Current Folder to Sidebar"), this, [this, currentDir]() {
+                AppSettings::instance().addFavorite(currentDir);
+                m_sidebar->refresh();
+            });
+        }
 
         // Paste
         auto* pasteAct = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-paste")),

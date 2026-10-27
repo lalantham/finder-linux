@@ -15,7 +15,12 @@ public:
 
 signals:
     void pathSelected(const QString& path);
+    void openInNewTabRequested(const QString& path);
+    void getInfoRequested(const QString& path);
     void emptyTrashRequested();
+
+public slots:
+    void openManageSidebarDialog();
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
