@@ -23,9 +23,9 @@ public:
     void goBack();
     void goForward();
     void goUp();
-    void refresh();
+    void refresh(const QString& pathToSelect = QString());
 
-    [[nodiscard]] QString currentPath() const noexcept { return m_currentPath; }
+    [[nodiscard]] QString currentPath() const noexcept;
     [[nodiscard]] bool canGoBack() const noexcept { return !m_backHistory.isEmpty(); }
     [[nodiscard]] bool canGoForward() const noexcept { return !m_forwardHistory.isEmpty(); }
 

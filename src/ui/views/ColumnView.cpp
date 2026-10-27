@@ -189,7 +189,7 @@ void ColumnBrowserList::contextMenuEvent(QContextMenuEvent* event)
         setCurrentIndex(idx);
         paths.append(idx.data(FileSystemModel::FilePathRole).toString());
     }
-    emit contextMenuRequested(event->globalPos(), paths);
+    emit contextMenuRequested(event->globalPos(), paths, m_path);
 }
 
 // ColumnPreviewPane
@@ -350,9 +350,20 @@ void ColumnView::setRootPath(const QString& path)
     addColumn(path, false);
 }
 
-void ColumnView::refresh()
+QString ColumnView::activeDirectory() const
 {
-    QString selected = m_selectedPath;
+    if (m_columns.isEmpty()) {
+        return m_rootPath;
+    }
+    return m_columns.last()->path();
+}
+
+void ColumnView::refresh(const QString& targetToSelect)
+{
+    if (m_isRefreshing) return;
+    m_isRefreshing = true;
+
+    QString selected = !targetToSelect.isEmpty() ? targetToSelect : m_selectedPath;
 
     for (int i = 0; i < m_columns.size(); ++i) {
         auto* col = m_columns[i];
@@ -361,11 +372,26 @@ void ColumnView::refresh()
             break;
         }
 
-        // Remember which item was selected in this column
+        // Determine which item was / should be selected in this column:
         QString colSelectedPath;
-        QModelIndex currIdx = col->currentIndex();
-        if (currIdx.isValid()) {
-            colSelectedPath = currIdx.data(FileSystemModel::FilePathRole).toString();
+        if (i + 1 < m_columns.size()) {
+            colSelectedPath = m_columns[i + 1]->path();
+        } else {
+            if (!targetToSelect.isEmpty() && QFileInfo(targetToSelect).absolutePath() == col->path()) {
+                colSelectedPath = targetToSelect;
+            } else {
+                QModelIndex currIdx = col->currentIndex();
+                if (currIdx.isValid()) {
+                    colSelectedPath = currIdx.data(FileSystemModel::FilePathRole).toString();
+                } else if (!selected.isEmpty() && QFileInfo(selected).absolutePath() == col->path()) {
+                    colSelectedPath = selected;
+                }
+            }
+        }
+
+        col->blockSignals(true);
+        if (col->selectionModel()) {
+            col->selectionModel()->blockSignals(true);
         }
 
         col->model()->refresh();
@@ -377,16 +403,29 @@ void ColumnView::refresh()
                 QModelIndex idx = col->model()->index(r, 0);
                 if (idx.data(FileSystemModel::FilePathRole).toString() == colSelectedPath) {
                     col->setCurrentIndex(idx);
+                    col->scrollTo(idx);
                     found = true;
                     break;
                 }
             }
-            if (!found && i == m_columns.size() - 1 && !selected.isEmpty() && !QFileInfo::exists(selected)) {
-                // The selected item in the last column was deleted
-                m_selectedPath.clear();
-                m_previewPane->hide();
+            if (i == m_columns.size() - 1) {
+                if (found) {
+                    m_selectedPath = colSelectedPath;
+                    if (m_previewPane->isVisible() && !QFileInfo(colSelectedPath).isDir()) {
+                        m_previewPane->setItem(colSelectedPath);
+                    }
+                } else if (!selected.isEmpty() && !QFileInfo::exists(selected)) {
+                    // The selected item in the last column was deleted
+                    m_selectedPath.clear();
+                    m_previewPane->hide();
+                }
             }
         }
+
+        if (col->selectionModel()) {
+            col->selectionModel()->blockSignals(false);
+        }
+        col->blockSignals(false);
     }
 
     if (!m_selectedPath.isEmpty()) {
@@ -397,6 +436,9 @@ void ColumnView::refresh()
             m_previewPane->setItem(m_selectedPath);
         }
     }
+
+    m_isRefreshing = false;
+    scrollToRightAnimated();
 }
 
 void ColumnView::setShowHidden(bool show)
@@ -416,8 +458,12 @@ void ColumnView::addColumn(const QString& path, bool animate)
     m_layout->insertWidget(colIndex, col);
     m_columns.append(col);
 
-    connect(col, &ColumnBrowserList::itemSelected, this, [this, colIndex](const QString& itemPath, bool isDir) {
-        onColumnItemSelected(colIndex, itemPath, isDir);
+    connect(col, &ColumnBrowserList::itemSelected, this, [this, col](const QString& itemPath, bool isDir) {
+        if (m_isRefreshing) return;
+        int idx = static_cast<int>(m_columns.indexOf(col));
+        if (idx >= 0) {
+            onColumnItemSelected(idx, itemPath, isDir);
+        }
     });
 
     connect(col, &ColumnBrowserList::itemDoubleClicked, this, [this](const QString& itemPath, bool isDir) {
@@ -430,19 +476,23 @@ void ColumnView::addColumn(const QString& path, bool animate)
 
     connect(col, &ColumnBrowserList::quickLookRequested, this, &ColumnView::quickLookRequested);
     connect(col, &ColumnBrowserList::getInfoRequested, this, &ColumnView::getInfoRequested);
-    connect(col, &ColumnBrowserList::contextMenuRequested, this, &ColumnView::contextMenuRequested);
+    connect(col, &ColumnBrowserList::contextMenuRequested, this, [this](const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir) {
+        emit contextMenuRequested(globalPos, selectedPaths, currentDir);
+    });
     connect(col, &ColumnBrowserList::fileDropRequested, this, &ColumnView::fileDropRequested);
 
     // Keyboard navigation across columns
-    connect(col, &ColumnBrowserList::navigateLeftRequested, this, [this, colIndex]() {
-        if (colIndex > 0 && colIndex - 1 < m_columns.size()) {
-            m_columns[colIndex - 1]->setFocus();
+    connect(col, &ColumnBrowserList::navigateLeftRequested, this, [this, col]() {
+        int idx = static_cast<int>(m_columns.indexOf(col));
+        if (idx > 0 && idx - 1 < m_columns.size()) {
+            m_columns[idx - 1]->setFocus();
         }
     });
 
-    connect(col, &ColumnBrowserList::navigateRightRequested, this, [this, colIndex]() {
-        if (colIndex + 1 < m_columns.size()) {
-            auto* nextCol = m_columns[colIndex + 1];
+    connect(col, &ColumnBrowserList::navigateRightRequested, this, [this, col]() {
+        int idx = static_cast<int>(m_columns.indexOf(col));
+        if (idx >= 0 && idx + 1 < m_columns.size()) {
+            auto* nextCol = m_columns[idx + 1];
             nextCol->setFocus();
             if (nextCol->model()->rowCount() > 0 && !nextCol->currentIndex().isValid()) {
                 nextCol->setCurrentIndex(nextCol->model()->index(0, 0));
@@ -479,6 +529,7 @@ void ColumnView::truncateColumnsAfter(int columnIndex)
 
 void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool isDir)
 {
+    if (m_isRefreshing) return;
     m_selectedPath = path;
     truncateColumnsAfter(columnIndex);
 

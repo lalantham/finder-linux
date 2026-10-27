@@ -65,14 +65,22 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent)
         connect(view, &std::remove_pointer_t<decltype(view)>::quickLookRequested, this, &TabPage::quickLookRequested);
         connect(view, &std::remove_pointer_t<decltype(view)>::getInfoRequested, this, &TabPage::getInfoRequested);
         connect(view, &std::remove_pointer_t<decltype(view)>::contextMenuRequested, this, [this](const QPoint& pos, const QStringList& paths) {
-            emit contextMenuRequested(pos, paths, m_currentPath);
+            emit contextMenuRequested(pos, paths, currentPath());
         });
     };
 
     connectView(m_iconView);
     connectView(m_listView);
-    connectView(m_columnView);
     connectView(m_galleryView);
+
+    connect(m_columnView, &ColumnView::openPathRequested, this, [this](const QString& p) {
+        navigateTo(p);
+    });
+    connect(m_columnView, &ColumnView::quickLookRequested, this, &TabPage::quickLookRequested);
+    connect(m_columnView, &ColumnView::getInfoRequested, this, &TabPage::getInfoRequested);
+    connect(m_columnView, &ColumnView::contextMenuRequested, this, [this](const QPoint& pos, const QStringList& paths, const QString& colDir) {
+        emit contextMenuRequested(pos, paths, !colDir.isEmpty() ? colDir : currentPath());
+    });
 
     connect(m_model, &FileSystemModel::directoryLoaded, this, &TabPage::onDirectoryLoaded);
     connect(m_model, &FileSystemModel::fileDropRequested, this, &TabPage::fileDropRequested);
@@ -132,10 +140,37 @@ void TabPage::goUp()
     }
 }
 
-void TabPage::refresh()
+QString TabPage::currentPath() const noexcept
 {
+    if (m_viewMode == ViewMode::Column && m_columnView) {
+        QString colDir = m_columnView->activeDirectory();
+        if (!colDir.isEmpty()) return colDir;
+    }
+    return m_currentPath;
+}
+
+void TabPage::refresh(const QString& pathToSelect)
+{
+    QString target = !pathToSelect.isEmpty() ? pathToSelect : selectedFilePath();
+
     m_model->refresh();
-    m_columnView->refresh();
+    m_columnView->refresh(target);
+
+    if (!target.isEmpty() && QFileInfo::exists(target)) {
+        for (int r = 0; r < m_model->rowCount(); ++r) {
+            QModelIndex idx = m_model->index(r, 0);
+            if (idx.data(FileSystemModel::FilePathRole).toString() == target) {
+                if (m_viewMode == ViewMode::Icon) {
+                    m_iconView->setCurrentIndex(idx);
+                    m_iconView->scrollTo(idx);
+                } else if (m_viewMode == ViewMode::List) {
+                    m_listView->setCurrentIndex(idx);
+                    m_listView->scrollTo(idx);
+                }
+                break;
+            }
+        }
+    }
 }
 
 void TabPage::setViewMode(ViewMode mode)

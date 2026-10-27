@@ -514,9 +514,9 @@ void MainWindow::onExtractHere()
     QStringList paths = page->selectedFilePaths();
     if (paths.isEmpty()) return;
 
-    QString destDir = page->currentPath();
     for (const auto& p : paths) {
         if (ArchiveService::isArchive(p)) {
+            QString destDir = QFileInfo(p).absolutePath();
             m_opEngine->extractArchive(p, destDir);
         }
     }
@@ -766,11 +766,15 @@ void MainWindow::onOperationConflict(const OperationConflict& conflict, Conflict
 void MainWindow::onOperationFinished(const OperationResult& result)
 {
     m_progressDialog->hide();
+    QString pathToSelect;
+    if (!result.createdPaths.isEmpty()) {
+        pathToSelect = result.createdPaths.first();
+    }
     if (TabPage* page = m_tabManager->currentPage()) {
         if (!QDir(page->currentPath()).exists()) {
             page->goUp();
         } else {
-            page->refresh();
+            page->refresh(pathToSelect);
         }
     }
     m_sidebar->refresh();

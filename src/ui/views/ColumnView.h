@@ -33,7 +33,7 @@ signals:
     void getInfoRequested(const QString& path);
     void navigateLeftRequested();
     void navigateRightRequested();
-    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
 
 protected:
@@ -77,10 +77,11 @@ public:
     explicit ColumnView(QWidget* parent = nullptr);
 
     void setRootPath(const QString& path);
-    void refresh();
+    void refresh(const QString& targetToSelect = QString());
     void setShowHidden(bool show);
     [[nodiscard]] bool showHidden() const noexcept { return m_showHidden; }
     [[nodiscard]] QString rootPath() const { return m_rootPath; }
+    [[nodiscard]] QString activeDirectory() const;
     [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
     [[nodiscard]] QStringList selectedPaths() const { return m_selectedPath.isEmpty() ? QStringList{} : QStringList{m_selectedPath}; }
 
@@ -88,7 +89,7 @@ signals:
     void openPathRequested(const QString& path);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
-    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
 
 private slots:
@@ -102,6 +103,7 @@ private:
     QString m_rootPath;
     QString m_selectedPath;
     bool m_showHidden{false};
+    bool m_isRefreshing{false};
     QWidget* m_container{nullptr};
     QHBoxLayout* m_layout{nullptr};
     QVector<ColumnBrowserList*> m_columns;
