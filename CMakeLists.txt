@@ -18,11 +18,10 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Concurrent Svg Test)
 
-# Optional Poppler for PDF QuickLook preview
-find_package(PkgConfig)
-if(PkgConfig_FOUND)
-    pkg_check_modules(PopplerQt6 poppler-qt6)
-endif()
+# Optional Poppler for PDF QuickLook preview and LibArchive for archive operations
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PopplerQt6 poppler-qt6)
+pkg_check_modules(LibArchive REQUIRED libarchive)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -54,6 +53,8 @@ set(FINDER_CORE_SOURCES
     src/operations/FileOperation.h
     src/operations/FileOperationEngine.cpp
     src/operations/FileOperationEngine.h
+    src/operations/ArchiveService.cpp
+    src/operations/ArchiveService.h
     src/app/AppSettings.cpp
     src/app/AppSettings.h
     src/app/ThemeManager.cpp
@@ -107,11 +108,15 @@ set(FINDER_UI_SOURCES
 add_library(finder_core STATIC
     ${FINDER_CORE_SOURCES}
 )
+target_include_directories(finder_core PUBLIC
+    ${LibArchive_INCLUDE_DIRS}
+)
 target_link_libraries(finder_core PUBLIC
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
     Qt6::Concurrent
+    ${LibArchive_LIBRARIES}
 )
 
 add_library(finder_ui STATIC

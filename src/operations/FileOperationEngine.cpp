@@ -1,4 +1,5 @@
 #include "FileOperationEngine.h"
+#include "ArchiveService.h"
 #include "XdgTrash.h"
 #include <QDir>
 #include <QFileInfo>
@@ -78,6 +79,34 @@ void FileOperationEngine::trashItems(const QStringList& sources)
 void FileOperationEngine::deletePermanently(const QStringList& sources)
 {
     runAsyncOperation(OperationType::Delete, sources, QString(), ConflictResolution::Skip);
+}
+
+void FileOperationEngine::compressItems(const QStringList& sources, const QString& destinationArchive)
+{
+    if (m_running.load()) return;
+    m_cancelled.store(false);
+    m_running.store(true);
+
+    QThread* thread = QThread::create([this, sources, destinationArchive]() {
+        executeCompress(sources, destinationArchive);
+        m_running.store(false);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+}
+
+void FileOperationEngine::extractArchive(const QString& archivePath, const QString& destinationDir)
+{
+    if (m_running.load()) return;
+    m_cancelled.store(false);
+    m_running.store(true);
+
+    QThread* thread = QThread::create([this, archivePath, destinationDir]() {
+        executeExtract(archivePath, destinationDir);
+        m_running.store(false);
+    });
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
 }
 
 bool FileOperationEngine::createFolder(const QString& parentDir, const QString& folderName, QString* createdPath, QString* error)
@@ -495,5 +524,116 @@ void FileOperationEngine::executeDelete(const QStringList& sources)
             result.errorCount++;
         }
     }
+    emit operationFinished(result);
+}
+
+void FileOperationEngine::executeCompress(const QStringList& sources, const QString& destinationArchive)
+{
+    emit operationStarted(OperationType::Compress, static_cast<int>(sources.size()), 0);
+
+    QElapsedTimer timer;
+    timer.start();
+    m_lastTimeMs = 0;
+    m_lastBytes = 0;
+
+    OperationProgress prog;
+    prog.type = OperationType::Compress;
+    prog.currentItem = QFileInfo(destinationArchive).fileName();
+    prog.totalItems = static_cast<int>(sources.size());
+
+    QString errorMsg;
+    bool success = ArchiveService::compress(
+        sources,
+        destinationArchive,
+        [this, &prog, &timer](const QString& currentFile, qint64 processedBytes, qint64 totalBytes) {
+            prog.currentItem = currentFile;
+            prog.bytesProcessed = processedBytes;
+            prog.totalBytes = totalBytes;
+            if (totalBytes > 0) {
+                prog.percent = static_cast<int>((processedBytes * 100) / totalBytes);
+            }
+            qint64 now = timer.elapsed();
+            if (now - m_lastTimeMs > 200) {
+                qint64 bytesDelta = processedBytes - m_lastBytes;
+                double timeDeltaSec = static_cast<double>(now - m_lastTimeMs) / 1000.0;
+                if (timeDeltaSec > 0.0) {
+                    prog.speedBytesPerSec = static_cast<double>(bytesDelta) / timeDeltaSec;
+                }
+                m_lastTimeMs = now;
+                m_lastBytes = processedBytes;
+                emit progress(prog);
+            }
+        },
+        &m_cancelled,
+        &errorMsg
+    );
+
+    OperationResult result;
+    result.success = success && !m_cancelled.load();
+    if (!result.success) {
+        result.errorMessage = errorMsg.isEmpty() ? QStringLiteral("Compression cancelled or failed.") : errorMsg;
+        result.errorCount = 1;
+    } else {
+        result.processedCount = static_cast<int>(sources.size());
+        result.createdPaths.append(destinationArchive);
+    }
+
+    emit operationFinished(result);
+}
+
+void FileOperationEngine::executeExtract(const QString& archivePath, const QString& destinationDir)
+{
+    qint64 archiveSize = QFileInfo(archivePath).size();
+    emit operationStarted(OperationType::Extract, 1, archiveSize);
+
+    QElapsedTimer timer;
+    timer.start();
+    m_lastTimeMs = 0;
+    m_lastBytes = 0;
+
+    OperationProgress prog;
+    prog.type = OperationType::Extract;
+    prog.currentItem = QFileInfo(archivePath).fileName();
+    prog.totalItems = 1;
+    prog.totalBytes = archiveSize;
+
+    QString errorMsg;
+    bool success = ArchiveService::extract(
+        archivePath,
+        destinationDir,
+        [this, &prog, &timer, archiveSize](const QString& currentFile, qint64 processedBytes, qint64 totalBytes) {
+            prog.currentItem = currentFile;
+            prog.bytesProcessed = processedBytes;
+            qint64 effectiveTotal = (totalBytes > 0) ? totalBytes : archiveSize;
+            prog.totalBytes = effectiveTotal;
+            if (effectiveTotal > 0) {
+                prog.percent = qBound(0, static_cast<int>((processedBytes * 100) / effectiveTotal), 100);
+            }
+            qint64 now = timer.elapsed();
+            if (now - m_lastTimeMs > 200) {
+                qint64 bytesDelta = processedBytes - m_lastBytes;
+                double timeDeltaSec = static_cast<double>(now - m_lastTimeMs) / 1000.0;
+                if (timeDeltaSec > 0.0) {
+                    prog.speedBytesPerSec = static_cast<double>(bytesDelta) / timeDeltaSec;
+                }
+                m_lastTimeMs = now;
+                m_lastBytes = processedBytes;
+                emit progress(prog);
+            }
+        },
+        &m_cancelled,
+        &errorMsg
+    );
+
+    OperationResult result;
+    result.success = success && !m_cancelled.load();
+    if (!result.success) {
+        result.errorMessage = errorMsg.isEmpty() ? QStringLiteral("Extraction cancelled or failed.") : errorMsg;
+        result.errorCount = 1;
+    } else {
+        result.processedCount = 1;
+        result.createdPaths.append(destinationDir);
+    }
+
     emit operationFinished(result);
 }

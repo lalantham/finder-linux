@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ArchiveService.h"
 #include "TagManager.h"
 #include "AppSettings.h"
 #include "ConflictDialog.h"
@@ -185,6 +186,8 @@ void MainWindow::setupMenusAndShortcuts()
     fileMenu->addAction(QStringLiteral("Get Info"), QKeySequence(Qt::CTRL | Qt::Key_I), this, &MainWindow::onGetInfo);
     fileMenu->addAction(QStringLiteral("Quick Look"), QKeySequence(Qt::Key_Space), this, &MainWindow::onQuickLook);
     fileMenu->addAction(QStringLiteral("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D), this, &MainWindow::onDuplicate);
+    fileMenu->addAction(QStringLiteral("Compress"), this, [this]() { onCompress(QStringLiteral("zip")); });
+    fileMenu->addAction(QStringLiteral("Extract Here"), this, &MainWindow::onExtractHere);
     fileMenu->addAction(QStringLiteral("Make Link / Alias"), this, &MainWindow::onMakeSymlink);
     fileMenu->addAction(QStringLiteral("Copy Path"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), this, &MainWindow::onCopyPath);
 
@@ -489,6 +492,48 @@ void MainWindow::onDuplicate()
     QStringList paths = page->selectedFilePaths();
     if (!paths.isEmpty()) {
         m_opEngine->duplicateItems(paths);
+    }
+}
+
+void MainWindow::onCompress(const QString& ext)
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+    QStringList paths = page->selectedFilePaths();
+    if (paths.isEmpty()) return;
+
+    QString format = ext.isEmpty() ? QStringLiteral("zip") : ext;
+    QString destArchive = ArchiveService::suggestedArchiveName(paths, format);
+    m_opEngine->compressItems(paths, destArchive);
+}
+
+void MainWindow::onExtractHere()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+    QStringList paths = page->selectedFilePaths();
+    if (paths.isEmpty()) return;
+
+    QString destDir = page->currentPath();
+    for (const auto& p : paths) {
+        if (ArchiveService::isArchive(p)) {
+            m_opEngine->extractArchive(p, destDir);
+        }
+    }
+}
+
+void MainWindow::onExtractToFolder()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+    QStringList paths = page->selectedFilePaths();
+    if (paths.isEmpty()) return;
+
+    for (const auto& p : paths) {
+        if (ArchiveService::isArchive(p)) {
+            QString destDir = ArchiveService::suggestedExtractDir(p);
+            m_opEngine->extractArchive(p, destDir);
+        }
     }
 }
 
@@ -1003,6 +1048,42 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
 
         // Make Link / Alias
         menu.addAction(QStringLiteral("Make Link / Alias"), this, &MainWindow::onMakeSymlink);
+
+        // Archive Actions (Extract & Compress)
+        bool anyArchive = false;
+        for (const auto& sp : selectedPaths) {
+            if (ArchiveService::isArchive(sp)) {
+                anyArchive = true;
+                break;
+            }
+        }
+
+        if (anyArchive) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("package-x-generic")),
+                QStringLiteral("Extract Here"), this, &MainWindow::onExtractHere);
+            if (single) {
+                QString extractFolder = QFileInfo(ArchiveService::suggestedExtractDir(primaryPath)).fileName();
+                menu.addAction(QIcon::fromTheme(QStringLiteral("archive-extract")),
+                    QStringLiteral("Extract to \"%1/\"").arg(extractFolder), this, &MainWindow::onExtractToFolder);
+            } else {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("archive-extract")),
+                    QStringLiteral("Extract Each to Subfolder"), this, &MainWindow::onExtractToFolder);
+            }
+        }
+
+        if (!isMount) {
+            QString compressTitle = single
+                ? QStringLiteral("Compress \"%1\"").arg(primaryFi.fileName())
+                : QStringLiteral("Compress %1 Items").arg(selectedPaths.size());
+            menu.addAction(QIcon::fromTheme(QStringLiteral("archive-insert")),
+                compressTitle, this, [this]() { onCompress(QStringLiteral("zip")); });
+
+            auto* compressAsMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("archive-insert")), QStringLiteral("Compress As"));
+            compressAsMenu->addAction(QStringLiteral(".zip (ZIP Archive)"), this, [this]() { onCompress(QStringLiteral("zip")); });
+            compressAsMenu->addAction(QStringLiteral(".tar.gz (GZip Tarball)"), this, [this]() { onCompress(QStringLiteral("tar.gz")); });
+            compressAsMenu->addAction(QStringLiteral(".tar.xz (XZ Tarball)"), this, [this]() { onCompress(QStringLiteral("tar.xz")); });
+            compressAsMenu->addAction(QStringLiteral(".7z (7-Zip Archive)"), this, [this]() { onCompress(QStringLiteral("7z")); });
+        }
 
         // Copy Path
         menu.addAction(QStringLiteral("Copy Path"), this, &MainWindow::onCopyPath);

@@ -23,6 +23,8 @@ public:
     bool createFile(const QString& parentDir, const QString& fileName, QString* createdPath = nullptr, QString* error = nullptr);
     bool renameItem(const QString& sourcePath, const QString& newName, QString* renamedPath = nullptr, QString* error = nullptr);
     bool createSymlink(const QString& target, const QString& linkPath, QString* error = nullptr);
+    void compressItems(const QStringList& sources, const QString& destinationArchive);
+    void extractArchive(const QString& archivePath, const QString& destinationDir);
 
     void cancel();
     [[nodiscard]] bool isRunning() const;
@@ -39,6 +41,8 @@ private:
     void executeDelete(const QStringList& sources);
     void executeTrash(const QStringList& sources);
     void executeDuplicate(const QStringList& sources);
+    void executeCompress(const QStringList& sources, const QString& destinationArchive);
+    void executeExtract(const QString& archivePath, const QString& destinationDir);
 
     bool copySingleFile(const QString& src, const QString& dst, ConflictResolution& appliedRes, bool& applyToAll);
     bool copyDirectoryRecursive(const QString& src, const QString& dst, ConflictResolution& appliedRes, bool& applyToAll);

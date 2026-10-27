@@ -13,7 +13,9 @@ enum class OperationType {
     CreateFolder,
     CreateFile,
     Rename,
-    CreateSymlink
+    CreateSymlink,
+    Compress,
+    Extract
 };
 
 enum class ConflictResolution {

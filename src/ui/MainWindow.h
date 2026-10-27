@@ -41,6 +41,9 @@ private slots:
     void onCut();
     void onPaste();
     void onDuplicate();
+    void onCompress(const QString& ext = QString());
+    void onExtractHere();
+    void onExtractToFolder();
     void onMakeSymlink();
     void onCopyPath();
     void onMoveToTrash();
