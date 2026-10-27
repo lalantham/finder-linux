@@ -112,6 +112,10 @@ void MainWindow::setupUi()
             }
         }
     });
+    connect(m_sidebar, &Sidebar::itemsDroppedOnPath, this, &MainWindow::onFilesDropped);
+    connect(m_sidebar, &Sidebar::itemsDroppedOnTrash, this, [this](const QStringList& sources) {
+        m_opEngine->trashItems(sources);
+    });
 
     m_tabManager = new TabManager(m_mainSplitter);
     connect(m_tabManager, &TabManager::activePageChanged, this, &MainWindow::onActivePageChanged);
@@ -127,6 +131,7 @@ void MainWindow::setupUi()
         dlg->show();
     });
     connect(m_tabManager, &TabManager::contextMenuRequested, this, &MainWindow::onContextMenuRequested);
+    connect(m_tabManager, &TabManager::fileDropRequested, this, &MainWindow::onFilesDropped);
 
     m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(m_tabManager);
@@ -172,6 +177,7 @@ void MainWindow::setupMenusAndShortcuts()
     fileMenu->addSeparator();
     fileMenu->addAction(QStringLiteral("Move to Trash"), QKeySequence(Qt::Key_Delete), this, &MainWindow::onMoveToTrash);
     fileMenu->addAction(QStringLiteral("Delete Permanently"), QKeySequence(Qt::SHIFT | Qt::Key_Delete), this, &MainWindow::onDeletePermanently);
+    fileMenu->addAction(QStringLiteral("Put Back"), this, &MainWindow::onPutBack);
     fileMenu->addAction(QStringLiteral("Empty Trash..."), this, &MainWindow::onEmptyTrash);
 
     fileMenu->addSeparator();
@@ -512,6 +518,54 @@ void MainWindow::onEmptyTrash()
     }
 }
 
+void MainWindow::onPutBack()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    QStringList paths = page->selectedFilePaths();
+    if (paths.isEmpty()) {
+        QString single = page->selectedFilePath();
+        if (!single.isEmpty()) paths.append(single);
+    }
+    if (paths.isEmpty()) return;
+
+    int failed = 0;
+    QString lastErr;
+    for (const auto& p : paths) {
+        QString err;
+        if (!XdgTrash::restoreItem(p, &err)) {
+            failed++;
+            lastErr = err;
+        }
+    }
+
+    if (failed > 0) {
+        QMessageBox::warning(this, QStringLiteral("Restore Error"),
+            failed == 1 ? lastErr : QStringLiteral("Failed to restore %1 items: %2").arg(failed).arg(lastErr));
+    }
+
+    page->refresh();
+    m_sidebar->refresh();
+}
+
+void MainWindow::onFilesDropped(const QStringList& sources, const QString& targetDir, Qt::DropAction action)
+{
+    if (sources.isEmpty() || targetDir.isEmpty()) return;
+
+    // Check if target is trash
+    if (targetDir == XdgTrash::trashFilesDirectory() || targetDir.startsWith(XdgTrash::trashDirectory())) {
+        m_opEngine->trashItems(sources);
+        return;
+    }
+
+    if (action == Qt::CopyAction) {
+        m_opEngine->copyItems(sources, targetDir);
+    } else {
+        m_opEngine->moveItems(sources, targetDir);
+    }
+}
+
 void MainWindow::onQuickLook()
 {
     TabPage* page = m_tabManager->currentPage();
@@ -668,6 +722,9 @@ void MainWindow::onOperationFinished(const OperationResult& result)
 void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir)
 {
     QMenu menu(this);
+    bool inTrash = (currentDir == XdgTrash::trashFilesDirectory() ||
+                    currentDir.startsWith(XdgTrash::trashDirectory()) ||
+                    (!selectedPaths.isEmpty() && selectedPaths.first().startsWith(XdgTrash::trashFilesDirectory())));
 
     if (!selectedPaths.isEmpty()) {
         // --- SELECTION CONTEXT MENU ---
@@ -675,6 +732,36 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
         QFileInfo primaryFi(primaryPath);
         bool isDir = primaryFi.isDir();
         bool single = (selectedPaths.size() == 1);
+
+        if (inTrash) {
+            auto* restoreAct = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-undo")),
+                single ? QStringLiteral("Put Back")
+                       : QStringLiteral("Put Back %1 Items").arg(selectedPaths.size()),
+                this, &MainWindow::onPutBack);
+            QFont rf = restoreAct->font();
+            rf.setBold(true);
+            restoreAct->setFont(rf);
+
+            menu.addSeparator();
+            menu.addAction(QStringLiteral("Quick Look"), this, &MainWindow::onQuickLook);
+
+            if (single) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")), QStringLiteral("Get Info"), this, [this, primaryPath]() {
+                    auto* dlg = new GetInfoDialog(primaryPath, this);
+                    dlg->setAttribute(Qt::WA_DeleteOnClose);
+                    dlg->show();
+                });
+            }
+
+            menu.addAction(QStringLiteral("Copy Path"), this, &MainWindow::onCopyPath);
+            menu.addSeparator();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), QStringLiteral("Delete Immediately..."), this, &MainWindow::onDeletePermanently);
+            menu.addSeparator();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash..."), this, &MainWindow::onEmptyTrash);
+
+            menu.exec(globalPos);
+            return;
+        }
 
         // 1. Open
         if (single) {
@@ -858,6 +945,12 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
 
     } else {
         // --- BACKGROUND / EMPTY SPACE CONTEXT MENU ---
+        if (inTrash) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash..."), this, &MainWindow::onEmptyTrash);
+            menu.exec(globalPos);
+            return;
+        }
+
         menu.addAction(QIcon::fromTheme(QStringLiteral("folder-new")), QStringLiteral("New Folder"), this, &MainWindow::onNewFolder);
         menu.addAction(QIcon::fromTheme(QStringLiteral("document-new")), QStringLiteral("New Text File..."), this, &MainWindow::onNewTextFile);
 

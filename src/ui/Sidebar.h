@@ -19,6 +19,8 @@ signals:
     void getInfoRequested(const QString& path);
     void emptyTrashRequested();
     void volumeUnmounted(const QString& path);
+    void itemsDroppedOnPath(const QStringList& sourcePaths, const QString& targetPath, Qt::DropAction action);
+    void itemsDroppedOnTrash(const QStringList& sourcePaths);
 
 public slots:
     void openManageSidebarDialog();

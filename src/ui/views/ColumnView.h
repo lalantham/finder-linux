@@ -34,6 +34,7 @@ signals:
     void navigateLeftRequested();
     void navigateRightRequested();
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
+    void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -84,6 +85,7 @@ signals:
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
+    void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
 
 private slots:
     void onColumnItemSelected(int columnIndex, const QString& path, bool isDir);

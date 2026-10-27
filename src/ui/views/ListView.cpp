@@ -18,6 +18,10 @@ ListView::ListView(QWidget* parent)
     setSelectionBehavior(QAbstractItemView::SelectRows);
     setAllColumnsShowFocus(true);
     setUniformRowHeights(true);
+    setDragEnabled(true);
+    setAcceptDrops(true);
+    setDropIndicatorShown(true);
+    setDefaultDropAction(Qt::MoveAction);
     header()->setSectionsMovable(true);
     header()->setStretchLastSection(true);
 

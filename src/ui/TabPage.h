@@ -44,6 +44,7 @@ signals:
     void getInfoRequested(const QString& path);
     void statusMessageChanged(const QString& message);
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
+    void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
 
 private slots:
     void onDirectoryLoaded(const QString& path, int itemCount);

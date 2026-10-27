@@ -5,6 +5,8 @@
 #include <QFileSystemWatcher>
 #include <QDir>
 #include <QVector>
+#include <QMimeData>
+#include <QUrl>
 #include <memory>
 
 class FileSystemModel : public QAbstractItemModel {
@@ -62,6 +64,11 @@ public:
     [[nodiscard]] QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
     [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
+    [[nodiscard]] Qt::DropActions supportedDropActions() const override;
+    [[nodiscard]] QStringList mimeTypes() const override;
+    [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
+    [[nodiscard]] bool canDropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) const override;
+    bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
 
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
 
@@ -72,6 +79,7 @@ public:
 signals:
     void rootPathChanged(const QString& newPath);
     void directoryLoaded(const QString& path, int itemCount);
+    void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
 
 private slots:
     void onDirectoryChanged(const QString& path);

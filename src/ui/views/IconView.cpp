@@ -19,6 +19,7 @@ IconView::IconView(QWidget* parent)
     setDragEnabled(true);
     setAcceptDrops(true);
     setDropIndicatorShown(true);
+    setDefaultDropAction(Qt::MoveAction);
     setSpacing(12);
 
     m_delegate = new FileItemDelegate(this);

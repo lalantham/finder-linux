@@ -104,6 +104,10 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     setItemDelegate(new ColumnItemDelegate(this));
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setDragEnabled(true);
+    setAcceptDrops(true);
+    setDropIndicatorShown(true);
+    setDefaultDropAction(Qt::MoveAction);
 
     setStyleSheet(QStringLiteral(
         "QListView {"
@@ -114,6 +118,7 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
         "}"
     ));
 
+    connect(m_model, &FileSystemModel::fileDropRequested, this, &ColumnBrowserList::fileDropRequested);
     connect(selectionModel(), &QItemSelectionModel::currentChanged, this, &ColumnBrowserList::onSelectionChanged);
     connect(this, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
         if (!index.isValid()) return;
@@ -354,6 +359,7 @@ void ColumnView::addColumn(const QString& path, bool animate)
     connect(col, &ColumnBrowserList::quickLookRequested, this, &ColumnView::quickLookRequested);
     connect(col, &ColumnBrowserList::getInfoRequested, this, &ColumnView::getInfoRequested);
     connect(col, &ColumnBrowserList::contextMenuRequested, this, &ColumnView::contextMenuRequested);
+    connect(col, &ColumnBrowserList::fileDropRequested, this, &ColumnView::fileDropRequested);
 
     // Keyboard navigation across columns
     connect(col, &ColumnBrowserList::navigateLeftRequested, this, [this, colIndex]() {

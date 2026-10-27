@@ -53,6 +53,8 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent)
     connectView(m_galleryView);
 
     connect(m_model, &FileSystemModel::directoryLoaded, this, &TabPage::onDirectoryLoaded);
+    connect(m_model, &FileSystemModel::fileDropRequested, this, &TabPage::fileDropRequested);
+    connect(m_columnView, &ColumnView::fileDropRequested, this, &TabPage::fileDropRequested);
 
     setViewMode(AppSettings::instance().viewMode());
     navigateTo(initialPath, false);

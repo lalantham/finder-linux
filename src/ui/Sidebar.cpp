@@ -431,18 +431,67 @@ void Sidebar::dragEnterEvent(QDragEnterEvent* event)
 
 void Sidebar::dragMoveEvent(QDragMoveEvent* event)
 {
-    event->acceptProposedAction();
+    if (event->mimeData()->hasUrls()) {
+        QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+        QModelIndex idx = indexAt(vpPos);
+        QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
+        if (item) {
+            setCurrentItem(item);
+        } else {
+            clearSelection();
+        }
+        event->acceptProposedAction();
+    }
 }
 
 void Sidebar::dropEvent(QDropEvent* event)
 {
-    if (event->mimeData()->hasUrls()) {
-        for (const auto& url : event->mimeData()->urls()) {
-            if (url.isLocalFile()) {
-                QString localPath = url.toLocalFile();
-                if (QFileInfo(localPath).isDir()) {
-                    AppSettings::instance().addFavorite(localPath);
+    if (!event->mimeData()->hasUrls()) return;
+
+    QStringList sourcePaths;
+    for (const auto& url : event->mimeData()->urls()) {
+        if (url.isLocalFile()) {
+            sourcePaths.append(url.toLocalFile());
+        }
+    }
+    if (sourcePaths.isEmpty()) return;
+
+    QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+    QModelIndex idx = indexAt(vpPos);
+    QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
+
+    if (item) {
+        bool isTrash = item->data(0, IsTrashRole).toBool();
+        QString targetPath = item->data(0, PathRole).toString();
+
+        if (isTrash) {
+            emit itemsDroppedOnTrash(sourcePaths);
+            event->acceptProposedAction();
+            return;
+        }
+
+        if (!targetPath.isEmpty() && QFileInfo(targetPath).isDir()) {
+            emit itemsDroppedOnPath(sourcePaths, targetPath, event->dropAction());
+            event->acceptProposedAction();
+            return;
+        }
+
+        int headerType = item->data(0, HeaderTypeRole).toInt();
+        if (headerType == 1) {
+            for (const auto& sp : sourcePaths) {
+                if (QFileInfo(sp).isDir()) {
+                    AppSettings::instance().addFavorite(sp);
                 }
+            }
+            refresh();
+            event->acceptProposedAction();
+            return;
+        }
+    } else {
+        // Dropped on empty space in sidebar -> pin folders to Favorites
+        for (const auto& sp : sourcePaths) {
+            if (QFileInfo(sp).isDir()) {
+                AppSettings::instance().addFavorite(sp);
             }
         }
         refresh();

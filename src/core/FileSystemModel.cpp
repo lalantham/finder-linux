@@ -230,8 +230,95 @@ QVariant FileSystemModel::headerData(int section, Qt::Orientation orientation, i
 
 Qt::ItemFlags FileSystemModel::flags(const QModelIndex& index) const
 {
-    if (!index.isValid()) return Qt::NoItemFlags;
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
+    if (!index.isValid()) {
+        return Qt::ItemIsDropEnabled;
+    }
+
+    Qt::ItemFlags f = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
+    const FileItem* item = itemForIndex(index);
+    if (item && item->isDir()) {
+        f |= Qt::ItemIsDropEnabled;
+    }
+    return f;
+}
+
+Qt::DropActions FileSystemModel::supportedDropActions() const
+{
+    return Qt::CopyAction | Qt::MoveAction;
+}
+
+QStringList FileSystemModel::mimeTypes() const
+{
+    return {QStringLiteral("text/uri-list")};
+}
+
+QMimeData* FileSystemModel::mimeData(const QModelIndexList& indexes) const
+{
+    auto* mime = new QMimeData();
+    QList<QUrl> urls;
+    QSet<int> seenRows;
+
+    for (const auto& idx : indexes) {
+        if (!idx.isValid() || seenRows.contains(idx.row())) continue;
+        seenRows.insert(idx.row());
+        const FileItem* item = itemForIndex(idx);
+        if (item) {
+            urls.append(QUrl::fromLocalFile(item->path()));
+        }
+    }
+
+    mime->setUrls(urls);
+    return mime;
+}
+
+bool FileSystemModel::canDropMimeData(const QMimeData* data, Qt::DropAction /*action*/, int /*row*/, int /*column*/, const QModelIndex& parent) const
+{
+    if (!data || !data->hasUrls()) {
+        return false;
+    }
+    if (parent.isValid()) {
+        const FileItem* item = itemForIndex(parent);
+        return item && item->isDir();
+    }
+    return true;
+}
+
+bool FileSystemModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int /*row*/, int /*column*/, const QModelIndex& parent)
+{
+    if (!data || !data->hasUrls()) {
+        return false;
+    }
+
+    QString targetDir;
+    if (parent.isValid()) {
+        const FileItem* item = itemForIndex(parent);
+        if (item && item->isDir()) {
+            targetDir = item->path();
+        } else {
+            return false;
+        }
+    } else {
+        targetDir = m_rootPath;
+    }
+
+    QStringList sources;
+    for (const auto& url : data->urls()) {
+        if (url.isLocalFile()) {
+            QString localPath = url.toLocalFile();
+            // Do not drop a directory into itself or its children
+            if (targetDir.startsWith(localPath)) {
+                continue;
+            }
+            sources.append(localPath);
+        }
+    }
+
+    if (sources.isEmpty() || targetDir.isEmpty()) {
+        return false;
+    }
+
+    emit fileDropRequested(sources, targetDir, action);
+    return true;
 }
 
 const FileItem* FileSystemModel::itemAt(int row) const

@@ -46,6 +46,8 @@ private slots:
     void onMoveToTrash();
     void onDeletePermanently();
     void onEmptyTrash();
+    void onPutBack();
+    void onFilesDropped(const QStringList& sources, const QString& targetDir, Qt::DropAction action);
     void onContextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
 
     // Inspection & Preview
