@@ -28,6 +28,7 @@ public slots:
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void startDrag(Qt::DropActions supportedActions) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dropEvent(QDropEvent* event) override;

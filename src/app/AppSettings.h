@@ -51,6 +51,15 @@ public:
     void addFavorite(const QString& path);
     void removeFavorite(const QString& path);
 
+    static QStringList defaultFavorites();
+    [[nodiscard]] QStringList favoriteOrder() const;
+    void setFavoriteOrder(const QStringList& order);
+    void reorderFavorite(const QString& path, int newIndex);
+    void moveFavoriteUp(const QString& path);
+    void moveFavoriteDown(const QString& path);
+    void moveFavoriteToTop(const QString& path);
+    void moveFavoriteToBottom(const QString& path);
+
     [[nodiscard]] QStringList hiddenFavorites() const noexcept { return m_hiddenFavorites; }
     void setHiddenFavorites(const QStringList& list);
     void hideFavorite(const QString& path);
@@ -83,6 +92,7 @@ private:
     AppTheme m_theme{AppTheme::System};
     QString m_defaultPath;
     QStringList m_customFavorites;
+    QStringList m_favoriteOrder;
     QStringList m_hiddenFavorites;
     QStringList m_hiddenLocations;
     QByteArray m_windowGeometry;

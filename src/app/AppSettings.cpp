@@ -26,6 +26,7 @@ void AppSettings::load()
     m_iconSize = s.value(QStringLiteral("iconSize"), 64).toInt();
     m_theme = static_cast<AppTheme>(s.value(QStringLiteral("theme"), static_cast<int>(AppTheme::System)).toInt());
     m_customFavorites = s.value(QStringLiteral("customFavorites")).toStringList();
+    m_favoriteOrder = s.value(QStringLiteral("favoriteOrder")).toStringList();
     m_hiddenFavorites = s.value(QStringLiteral("hiddenFavorites")).toStringList();
     m_hiddenLocations = s.value(QStringLiteral("hiddenLocations")).toStringList();
     m_windowGeometry = s.value(QStringLiteral("windowGeometry")).toByteArray();
@@ -41,6 +42,7 @@ void AppSettings::save()
     s.setValue(QStringLiteral("iconSize"), m_iconSize);
     s.setValue(QStringLiteral("theme"), static_cast<int>(m_theme));
     s.setValue(QStringLiteral("customFavorites"), m_customFavorites);
+    s.setValue(QStringLiteral("favoriteOrder"), m_favoriteOrder);
     s.setValue(QStringLiteral("hiddenFavorites"), m_hiddenFavorites);
     s.setValue(QStringLiteral("hiddenLocations"), m_hiddenLocations);
     s.setValue(QStringLiteral("windowGeometry"), m_windowGeometry);
@@ -54,10 +56,13 @@ void AppSettings::addFavorite(const QString& path)
     }
     if (!m_customFavorites.contains(path)) {
         m_customFavorites.append(path);
-        save();
-    } else {
-        save();
     }
+    if (m_favoriteOrder.isEmpty()) {
+        m_favoriteOrder = favoriteOrder();
+    } else if (!m_favoriteOrder.contains(path)) {
+        m_favoriteOrder.append(path);
+    }
+    save();
 }
 
 void AppSettings::removeFavorite(const QString& path)
@@ -69,9 +74,111 @@ void AppSettings::removeFavorite(const QString& path)
     if (m_hiddenFavorites.removeAll(path) > 0) {
         changed = true;
     }
+    if (m_favoriteOrder.removeAll(path) > 0) {
+        changed = true;
+    }
     if (changed) {
         save();
     }
+}
+
+QStringList AppSettings::defaultFavorites()
+{
+    QStringList defaults;
+    defaults << QDir::homePath();
+    auto addStd = [&](QStandardPaths::StandardLocation loc) {
+        QString p = QStandardPaths::writableLocation(loc);
+        if (!p.isEmpty() && !defaults.contains(p)) defaults << p;
+    };
+    addStd(QStandardPaths::DesktopLocation);
+    addStd(QStandardPaths::DocumentsLocation);
+    addStd(QStandardPaths::DownloadLocation);
+    addStd(QStandardPaths::PicturesLocation);
+    addStd(QStandardPaths::MusicLocation);
+    addStd(QStandardPaths::MoviesLocation);
+    return defaults;
+}
+
+QStringList AppSettings::favoriteOrder() const
+{
+    const QStringList defaults = defaultFavorites();
+    QStringList allKnown = defaults;
+    for (const auto& fav : m_customFavorites) {
+        if (!allKnown.contains(fav)) allKnown.append(fav);
+    }
+
+    if (m_favoriteOrder.isEmpty()) {
+        return allKnown;
+    }
+
+    QStringList result;
+    // Follow the saved order for any known item
+    for (const auto& path : m_favoriteOrder) {
+        if (allKnown.contains(path) && !result.contains(path)) {
+            result.append(path);
+        }
+    }
+    // Append any known items not yet in saved order
+    for (const auto& path : allKnown) {
+        if (!result.contains(path)) {
+            result.append(path);
+        }
+    }
+    return result;
+}
+
+void AppSettings::setFavoriteOrder(const QStringList& order)
+{
+    m_favoriteOrder = order;
+    save();
+}
+
+void AppSettings::reorderFavorite(const QString& path, int newIndex)
+{
+    QStringList order = favoriteOrder();
+    if (!order.contains(path)) {
+        order.append(path);
+    }
+    order.removeAll(path);
+    int clampedIndex = qBound(0, newIndex, static_cast<int>(order.size()));
+    order.insert(clampedIndex, path);
+    setFavoriteOrder(order);
+}
+
+void AppSettings::moveFavoriteUp(const QString& path)
+{
+    QStringList order = favoriteOrder();
+    int idx = static_cast<int>(order.indexOf(path));
+    if (idx > 0) {
+        order.swapItemsAt(idx, idx - 1);
+        setFavoriteOrder(order);
+    }
+}
+
+void AppSettings::moveFavoriteDown(const QString& path)
+{
+    QStringList order = favoriteOrder();
+    int idx = static_cast<int>(order.indexOf(path));
+    if (idx >= 0 && idx < static_cast<int>(order.size()) - 1) {
+        order.swapItemsAt(idx, idx + 1);
+        setFavoriteOrder(order);
+    }
+}
+
+void AppSettings::moveFavoriteToTop(const QString& path)
+{
+    QStringList order = favoriteOrder();
+    order.removeAll(path);
+    order.prepend(path);
+    setFavoriteOrder(order);
+}
+
+void AppSettings::moveFavoriteToBottom(const QString& path)
+{
+    QStringList order = favoriteOrder();
+    order.removeAll(path);
+    order.append(path);
+    setFavoriteOrder(order);
 }
 
 void AppSettings::setHiddenFavorites(const QStringList& list)
@@ -134,6 +241,7 @@ void AppSettings::unhideAllLocations()
 
 void AppSettings::resetSidebarDefaults()
 {
+    m_favoriteOrder.clear();
     m_hiddenFavorites.clear();
     m_hiddenLocations.clear();
     save();

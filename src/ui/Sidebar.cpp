@@ -18,6 +18,8 @@
 #include <QUrl>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QDrag>
+#include <QPainter>
 
 static constexpr int PathRole = Qt::UserRole + 10;
 static constexpr int IsCustomFavRole = Qt::UserRole + 11;
@@ -37,6 +39,9 @@ Sidebar::Sidebar(QWidget* parent)
     setIndentation(12);
     setAnimated(true);
     setAcceptDrops(true);
+    setDragEnabled(true);
+    setDragDropMode(QAbstractItemView::DragDrop);
+    setDefaultDropAction(Qt::MoveAction);
     setDropIndicatorShown(true);
     setSelectionMode(QAbstractItemView::SingleSelection);
     setFocusPolicy(Qt::NoFocus);
@@ -98,33 +103,36 @@ void Sidebar::populateFavorites()
         item->setIcon(0, icon);
     };
 
-    struct StandardFav {
-        QString name;
-        QString path;
-        QString iconName;
-    };
-    QVector<StandardFav> defFavs = {
-        { QStringLiteral("Home"), QDir::homePath(), QStringLiteral("user-home") },
-        { QStringLiteral("Desktop"), QStandardPaths::writableLocation(QStandardPaths::DesktopLocation), QStringLiteral("user-desktop") },
-        { QStringLiteral("Documents"), QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation), QStringLiteral("folder-documents") },
-        { QStringLiteral("Downloads"), QStandardPaths::writableLocation(QStandardPaths::DownloadLocation), QStringLiteral("folder-download") },
-        { QStringLiteral("Pictures"), QStandardPaths::writableLocation(QStandardPaths::PicturesLocation), QStringLiteral("folder-pictures") },
-        { QStringLiteral("Music"), QStandardPaths::writableLocation(QStandardPaths::MusicLocation), QStringLiteral("folder-music") },
-        { QStringLiteral("Videos"), QStandardPaths::writableLocation(QStandardPaths::MoviesLocation), QStringLiteral("folder-videos") }
-    };
+    const QStringList orderedFavs = AppSettings::instance().favoriteOrder();
+    const QString homePath = QDir::homePath();
+    const QString desktopPath = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+    const QString docsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString downPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    const QString picsPath = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    const QString musicPath = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
+    const QString vidsPath = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
 
-    for (const auto& fav : defFavs) {
-        if (!AppSettings::instance().isFavoriteHidden(fav.path)) {
-            addFavItem(fav.name, fav.path, fav.iconName, false);
-        }
-    }
+    for (const auto& path : orderedFavs) {
+        if (!QDir(path).exists()) continue;
+        if (AppSettings::instance().isFavoriteHidden(path)) continue;
 
-    // Custom pinned favorites
-    const QStringList customFavs = AppSettings::instance().customFavorites();
-    for (const auto& fav : customFavs) {
-        if (!AppSettings::instance().isFavoriteHidden(fav)) {
-            QFileInfo fi(fav);
-            addFavItem(fi.fileName().isEmpty() ? fav : fi.fileName(), fav, QStringLiteral("folder"), true);
+        if (path == homePath) {
+            addFavItem(QStringLiteral("Home"), path, QStringLiteral("user-home"), false);
+        } else if (path == desktopPath) {
+            addFavItem(QStringLiteral("Desktop"), path, QStringLiteral("user-desktop"), false);
+        } else if (path == docsPath) {
+            addFavItem(QStringLiteral("Documents"), path, QStringLiteral("folder-documents"), false);
+        } else if (path == downPath) {
+            addFavItem(QStringLiteral("Downloads"), path, QStringLiteral("folder-download"), false);
+        } else if (path == picsPath) {
+            addFavItem(QStringLiteral("Pictures"), path, QStringLiteral("folder-pictures"), false);
+        } else if (path == musicPath) {
+            addFavItem(QStringLiteral("Music"), path, QStringLiteral("folder-music"), false);
+        } else if (path == vidsPath) {
+            addFavItem(QStringLiteral("Videos"), path, QStringLiteral("folder-videos"), false);
+        } else {
+            QFileInfo fi(path);
+            addFavItem(fi.fileName().isEmpty() ? path : fi.fileName(), path, QStringLiteral("folder"), true);
         }
     }
 }
@@ -430,6 +438,37 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             });
         }
 
+        // Arrangement actions for Favorites
+        if (isCustom || isStandard) {
+            menu.addSeparator();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
+                AppSettings::instance().moveFavoriteToTop(path);
+                refresh();
+                selectPath(path);
+            });
+            auto* arrangeMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("view-sort-ascending")), QStringLiteral("Arrange"));
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
+                AppSettings::instance().moveFavoriteToTop(path);
+                refresh();
+                selectPath(path);
+            });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-up")), QStringLiteral("Move Up"), this, [this, path]() {
+                AppSettings::instance().moveFavoriteUp(path);
+                refresh();
+                selectPath(path);
+            });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-down")), QStringLiteral("Move Down"), this, [this, path]() {
+                AppSettings::instance().moveFavoriteDown(path);
+                refresh();
+                selectPath(path);
+            });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-bottom")), QStringLiteral("Move to Bottom"), this, [this, path]() {
+                AppSettings::instance().moveFavoriteToBottom(path);
+                refresh();
+                selectPath(path);
+            });
+        }
+
         menu.addSeparator();
         menu.addAction(QStringLiteral("Manage Sidebar..."), this, &Sidebar::openManageSidebarDialog);
 
@@ -483,15 +522,67 @@ void Sidebar::openManageSidebarDialog()
     dlg->show();
 }
 
+void Sidebar::startDrag(Qt::DropActions /*supportedActions*/)
+{
+    QTreeWidgetItem* item = currentItem();
+    if (!item || item->parent() != m_favoritesHeader) {
+        return; // Only allow dragging favorite items
+    }
+
+    QString path = item->data(0, PathRole).toString();
+    if (path.isEmpty()) return;
+
+    auto* mimeData = new QMimeData();
+    mimeData->setData(QStringLiteral("application/x-finder-sidebar-item"), path.toUtf8());
+    mimeData->setUrls({QUrl::fromLocalFile(path)});
+
+    auto* drag = new QDrag(this);
+    drag->setMimeData(mimeData);
+
+    int textW = fontMetrics().horizontalAdvance(item->text(0));
+    int width = qMin(220, qMax(140, textW + 50));
+    QPixmap pixmap(width, 28);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setBrush(QColor(40, 40, 45, 230));
+    painter.setPen(QPen(QColor(100, 100, 110), 1));
+    painter.drawRoundedRect(pixmap.rect().adjusted(1, 1, -1, -1), 6, 6);
+    item->icon(0).paint(&painter, 8, 5, 18, 18);
+    painter.setPen(Qt::white);
+    painter.setFont(font());
+    painter.drawText(QRect(32, 0, width - 36, 28), Qt::AlignVCenter | Qt::AlignLeft, item->text(0));
+    painter.end();
+
+    drag->setPixmap(pixmap);
+    drag->setHotSpot(QPoint(16, 14));
+
+    drag->exec(Qt::MoveAction);
+}
+
 void Sidebar::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (event->mimeData()->hasUrls()) {
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item")) ||
+        event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
     }
 }
 
 void Sidebar::dragMoveEvent(QDragMoveEvent* event)
 {
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item"))) {
+        QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+        QModelIndex idx = indexAt(vpPos);
+        QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
+        if (item && (item == m_favoritesHeader || item->parent() == m_favoritesHeader)) {
+            setCurrentItem(item);
+            event->acceptProposedAction();
+            return;
+        }
+        event->ignore();
+        return;
+    }
+
     if (event->mimeData()->hasUrls()) {
         QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
         QModelIndex idx = indexAt(vpPos);
@@ -507,6 +598,41 @@ void Sidebar::dragMoveEvent(QDragMoveEvent* event)
 
 void Sidebar::dropEvent(QDropEvent* event)
 {
+    // 1. Reordering favorite items inside sidebar
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item"))) {
+        QString draggedPath = QString::fromUtf8(event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-item")));
+        if (!draggedPath.isEmpty()) {
+            QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+            QModelIndex idx = indexAt(vpPos);
+            QTreeWidgetItem* target = idx.isValid() ? itemFromIndex(idx) : nullptr;
+
+            if (target && (target == m_favoritesHeader || target->parent() == m_favoritesHeader)) {
+                QStringList currentOrder = AppSettings::instance().favoriteOrder();
+                int targetIndex = 0;
+                if (target == m_favoritesHeader) {
+                    targetIndex = 0; // Dropped on header -> move to top
+                } else {
+                    QString targetPath = target->data(0, PathRole).toString();
+                    targetIndex = static_cast<int>(currentOrder.indexOf(targetPath));
+                    if (targetIndex < 0) targetIndex = 0;
+                    QRect rect = visualItemRect(target);
+                    if (vpPos.y() > rect.center().y()) {
+                        targetIndex++; // Dropped on lower half -> place after target
+                    }
+                }
+
+                AppSettings::instance().reorderFavorite(draggedPath, targetIndex);
+                refresh();
+                selectPath(draggedPath);
+                event->acceptProposedAction();
+                return;
+            }
+        }
+        event->ignore();
+        return;
+    }
+
+    // 2. External files dropped
     if (!event->mimeData()->hasUrls()) return;
 
     QStringList sourcePaths;

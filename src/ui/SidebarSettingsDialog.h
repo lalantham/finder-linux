@@ -24,10 +24,8 @@ private:
     void populateFavoritesList();
     void populateLocationsList();
 
-    QWidget* m_favsContainer{nullptr};
-    QListWidget* m_customFavsList{nullptr};
+    QListWidget* m_favsList{nullptr};
     QWidget* m_locationsContainer{nullptr};
 
-    QVector<QPair<QString, QCheckBox*>> m_standardFavBoxes;
     QVector<QPair<QString, QCheckBox*>> m_locationBoxes;
 };
