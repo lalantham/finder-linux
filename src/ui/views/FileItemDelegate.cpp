@@ -75,7 +75,7 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
 
             painter->setPen(Qt::white);
         } else {
-            painter->setPen(ThemeManager::instance().isDark() ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f));
+            painter->setPen(ThemeManager::instance().textColor());
         }
 
         painter->drawText(textRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, elidedText);
@@ -109,9 +109,9 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(128, 128, 128, 25));
             painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
-            painter->setPen(ThemeManager::instance().isDark() ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f));
+            painter->setPen(ThemeManager::instance().textColor());
         } else {
-            painter->setPen(ThemeManager::instance().isDark() ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f));
+            painter->setPen(ThemeManager::instance().textColor());
         }
 
         // Draw Icon if column 0

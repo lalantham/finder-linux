@@ -1,5 +1,6 @@
 #include "SearchScopeBar.h"
 #include "StyleHelper.h"
+#include "ThemeManager.h"
 #include <QIcon>
 
 SearchScopeBar::SearchScopeBar(QWidget* parent)
@@ -161,13 +162,16 @@ void SearchScopeBar::updateScopeButtons()
 void SearchScopeBar::updateThemeStyles(bool isDark)
 {
     m_isDark = isDark;
-    QString barBg = isDark ? QStringLiteral("#242428") : QStringLiteral("#ececf0");
-    QString borderCol = isDark ? QStringLiteral("#1c1c1f") : QStringLiteral("#d5d5db");
-    QString textCol = isDark ? QStringLiteral("#cccccc") : QStringLiteral("#333333");
-    QString activeBg = isDark ? QStringLiteral("#3c3c44") : QStringLiteral("#ffffff");
-    QString activeText = isDark ? QStringLiteral("#ffffff") : QStringLiteral("#111111");
-    QString inactiveBg = isDark ? QStringLiteral("#2c2c32") : QStringLiteral("#dedee4");
-    QString inactiveText = isDark ? QStringLiteral("#8e8e93") : QStringLiteral("#666666");
+    const auto& c = ThemeManager::instance().colors();
+    QString barBg = c.windowAlt.name();
+    QString borderCol = c.border.name();
+    QString textCol = c.text.name();
+    QString activeBg = c.view.name();
+    QString activeText = c.text.name();
+    QString inactiveBg = c.button.name();
+    QString inactiveText = c.subText.name();
+    QString accent = c.accent.name();
+    QString hoverBg = isDark ? c.button.lighter(120).name() : c.button.darker(108).name();
 
     setStyleSheet(QStringLiteral("SearchScopeBar { background-color: %1; border-bottom: 1px solid %2; }").arg(barBg, borderCol));
 
@@ -179,7 +183,7 @@ void SearchScopeBar::updateThemeStyles(bool isDark)
         m_scope == SearchScope::ThisFolder ? activeText : inactiveText,
         borderCol,
         m_scope == SearchScope::ThisFolder ? QStringLiteral("bold") : QStringLiteral("normal"),
-        m_scope == SearchScope::ThisFolder ? activeBg : (isDark ? QStringLiteral("#34343a") : QStringLiteral("#e6e6ec"))
+        m_scope == SearchScope::ThisFolder ? activeBg : hoverBg
     );
     m_thisFolderBtn->setStyleSheet(leftBtnStyle);
 
@@ -191,18 +195,18 @@ void SearchScopeBar::updateThemeStyles(bool isDark)
         m_scope == SearchScope::Everywhere ? activeText : inactiveText,
         borderCol,
         m_scope == SearchScope::Everywhere ? QStringLiteral("bold") : QStringLiteral("normal"),
-        m_scope == SearchScope::Everywhere ? activeBg : (isDark ? QStringLiteral("#34343a") : QStringLiteral("#e6e6ec"))
+        m_scope == SearchScope::Everywhere ? activeBg : hoverBg
     );
     m_everywhereBtn->setStyleSheet(rightBtnStyle);
 
     m_kindCombo->setStyleSheet(QStringLiteral(
         "QComboBox { background: %1; color: %2; border: 1px solid %3; border-radius: 4px; padding: 2px 6px; font-size: 11px; }"
         "QComboBox::drop-down { border: none; width: 14px; }"
-        "QComboBox QAbstractItemView { background: %1; color: %2; selection-background-color: #0A84FF; }"
-    ).arg(inactiveBg, textCol, borderCol));
+        "QComboBox QAbstractItemView { background: %1; color: %2; selection-background-color: %4; selection-color: #ffffff; }"
+    ).arg(inactiveBg, textCol, borderCol, accent));
 
     m_clearBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: %1; color: %2; border: 1px solid %3; border-radius: 4px; padding: 2px 10px; font-size: 11px; }"
         "QPushButton:hover { background: %4; color: #ff5555; }"
-    ).arg(inactiveBg, textCol, borderCol, isDark ? QStringLiteral("#36363c") : QStringLiteral("#e2e2e8")));
+    ).arg(inactiveBg, textCol, borderCol, hoverBg));
 }

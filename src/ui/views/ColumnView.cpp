@@ -75,7 +75,7 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     QFontMetrics fm(font);
     QString elidedText = fm.elidedText(text, Qt::ElideMiddle, textRect.width());
 
-    painter->setPen(isSelected ? Qt::white : (isDark ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f)));
+    painter->setPen(isSelected ? Qt::white : ThemeManager::instance().textColor());
     painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedText);
 
     if (!tags.isEmpty()) {
@@ -93,7 +93,7 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     // Draw iconic macOS right chevron for folders
     if (isDir) {
         QRect chevronRect(option.rect.right() - 20, option.rect.top(), 14, option.rect.height());
-        painter->setPen(isSelected ? Qt::white : (isDark ? QColor(0x8e, 0x8e, 0x93) : QColor(0x99, 0x99, 0x9e)));
+        painter->setPen(isSelected ? Qt::white : ThemeManager::instance().subTextColor());
         QFont chFont = font;
         chFont.setBold(true);
         chFont.setPointSize(11);

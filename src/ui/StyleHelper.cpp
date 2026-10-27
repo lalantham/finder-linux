@@ -1,34 +1,35 @@
 #include "StyleHelper.h"
 #include "ThemeManager.h"
 
-static QString resolveAccent(const QString& accentColor)
+QString StyleHelper::lightThemeStyle(const ThemeColors& c)
 {
-    if (!accentColor.isEmpty()) {
-        return accentColor;
-    }
-    return ThemeManager::instance().accentColorHex();
-}
+    QString windowHex = c.window.name();
+    QString windowAltHex = c.windowAlt.name();
+    QString viewHex = c.view.name();
+    QString viewAltHex = c.viewAlt.name();
+    QString textHex = c.text.name();
+    QString subTextHex = c.subText.name();
+    QString borderHex = c.border.name();
+    QString accentHex = c.accent.name();
+    QString selTextHex = c.selectionText.name();
 
-QString StyleHelper::lightThemeStyle(const QString& accentColor)
-{
-    QString acc = resolveAccent(accentColor);
     return QStringLiteral(
         "QWidget {"
-        "  color: #1d1d1f;"
+        "  color: %1;"
         "}"
         "QMainWindow {"
-        "  background-color: #f6f6f6;"
+        "  background-color: %2;"
         "}"
         "QMenuBar {"
-        "  background-color: #ececec;"
-        "  color: #1d1d1f;"
-        "  border-bottom: 1px solid #d1d1d1;"
+        "  background-color: %3;"
+        "  color: %1;"
+        "  border-bottom: 1px solid %4;"
         "  padding: 2px 6px;"
         "  font-size: 13px;"
         "}"
         "QMenuBar::item {"
         "  background: transparent;"
-        "  color: #1d1d1f;"
+        "  color: %1;"
         "  padding: 4px 8px;"
         "  border-radius: 4px;"
         "}"
@@ -36,28 +37,28 @@ QString StyleHelper::lightThemeStyle(const QString& accentColor)
         "  background-color: rgba(0, 0, 0, 0.08);"
         "}"
         "QMenuBar::item:pressed {"
-        "  background-color: %1;"
+        "  background-color: %5;"
         "  color: #ffffff;"
         "}"
         "QToolBar {"
-        "  background-color: #ececec;"
-        "  border-bottom: 1px solid #d1d1d1;"
+        "  background-color: %3;"
+        "  border-bottom: 1px solid %4;"
         "  spacing: 6px;"
         "  padding: 6px 10px;"
         "}"
         "QSplitter::handle {"
-        "  background-color: #d1d1d1;"
+        "  background-color: %4;"
         "  width: 1px;"
         "}"
         "QTreeWidget#sidebar {"
-        "  background-color: #f0f0f2;"
+        "  background-color: %2;"
         "  border: none;"
-        "  border-right: 1px solid #dcdcdc;"
-        "  color: #1d1d1f;"
+        "  border-right: 1px solid %4;"
+        "  color: %1;"
         "  font-size: 13px;"
         "}"
         "QTreeWidget#sidebar::item {"
-        "  color: #1d1d1f;"
+        "  color: %1;"
         "  padding: 5px 8px;"
         "  border-radius: 6px;"
         "  margin: 1px 6px;"
@@ -66,42 +67,42 @@ QString StyleHelper::lightThemeStyle(const QString& accentColor)
         "  background-color: rgba(0, 0, 0, 0.05);"
         "}"
         "QTreeWidget#sidebar::item:selected {"
-        "  background-color: %1;"
-        "  color: #ffffff;"
+        "  background-color: %5;"
+        "  color: %6;"
         "  font-weight: 500;"
         "}"
         "QTreeView, QListView, QTableView {"
-        "  background-color: #ffffff;"
-        "  alternate-background-color: #fbfbfb;"
+        "  background-color: %7;"
+        "  alternate-background-color: %8;"
         "  border: none;"
-        "  color: #1d1d1f;"
-        "  selection-background-color: %1;"
-        "  selection-color: #ffffff;"
+        "  color: %1;"
+        "  selection-background-color: %5;"
+        "  selection-color: %6;"
         "  outline: none;"
         "  font-size: 13px;"
         "}"
         "QHeaderView::section {"
-        "  background-color: #f6f6f6;"
-        "  color: #6e6e73;"
+        "  background-color: %3;"
+        "  color: %9;"
         "  padding: 4px 8px;"
         "  border: none;"
-        "  border-right: 1px solid #e5e5e5;"
-        "  border-bottom: 1px solid #dcdcdc;"
+        "  border-right: 1px solid %4;"
+        "  border-bottom: 1px solid %4;"
         "  font-weight: 500;"
         "  font-size: 11px;"
         "}"
         "QStatusBar {"
-        "  background-color: #ececec;"
-        "  border-top: 1px solid #dcdcdc;"
-        "  color: #555558;"
+        "  background-color: %3;"
+        "  border-top: 1px solid %4;"
+        "  color: %9;"
         "  font-size: 11px;"
         "}"
         "QStatusBar QLabel {"
-        "  color: #555558;"
+        "  color: %9;"
         "}"
         "QTabBar::tab {"
-        "  background: #e0e0e0;"
-        "  color: #444444;"
+        "  background: %8;"
+        "  color: %9;"
         "  border-top-left-radius: 6px;"
         "  border-top-right-radius: 6px;"
         "  padding: 6px 14px;"
@@ -109,25 +110,25 @@ QString StyleHelper::lightThemeStyle(const QString& accentColor)
         "  font-size: 12px;"
         "}"
         "QTabBar::tab:selected {"
-        "  background: #ffffff;"
-        "  color: #1d1d1f;"
+        "  background: %7;"
+        "  color: %1;"
         "  font-weight: bold;"
         "}"
         "QMenu {"
-        "  background-color: #fbfbfb;"
-        "  color: #1d1d1f;"
-        "  border: 1px solid rgba(0, 0, 0, 0.15);"
+        "  background-color: %3;"
+        "  color: %1;"
+        "  border: 1px solid %4;"
         "  border-radius: 9px;"
         "  padding: 5px;"
         "}"
         "QMenu::item {"
-        "  color: #1d1d1f;"
+        "  color: %1;"
         "  padding: 5px 16px 5px 8px;"
         "  border-radius: 6px;"
         "  margin: 2px 5px;"
         "}"
         "QMenu::item:selected {"
-        "  background-color: %1;"
+        "  background-color: %5;"
         "  color: #ffffff;"
         "}"
         "QMenu::item:disabled {"
@@ -139,7 +140,7 @@ QString StyleHelper::lightThemeStyle(const QString& accentColor)
         "}"
         "QMenu::separator {"
         "  height: 1px;"
-        "  background-color: rgba(0, 0, 0, 0.1);"
+        "  background-color: %4;"
         "  margin: 5px 8px;"
         "}"
         "QMenu::right-arrow {"
@@ -177,29 +178,58 @@ QString StyleHelper::lightThemeStyle(const QString& accentColor)
         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
         "  width: 0px;"
         "}"
-    ).arg(acc);
+    ).arg(
+        textHex,       // %1
+        windowHex,     // %2
+        windowAltHex,  // %3
+        borderHex,     // %4
+        accentHex,     // %5
+        selTextHex,    // %6
+        viewHex,       // %7
+        viewAltHex,    // %8
+        subTextHex     // %9
+    );
 }
 
-QString StyleHelper::darkThemeStyle(const QString& accentColor)
+QString StyleHelper::lightThemeStyle(const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
+    ThemeColors c = ThemeManager::instance().colors();
+    if (!accentColor.isEmpty()) {
+        c.accent = QColor(accentColor);
+        c.selection = c.accent;
+    }
+    return lightThemeStyle(c);
+}
+
+QString StyleHelper::darkThemeStyle(const ThemeColors& c)
+{
+    QString windowHex = c.window.name();
+    QString windowAltHex = c.windowAlt.name();
+    QString viewHex = c.view.name();
+    QString viewAltHex = c.viewAlt.name();
+    QString textHex = c.text.name();
+    QString subTextHex = c.subText.name();
+    QString borderHex = c.border.name();
+    QString accentHex = c.accent.name();
+    QString selTextHex = c.selectionText.name();
+
     return QStringLiteral(
         "QWidget {"
-        "  color: #f5f5f7;"
+        "  color: %1;"
         "}"
         "QMainWindow {"
-        "  background-color: #1e1e1f;"
+        "  background-color: %2;"
         "}"
         "QMenuBar {"
-        "  background-color: #2b2b2c;"
-        "  color: #f5f5f7;"
-        "  border-bottom: 1px solid #3c3d40;"
+        "  background-color: %3;"
+        "  color: %1;"
+        "  border-bottom: 1px solid %4;"
         "  padding: 2px 6px;"
         "  font-size: 13px;"
         "}"
         "QMenuBar::item {"
         "  background: transparent;"
-        "  color: #f5f5f7;"
+        "  color: %1;"
         "  padding: 4px 8px;"
         "  border-radius: 4px;"
         "}"
@@ -207,28 +237,28 @@ QString StyleHelper::darkThemeStyle(const QString& accentColor)
         "  background-color: rgba(255, 255, 255, 0.12);"
         "}"
         "QMenuBar::item:pressed {"
-        "  background-color: %1;"
+        "  background-color: %5;"
         "  color: #ffffff;"
         "}"
         "QToolBar {"
-        "  background-color: #2b2b2c;"
-        "  border-bottom: 1px solid #3c3d40;"
+        "  background-color: %3;"
+        "  border-bottom: 1px solid %4;"
         "  spacing: 6px;"
         "  padding: 6px 10px;"
         "}"
         "QSplitter::handle {"
-        "  background-color: #3c3d40;"
+        "  background-color: %4;"
         "  width: 1px;"
         "}"
         "QTreeWidget#sidebar {"
-        "  background-color: #1e1e1f;"
+        "  background-color: %2;"
         "  border: none;"
-        "  border-right: 1px solid #38383a;"
-        "  color: #f5f5f7;"
+        "  border-right: 1px solid %4;"
+        "  color: %1;"
         "  font-size: 13px;"
         "}"
         "QTreeWidget#sidebar::item {"
-        "  color: #f5f5f7;"
+        "  color: %1;"
         "  padding: 5px 8px;"
         "  border-radius: 6px;"
         "  margin: 1px 6px;"
@@ -237,42 +267,42 @@ QString StyleHelper::darkThemeStyle(const QString& accentColor)
         "  background-color: rgba(255, 255, 255, 0.08);"
         "}"
         "QTreeWidget#sidebar::item:selected {"
-        "  background-color: %1;"
-        "  color: #ffffff;"
+        "  background-color: %5;"
+        "  color: %6;"
         "  font-weight: 500;"
         "}"
         "QTreeView, QListView, QTableView {"
-        "  background-color: #1e1e1e;"
-        "  alternate-background-color: #252526;"
+        "  background-color: %7;"
+        "  alternate-background-color: %8;"
         "  border: none;"
-        "  color: #f5f5f7;"
-        "  selection-background-color: %1;"
-        "  selection-color: #ffffff;"
+        "  color: %1;"
+        "  selection-background-color: %5;"
+        "  selection-color: %6;"
         "  outline: none;"
         "  font-size: 13px;"
         "}"
         "QHeaderView::section {"
-        "  background-color: #2b2b2c;"
-        "  color: #98989d;"
+        "  background-color: %3;"
+        "  color: %9;"
         "  padding: 4px 8px;"
         "  border: none;"
-        "  border-right: 1px solid #38383a;"
-        "  border-bottom: 1px solid #38383a;"
+        "  border-right: 1px solid %4;"
+        "  border-bottom: 1px solid %4;"
         "  font-weight: 500;"
         "  font-size: 11px;"
         "}"
         "QStatusBar {"
-        "  background-color: #2b2b2c;"
-        "  border-top: 1px solid #38383a;"
-        "  color: #98989d;"
+        "  background-color: %3;"
+        "  border-top: 1px solid %4;"
+        "  color: %9;"
         "  font-size: 11px;"
         "}"
         "QStatusBar QLabel {"
-        "  color: #98989d;"
+        "  color: %9;"
         "}"
         "QTabBar::tab {"
-        "  background: #252526;"
-        "  color: #a0a0a0;"
+        "  background: %8;"
+        "  color: %9;"
         "  border-top-left-radius: 6px;"
         "  border-top-right-radius: 6px;"
         "  padding: 6px 14px;"
@@ -280,25 +310,25 @@ QString StyleHelper::darkThemeStyle(const QString& accentColor)
         "  font-size: 12px;"
         "}"
         "QTabBar::tab:selected {"
-        "  background: #1e1e1e;"
-        "  color: #ffffff;"
+        "  background: %7;"
+        "  color: %1;"
         "  font-weight: bold;"
         "}"
         "QMenu {"
-        "  background-color: #262628;"
-        "  color: #f5f5f7;"
-        "  border: 1px solid rgba(255, 255, 255, 0.14);"
+        "  background-color: %3;"
+        "  color: %1;"
+        "  border: 1px solid %4;"
         "  border-radius: 9px;"
         "  padding: 5px;"
         "}"
         "QMenu::item {"
-        "  color: #f5f5f7;"
+        "  color: %1;"
         "  padding: 5px 16px 5px 8px;"
         "  border-radius: 6px;"
         "  margin: 2px 5px;"
         "}"
         "QMenu::item:selected {"
-        "  background-color: %1;"
+        "  background-color: %5;"
         "  color: #ffffff;"
         "}"
         "QMenu::item:disabled {"
@@ -310,7 +340,7 @@ QString StyleHelper::darkThemeStyle(const QString& accentColor)
         "}"
         "QMenu::separator {"
         "  height: 1px;"
-        "  background-color: rgba(255, 255, 255, 0.12);"
+        "  background-color: %4;"
         "  margin: 5px 8px;"
         "}"
         "QMenu::right-arrow {"
@@ -348,35 +378,45 @@ QString StyleHelper::darkThemeStyle(const QString& accentColor)
         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
         "  width: 0px;"
         "}"
-    ).arg(acc);
+    ).arg(
+        textHex,       // %1
+        windowHex,     // %2
+        windowAltHex,  // %3
+        borderHex,     // %4
+        accentHex,     // %5
+        selTextHex,    // %6
+        viewHex,       // %7
+        viewAltHex,    // %8
+        subTextHex     // %9
+    );
+}
+
+QString StyleHelper::darkThemeStyle(const QString& accentColor)
+{
+    ThemeColors c = ThemeManager::instance().colors();
+    if (!accentColor.isEmpty()) {
+        c.accent = QColor(accentColor);
+        c.selection = c.accent;
+    }
+    return darkThemeStyle(c);
 }
 
 QString StyleHelper::segmentedButtonLeftStyle(bool isDark, const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
-    if (isDark) {
-        return QStringLiteral(
-            "QToolButton {"
-            "  background: #38383a;"
-            "  color: #f5f5f7;"
-            "  border: 1px solid #4a4a4c;"
-            "  border-top-left-radius: 6px;"
-            "  border-bottom-left-radius: 6px;"
-            "  border-top-right-radius: 0px;"
-            "  border-bottom-right-radius: 0px;"
-            "  padding: 4px 8px;"
-            "  margin-right: -1px;"
-            "}"
-            "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-            "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        ).arg(acc);
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString acc = !accentColor.isEmpty() ? accentColor : c.accent.name();
+    QString btnBg = c.button.name();
+    QString btnFg = c.buttonText.name();
+    QString border = c.border.name();
+    QString hoverBg = isDark ? c.button.lighter(125).name() : c.button.darker(108).name();
+    QString disabledBg = isDark ? c.window.name() : c.windowAlt.name();
+    QString disabledFg = c.subText.name();
+
     return QStringLiteral(
         "QToolButton {"
-        "  background: #fdfdfd;"
-        "  color: #1d1d1f;"
-        "  border: 1px solid #c8c8c8;"
+        "  background: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
         "  border-top-left-radius: 6px;"
         "  border-bottom-left-radius: 6px;"
         "  border-top-right-radius: 0px;"
@@ -384,229 +424,167 @@ QString StyleHelper::segmentedButtonLeftStyle(bool isDark, const QString& accent
         "  padding: 4px 8px;"
         "  margin-right: -1px;"
         "}"
-        "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-        "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    ).arg(acc);
+        "QToolButton:hover { background: %4; }"
+        "QToolButton:checked { background: %5; color: #ffffff; border-color: %5; }"
+        "QToolButton:disabled { color: %6; background: %7; border-color: %3; }"
+    ).arg(btnBg, btnFg, border, hoverBg, acc, disabledFg, disabledBg);
 }
 
 QString StyleHelper::segmentedButtonMidStyle(bool isDark, const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
-    if (isDark) {
-        return QStringLiteral(
-            "QToolButton {"
-            "  background: #38383a;"
-            "  color: #f5f5f7;"
-            "  border: 1px solid #4a4a4c;"
-            "  border-radius: 0px;"
-            "  padding: 4px 8px;"
-            "  margin-right: -1px;"
-            "}"
-            "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-            "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        ).arg(acc);
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString acc = !accentColor.isEmpty() ? accentColor : c.accent.name();
+    QString btnBg = c.button.name();
+    QString btnFg = c.buttonText.name();
+    QString border = c.border.name();
+    QString hoverBg = isDark ? c.button.lighter(125).name() : c.button.darker(108).name();
+    QString disabledBg = isDark ? c.window.name() : c.windowAlt.name();
+    QString disabledFg = c.subText.name();
+
     return QStringLiteral(
         "QToolButton {"
-        "  background: #fdfdfd;"
-        "  color: #1d1d1f;"
-        "  border: 1px solid #c8c8c8;"
+        "  background: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
         "  border-radius: 0px;"
         "  padding: 4px 8px;"
         "  margin-right: -1px;"
         "}"
-        "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-        "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    ).arg(acc);
+        "QToolButton:hover { background: %4; }"
+        "QToolButton:checked { background: %5; color: #ffffff; border-color: %5; }"
+        "QToolButton:disabled { color: %6; background: %7; border-color: %3; }"
+    ).arg(btnBg, btnFg, border, hoverBg, acc, disabledFg, disabledBg);
 }
 
 QString StyleHelper::segmentedButtonRightStyle(bool isDark, const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
-    if (isDark) {
-        return QStringLiteral(
-            "QToolButton {"
-            "  background: #38383a;"
-            "  color: #f5f5f7;"
-            "  border: 1px solid #4a4a4c;"
-            "  border-top-right-radius: 6px;"
-            "  border-bottom-right-radius: 6px;"
-            "  border-top-left-radius: 0px;"
-            "  border-bottom-left-radius: 0px;"
-            "  padding: 4px 8px;"
-            "}"
-            "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-            "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        ).arg(acc);
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString acc = !accentColor.isEmpty() ? accentColor : c.accent.name();
+    QString btnBg = c.button.name();
+    QString btnFg = c.buttonText.name();
+    QString border = c.border.name();
+    QString hoverBg = isDark ? c.button.lighter(125).name() : c.button.darker(108).name();
+    QString disabledBg = isDark ? c.window.name() : c.windowAlt.name();
+    QString disabledFg = c.subText.name();
+
     return QStringLiteral(
         "QToolButton {"
-        "  background: #fdfdfd;"
-        "  color: #1d1d1f;"
-        "  border: 1px solid #c8c8c8;"
+        "  background: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
         "  border-top-right-radius: 6px;"
         "  border-bottom-right-radius: 6px;"
         "  border-top-left-radius: 0px;"
         "  border-bottom-left-radius: 0px;"
         "  padding: 4px 8px;"
         "}"
-        "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-        "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    ).arg(acc);
+        "QToolButton:hover { background: %4; }"
+        "QToolButton:checked { background: %5; color: #ffffff; border-color: %5; }"
+        "QToolButton:disabled { color: %6; background: %7; border-color: %3; }"
+    ).arg(btnBg, btnFg, border, hoverBg, acc, disabledFg, disabledBg);
 }
 
 QString StyleHelper::segmentedButtonSingleStyle(bool isDark, const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
-    if (isDark) {
-        return QStringLiteral(
-            "QToolButton {"
-            "  background: #38383a;"
-            "  color: #f5f5f7;"
-            "  border: 1px solid #4a4a4c;"
-            "  border-radius: 6px;"
-            "  padding: 4px 10px;"
-            "}"
-            "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-            "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        ).arg(acc);
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString acc = !accentColor.isEmpty() ? accentColor : c.accent.name();
+    QString btnBg = c.button.name();
+    QString btnFg = c.buttonText.name();
+    QString border = c.border.name();
+    QString hoverBg = isDark ? c.button.lighter(125).name() : c.button.darker(108).name();
+    QString disabledBg = isDark ? c.window.name() : c.windowAlt.name();
+    QString disabledFg = c.subText.name();
+
     return QStringLiteral(
         "QToolButton {"
-        "  background: #fdfdfd;"
-        "  color: #1d1d1f;"
-        "  border: 1px solid #c8c8c8;"
+        "  background: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
         "  border-radius: 6px;"
         "  padding: 4px 10px;"
         "}"
-        "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
-        "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    ).arg(acc);
+        "QToolButton:hover { background: %4; }"
+        "QToolButton:checked { background: %5; color: #ffffff; border-color: %5; }"
+        "QToolButton:disabled { color: %6; background: %7; border-color: %3; }"
+    ).arg(btnBg, btnFg, border, hoverBg, acc, disabledFg, disabledBg);
 }
 
 QString StyleHelper::searchBarStyle(bool isDark, const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
-    if (isDark) {
-        return QStringLiteral(
-            "QLineEdit {"
-            "  background-color: #38383a;"
-            "  color: #ffffff;"
-            "  border: 1px solid #4a4a4c;"
-            "  border-radius: 13px;"
-            "  padding: 3px 12px;"
-            "  font-size: 12px;"
-            "}"
-            "QLineEdit:focus {"
-            "  border: 1px solid %1;"
-            "}"
-        ).arg(acc);
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString acc = !accentColor.isEmpty() ? accentColor : c.accent.name();
+    QString bg = c.view.name();
+    QString fg = c.text.name();
+    QString border = c.border.name();
+
     return QStringLiteral(
         "QLineEdit {"
-        "  background-color: #ffffff;"
-        "  color: #1d1d1f;"
-        "  border: 1px solid #c8c8c8;"
+        "  background-color: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
         "  border-radius: 13px;"
         "  padding: 3px 12px;"
         "  font-size: 12px;"
         "}"
         "QLineEdit:focus {"
-        "  border: 1px solid %1;"
+        "  border: 1px solid %4;"
         "}"
-    ).arg(acc);
+    ).arg(bg, fg, border, acc);
 }
 
 QString StyleHelper::breadcrumbButtonStyle(bool isDark)
 {
-    if (isDark) {
-        return QStringLiteral(
-            "QPushButton {"
-            "  background: transparent;"
-            "  color: #f5f5f7;"
-            "  border: none;"
-            "  border-radius: 4px;"
-            "  padding: 3px 7px;"
-            "  font-size: 12px;"
-            "}"
-            "QPushButton:hover {"
-            "  background: #38383a;"
-            "  color: #ffffff;"
-            "}"
-        );
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString fg = c.text.name();
+    QString hoverBg = isDark ? c.button.lighter(125).name() : c.button.darker(108).name();
+
     return QStringLiteral(
         "QPushButton {"
         "  background: transparent;"
-        "  color: #1d1d1f;"
+        "  color: %1;"
         "  border: none;"
         "  border-radius: 4px;"
         "  padding: 3px 7px;"
         "  font-size: 12px;"
         "}"
         "QPushButton:hover {"
-        "  background: #e2e2e4;"
-        "  color: #000000;"
+        "  background: %2;"
+        "  color: #ffffff;"
         "}"
-    );
+    ).arg(fg, hoverBg);
 }
 
 QString StyleHelper::sidebarStyle(bool isDark, const QString& accentColor)
 {
-    QString acc = resolveAccent(accentColor);
-    if (isDark) {
-        return QStringLiteral(
-            "QTreeWidget#sidebar {"
-            "  background-color: #1e1e1f;"
-            "  border: none;"
-            "  border-right: 1px solid #38383a;"
-            "  color: #f5f5f7;"
-            "  font-size: 13px;"
-            "}"
-            "QTreeWidget#sidebar::item {"
-            "  color: #f5f5f7;"
-            "  padding: 5px 8px;"
-            "  border-radius: 6px;"
-            "  margin: 1px 6px;"
-            "}"
-            "QTreeWidget#sidebar::item:hover {"
-            "  background-color: rgba(255, 255, 255, 0.08);"
-            "}"
-            "QTreeWidget#sidebar::item:selected {"
-            "  background-color: %1;"
-            "  color: #ffffff;"
-            "  font-weight: 500;"
-            "}"
-        ).arg(acc);
-    }
+    const auto& c = ThemeManager::instance().colors();
+    QString acc = !accentColor.isEmpty() ? accentColor : c.accent.name();
+    QString bg = c.window.name();
+    QString border = c.border.name();
+    QString fg = c.text.name();
+    QString hoverBg = isDark ? QStringLiteral("rgba(255, 255, 255, 0.08)") : QStringLiteral("rgba(0, 0, 0, 0.05)");
+    QString selText = c.selectionText.name();
+
     return QStringLiteral(
         "QTreeWidget#sidebar {"
-        "  background-color: #f0f0f2;"
+        "  background-color: %1;"
         "  border: none;"
-        "  border-right: 1px solid #dcdcdc;"
-        "  color: #1d1d1f;"
+        "  border-right: 1px solid %2;"
+        "  color: %3;"
         "  font-size: 13px;"
         "}"
         "QTreeWidget#sidebar::item {"
-        "  color: #1d1d1f;"
+        "  color: %3;"
         "  padding: 5px 8px;"
         "  border-radius: 6px;"
         "  margin: 1px 6px;"
         "}"
         "QTreeWidget#sidebar::item:hover {"
-        "  background-color: rgba(0, 0, 0, 0.05);"
+        "  background-color: %4;"
         "}"
         "QTreeWidget#sidebar::item:selected {"
-        "  background-color: %1;"
-        "  color: #ffffff;"
+        "  background-color: %5;"
+        "  color: %6;"
         "  font-weight: 500;"
         "}"
-    ).arg(acc);
+    ).arg(bg, border, fg, hoverBg, acc, selText);
 }
