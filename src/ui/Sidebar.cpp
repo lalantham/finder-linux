@@ -184,15 +184,13 @@ void Sidebar::selectPath(const QString& path)
 void Sidebar::contextMenuEvent(QContextMenuEvent* event)
 {
     QPoint vpPos = viewport()->mapFromGlobal(event->globalPos());
-    QTreeWidgetItem* item = itemAt(vpPos);
+    QModelIndex idx = indexAt(vpPos);
+    QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
     if (!item) {
-        item = itemAt(QPoint(10, vpPos.y()));
+        item = itemAt(vpPos);
     }
     if (!item) {
         item = itemAt(event->pos());
-    }
-    if (!item) {
-        item = itemAt(QPoint(10, event->pos().y()));
     }
 
     if (item) {

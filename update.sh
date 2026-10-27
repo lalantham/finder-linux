@@ -57,6 +57,10 @@ else
   cmake --install "${BUILD_DIR}"
 fi
 
+if [[ "${PREFIX}" == "${HOME}"* && -f "${PREFIX}/share/applications/finder-linux.desktop" ]]; then
+  sed -i "s|^Exec=finder-linux|Exec=${PREFIX}/bin/finder-linux|" "${PREFIX}/share/applications/finder-linux.desktop"
+fi
+
 # Refresh desktop & icon caches
 echo -e "\n${BLUE}==>${NC} Refreshing system caches..."
 if command -v update-desktop-database >/dev/null 2>&1; then
