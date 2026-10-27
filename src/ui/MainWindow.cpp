@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "TagManager.h"
 #include "AppSettings.h"
 #include "ConflictDialog.h"
 #include "GetInfoDialog.h"
@@ -22,6 +23,7 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QStorageInfo>
+#include <QWidgetAction>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -115,6 +117,15 @@ void MainWindow::setupUi()
     connect(m_sidebar, &Sidebar::itemsDroppedOnPath, this, &MainWindow::onFilesDropped);
     connect(m_sidebar, &Sidebar::itemsDroppedOnTrash, this, [this](const QStringList& sources) {
         m_opEngine->trashItems(sources);
+    });
+    connect(m_sidebar, &Sidebar::tagSelected, this, [this](const QString& tag) {
+        auto* page = m_tabManager->currentPage();
+        if (page) {
+            page->model()->setTaggedFiles(tag);
+            m_toolbar->setPath(QStringLiteral("tag://") + tag);
+            updateNavigationState();
+            updateStatusInfo();
+        }
     });
 
     m_tabManager = new TabManager(m_mainSplitter);
@@ -872,6 +883,104 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             dlg->show();
         });
+
+        // Tags Bar Widget
+        auto* tagWidgetAction = new QWidgetAction(&menu);
+        auto* tagContainer = new QWidget(&menu);
+        auto* tagRow = new QHBoxLayout(tagContainer);
+        tagRow->setContentsMargins(14, 4, 14, 4);
+        tagRow->setSpacing(8);
+
+        auto* tagLabel = new QLabel(QStringLiteral("Tags:"), tagContainer);
+        tagLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
+        tagRow->addWidget(tagLabel);
+
+        for (const auto& t : TagManager::standardTags()) {
+            auto* dotBtn = new QToolButton(tagContainer);
+            dotBtn->setFixedSize(18, 18);
+            dotBtn->setCursor(Qt::PointingHandCursor);
+            dotBtn->setToolTip(t.name);
+
+            bool allHave = true;
+            for (const auto& sp : selectedPaths) {
+                if (!TagManager::instance().hasTag(sp, t.name)) {
+                    allHave = false;
+                    break;
+                }
+            }
+
+            dotBtn->setStyleSheet(QStringLiteral(
+                "QToolButton {"
+                "  background-color: %1;"
+                "  border-radius: 9px;"
+                "  border: %2;"
+                "}"
+                "QToolButton:hover { opacity: 0.85; }"
+            ).arg(t.color.name(), allHave ? QStringLiteral("2px solid #ffffff") : QStringLiteral("1px solid rgba(0,0,0,0.25)")));
+
+            QObject::connect(dotBtn, &QToolButton::clicked, &menu, [&menu, selectedPaths, tagName = t.name]() {
+                for (const auto& sp : selectedPaths) {
+                    TagManager::instance().toggleTag(sp, tagName);
+                }
+                menu.close();
+            });
+            tagRow->addWidget(dotBtn);
+        }
+
+        // Clear tags button
+        auto* clearDotBtn = new QToolButton(tagContainer);
+        clearDotBtn->setFixedSize(18, 18);
+        clearDotBtn->setText(QStringLiteral("✕"));
+        clearDotBtn->setCursor(Qt::PointingHandCursor);
+        clearDotBtn->setToolTip(QStringLiteral("Remove All Tags"));
+        clearDotBtn->setStyleSheet(QStringLiteral(
+            "QToolButton {"
+            "  background-color: rgba(128, 128, 128, 0.25);"
+            "  color: #888888;"
+            "  border-radius: 9px;"
+            "  border: 1px solid rgba(128, 128, 128, 0.4);"
+            "  font-size: 10px;"
+            "  font-weight: bold;"
+            "}"
+            "QToolButton:hover { background-color: rgba(128, 128, 128, 0.45); color: #ffffff; }"
+        ));
+        QObject::connect(clearDotBtn, &QToolButton::clicked, &menu, [&menu, selectedPaths]() {
+            for (const auto& sp : selectedPaths) {
+                TagManager::instance().clearTags(sp);
+            }
+            menu.close();
+        });
+        tagRow->addWidget(clearDotBtn);
+        tagRow->addStretch();
+
+        tagWidgetAction->setDefaultWidget(tagContainer);
+        menu.addAction(tagWidgetAction);
+
+        // Tags submenu for keyboard accessibility
+        auto* tagsMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), QStringLiteral("Tags"));
+        for (const auto& t : TagManager::standardTags()) {
+            bool hasTag = false;
+            for (const auto& sp : selectedPaths) {
+                if (TagManager::instance().hasTag(sp, t.name)) {
+                    hasTag = true;
+                    break;
+                }
+            }
+            auto* act = tagsMenu->addAction(TagManager::tagDotIcon(t.color, 14), t.name, this, [selectedPaths, tagName = t.name]() {
+                for (const auto& sp : selectedPaths) {
+                    TagManager::instance().toggleTag(sp, tagName);
+                }
+            });
+            act->setCheckable(true);
+            act->setChecked(hasTag);
+        }
+        tagsMenu->addSeparator();
+        tagsMenu->addAction(QStringLiteral("Clear All Tags"), this, [selectedPaths]() {
+            for (const auto& sp : selectedPaths) {
+                TagManager::instance().clearTags(sp);
+            }
+        });
+        menu.addSeparator();
 
         bool isMount = isDir && VolumeManager::isMountPoint(primaryPath);
 

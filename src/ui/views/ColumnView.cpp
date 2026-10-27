@@ -1,4 +1,5 @@
 #include "ColumnView.h"
+#include "TagManager.h"
 #include "AppSettings.h"
 #include "DesktopAppsManager.h"
 #include "PreviewManager.h"
@@ -56,8 +57,14 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     icon.paint(painter, iconRect);
     textLeft += 24;
 
-    // Text label
-    int rightMargin = isDir ? 24 : 8;
+    // Text label & tag dots
+    QStringList tags = index.data(FileSystemModel::FileTagsRole).toStringList();
+    int dotSize = 7;
+    int dotSpacing = 3;
+    int numTags = static_cast<int>(tags.size());
+    int dotsWidth = tags.isEmpty() ? 0 : (numTags * (dotSize + dotSpacing) + 4);
+
+    int rightMargin = (isDir ? 24 : 8) + dotsWidth;
     QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - rightMargin, option.rect.height());
     QString text = index.data(Qt::DisplayRole).toString();
 
@@ -70,6 +77,18 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
 
     painter->setPen(isSelected ? Qt::white : (isDark ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f)));
     painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedText);
+
+    if (!tags.isEmpty()) {
+        int textActualW = qMin(fm.horizontalAdvance(elidedText), textRect.width());
+        int dotX = textLeft + textActualW + 6;
+        int dotY = option.rect.top() + (option.rect.height() - dotSize) / 2;
+        for (int t = 0; t < numTags; ++t) {
+            QColor c = TagManager::colorForTag(tags[t]);
+            painter->setPen(c.darker(115));
+            painter->setBrush(c);
+            painter->drawEllipse(dotX + t * (dotSize + dotSpacing), dotY, dotSize, dotSize);
+        }
+    }
 
     // Draw iconic macOS right chevron for folders
     if (isDir) {
@@ -221,6 +240,12 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
     m_modifiedLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     layout->addWidget(m_modifiedLabel);
 
+    m_tagsContainer = new QWidget(this);
+    m_tagsLayout = new QHBoxLayout(m_tagsContainer);
+    m_tagsLayout->setContentsMargins(0, 4, 0, 4);
+    m_tagsLayout->setSpacing(6);
+    layout->addWidget(m_tagsContainer);
+
     layout->addSpacing(12);
 
     auto* qlBtn = new QPushButton(QStringLiteral("Quick Look"), this);
@@ -241,6 +266,41 @@ void ColumnPreviewPane::setItem(const QString& path)
     m_kindLabel->setText(QStringLiteral("Kind: %1").arg(item.kind()));
     m_sizeLabel->setText(QStringLiteral("Size: %1").arg(item.formattedSize()));
     m_modifiedLabel->setText(QStringLiteral("Modified: %1").arg(item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm"))));
+
+    // Clear and re-populate tag badges
+    QLayoutItem* child;
+    while ((child = m_tagsLayout->takeAt(0)) != nullptr) {
+        if (child->widget()) delete child->widget();
+        delete child;
+    }
+
+    QStringList tags = item.tags();
+    if (!tags.isEmpty()) {
+        auto* tagHeader = new QLabel(QStringLiteral("Tags:"), m_tagsContainer);
+        tagHeader->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
+        m_tagsLayout->addWidget(tagHeader);
+
+        for (const auto& t : tags) {
+            auto* badge = new QLabel(t, m_tagsContainer);
+            QColor c = TagManager::colorForTag(t);
+            badge->setStyleSheet(QStringLiteral(
+                "QLabel {"
+                "  background: rgba(%1, %2, %3, 0.2);"
+                "  color: rgb(%1, %2, %3);"
+                "  border: 1px solid rgba(%1, %2, %3, 0.5);"
+                "  border-radius: 4px;"
+                "  padding: 1px 6px;"
+                "  font-size: 10px;"
+                "  font-weight: bold;"
+                "}"
+            ).arg(c.red()).arg(c.green()).arg(c.blue()));
+            m_tagsLayout->addWidget(badge);
+        }
+        m_tagsLayout->addStretch();
+        m_tagsContainer->show();
+    } else {
+        m_tagsContainer->hide();
+    }
 
     auto& pm = PreviewManager::instance();
     if (pm.isImage(path)) {

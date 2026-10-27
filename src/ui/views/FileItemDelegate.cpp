@@ -1,5 +1,6 @@
 #include "FileItemDelegate.h"
 #include "FileSystemModel.h"
+#include "TagManager.h"
 #include "ThemeManager.h"
 #include <QPainter>
 #include <QApplication>
@@ -79,8 +80,26 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
 
         painter->drawText(textRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, elidedText);
 
+        // Draw tag dots below icon
+        QStringList tags = index.data(FileSystemModel::FileTagsRole).toStringList();
+        if (!tags.isEmpty()) {
+            int dotSize = 7;
+            int dotSpacing = 3;
+            int numTags = static_cast<int>(tags.size());
+            int totalDotsW = numTags * dotSize + (numTags - 1) * dotSpacing;
+            int startX = itemRect.left() + (itemRect.width() - totalDotsW) / 2;
+            int dotY = iconRect.bottom() + 1;
+
+            for (int t = 0; t < numTags; ++t) {
+                QColor c = TagManager::colorForTag(tags[t]);
+                painter->setPen(c.darker(115));
+                painter->setBrush(c);
+                painter->drawEllipse(startX + t * (dotSize + dotSpacing), dotY, dotSize, dotSize);
+            }
+        }
+
     } else {
-        // List / Table / Column Mode
+        // List / Table Mode
         if (isSelected) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(ThemeManager::instance().accentColor());
@@ -108,16 +127,45 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
             QRect iconRect(textLeft, option.rect.top() + (option.rect.height() - 18) / 2, 18, 18);
             icon.paint(painter, iconRect);
             textLeft += 24;
+
+            QStringList tags = index.data(FileSystemModel::FileTagsRole).toStringList();
+            int dotSize = 8;
+            int dotSpacing = 3;
+            int numTags = static_cast<int>(tags.size());
+            int dotsWidth = tags.isEmpty() ? 0 : (numTags * (dotSize + dotSpacing) + 6);
+
+            QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - dotsWidth - 4, option.rect.height());
+            QString text = index.data(Qt::DisplayRole).toString();
+
+            QFont font = option.font;
+            font.setPointSize(10);
+            painter->setFont(font);
+
+            QFontMetrics fm(font);
+            QString elidedText = fm.elidedText(text, Qt::ElideMiddle, textRect.width());
+            painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedText);
+
+            if (!tags.isEmpty()) {
+                int textActualW = qMin(fm.horizontalAdvance(elidedText), textRect.width());
+                int dotX = textLeft + textActualW + 8;
+                int dotY = option.rect.top() + (option.rect.height() - dotSize) / 2;
+                for (int t = 0; t < numTags; ++t) {
+                    QColor c = TagManager::colorForTag(tags[t]);
+                    painter->setPen(c.darker(115));
+                    painter->setBrush(c);
+                    painter->drawEllipse(dotX + t * (dotSize + dotSpacing), dotY, dotSize, dotSize);
+                }
+            }
+        } else {
+            QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - 4, option.rect.height());
+            QString text = index.data(Qt::DisplayRole).toString();
+
+            QFont font = option.font;
+            font.setPointSize(10);
+            painter->setFont(font);
+
+            painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
         }
-
-        QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - 4, option.rect.height());
-        QString text = index.data(Qt::DisplayRole).toString();
-
-        QFont font = option.font;
-        font.setPointSize(10);
-        painter->setFont(font);
-
-        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
     }
 
     painter->restore();

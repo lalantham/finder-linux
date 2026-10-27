@@ -2,6 +2,7 @@
 #include "SidebarSettingsDialog.h"
 #include "AppSettings.h"
 #include "XdgTrash.h"
+#include "TagManager.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QMessageBox>
@@ -23,7 +24,9 @@ static constexpr int IsCustomFavRole = Qt::UserRole + 11;
 static constexpr int IsTrashRole = Qt::UserRole + 12;
 static constexpr int IsLocationRole = Qt::UserRole + 13;
 static constexpr int IsStandardFavRole = Qt::UserRole + 14;
-static constexpr int HeaderTypeRole = Qt::UserRole + 15; // 1 = Favorites, 2 = Locations
+static constexpr int HeaderTypeRole = Qt::UserRole + 15; // 1 = Favorites, 2 = Locations, 3 = Tags
+static constexpr int IsTagRole = Qt::UserRole + 16;
+static constexpr int TagNameRole = Qt::UserRole + 17;
 
 Sidebar::Sidebar(QWidget* parent)
     : QTreeWidget(parent)
@@ -41,6 +44,7 @@ Sidebar::Sidebar(QWidget* parent)
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
+    connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
 
     refresh();
 }
@@ -57,6 +61,7 @@ void Sidebar::refresh()
 
     populateFavorites();
     populateLocations();
+    populateTags();
 
     expandAll();
 
@@ -167,9 +172,40 @@ void Sidebar::populateLocations()
     }
 }
 
+void Sidebar::populateTags()
+{
+    m_tagsHeader = new QTreeWidgetItem(this);
+    m_tagsHeader->setText(0, QStringLiteral("Tags"));
+    m_tagsHeader->setData(0, HeaderTypeRole, 3);
+    QFont hf = m_tagsHeader->font(0);
+    hf.setBold(true);
+    hf.setPointSize(10);
+    m_tagsHeader->setFont(0, hf);
+    m_tagsHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
+    m_tagsHeader->setFlags(Qt::ItemIsEnabled);
+
+    for (const auto& tagInfo : TagManager::standardTags()) {
+        auto* item = new QTreeWidgetItem(m_tagsHeader);
+        int count = TagManager::instance().tagCount(tagInfo.name);
+        QString label = tagInfo.name;
+        if (count > 0) {
+            label += QStringLiteral(" (%1)").arg(count);
+        }
+        item->setText(0, label);
+        item->setData(0, IsTagRole, true);
+        item->setData(0, TagNameRole, tagInfo.name);
+        item->setIcon(0, TagManager::tagDotIcon(tagInfo.color, 14));
+    }
+}
+
 void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
 {
     if (!item) return;
+    if (item->data(0, IsTagRole).toBool()) {
+        QString tag = item->data(0, TagNameRole).toString();
+        emit tagSelected(tag);
+        return;
+    }
     QString path = item->data(0, PathRole).toString();
     if (!path.isEmpty()) {
         emit pathSelected(path);
@@ -272,7 +308,32 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             return;
         }
 
-        // 3. Right clicked specific item
+        // 3. Right clicked on Tag item
+        if (item->data(0, IsTagRole).toBool()) {
+            QString tag = item->data(0, TagNameRole).toString();
+            auto* openAct = menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")), QStringLiteral("Open"), this, [this, tag]() {
+                emit tagSelected(tag);
+            });
+            QFont f = openAct->font();
+            f.setBold(true);
+            openAct->setFont(f);
+
+            menu.addSeparator();
+            int count = TagManager::instance().tagCount(tag);
+            auto* clearAct = menu.addAction(QStringLiteral("Clear All \"%1\" Tags (%2 Files)").arg(tag).arg(count), this, [this, tag]() {
+                QStringList files = TagManager::instance().filesForTag(tag);
+                for (const auto& f : files) {
+                    TagManager::instance().removeTag(f, tag);
+                }
+                refresh();
+            });
+            if (count == 0) clearAct->setEnabled(false);
+
+            menu.exec(event->globalPos());
+            return;
+        }
+
+        // 4. Right clicked specific item
         bool isCustom = item->data(0, IsCustomFavRole).toBool();
         bool isStandard = item->data(0, IsStandardFavRole).toBool();
         bool isTrash = item->data(0, IsTrashRole).toBool();
@@ -461,6 +522,16 @@ void Sidebar::dropEvent(QDropEvent* event)
     QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
 
     if (item) {
+        if (item->data(0, IsTagRole).toBool()) {
+            QString tag = item->data(0, TagNameRole).toString();
+            for (const auto& sp : sourcePaths) {
+                TagManager::instance().addTag(sp, tag);
+            }
+            refresh();
+            event->acceptProposedAction();
+            return;
+        }
+
         bool isTrash = item->data(0, IsTrashRole).toBool();
         QString targetPath = item->data(0, PathRole).toString();
 

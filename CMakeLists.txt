@@ -49,6 +49,8 @@ set(FINDER_CORE_SOURCES
     src/core/UndoManager.h
     src/core/DesktopAppsManager.cpp
     src/core/DesktopAppsManager.h
+    src/core/TagManager.cpp
+    src/core/TagManager.h
     src/operations/FileOperation.h
     src/operations/FileOperationEngine.cpp
     src/operations/FileOperationEngine.h

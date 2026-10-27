@@ -1,5 +1,6 @@
 #include "QuickLookDialog.h"
 #include "PreviewManager.h"
+#include "TagManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFileInfo>
@@ -169,8 +170,12 @@ void QuickLookDialog::updateContent()
     FileItem item(currentPath);
 
     m_titleLabel->setText(item.fileName());
-    m_subtitleLabel->setText(QStringLiteral("%1 — %2 — Modified %3")
-        .arg(item.kind(), item.formattedSize(), item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm"))));
+    QString sub = QStringLiteral("%1 — %2 — Modified %3")
+        .arg(item.kind(), item.formattedSize(), item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm")));
+    if (!item.tags().isEmpty()) {
+        sub += QStringLiteral(" — Tags: %1").arg(item.tags().join(QStringLiteral(", ")));
+    }
+    m_subtitleLabel->setText(sub);
 
     m_prevBtn->setEnabled(m_files.size() > 1);
     m_nextBtn->setEnabled(m_files.size() > 1);

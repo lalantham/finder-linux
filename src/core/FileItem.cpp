@@ -1,4 +1,5 @@
 #include "FileItem.h"
+#include "TagManager.h"
 #include <QFileIconProvider>
 #include <QLocale>
 #include <QDir>
@@ -97,6 +98,8 @@ void FileItem::initFromInfo(const QFileInfo& info)
             m_kind = m_suffix.isEmpty() ? QStringLiteral("Document") : m_suffix.toUpper() + QStringLiteral(" Document");
         }
     }
+
+    m_tags = TagManager::instance().tagsForFile(m_path);
 }
 
 #include <QStandardPaths>

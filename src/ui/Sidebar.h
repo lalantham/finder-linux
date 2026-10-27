@@ -21,6 +21,7 @@ signals:
     void volumeUnmounted(const QString& path);
     void itemsDroppedOnPath(const QStringList& sourcePaths, const QString& targetPath, Qt::DropAction action);
     void itemsDroppedOnTrash(const QStringList& sourcePaths);
+    void tagSelected(const QString& tag);
 
 public slots:
     void openManageSidebarDialog();
@@ -37,8 +38,10 @@ private slots:
 private:
     void populateFavorites();
     void populateLocations();
+    void populateTags();
 
     QTreeWidgetItem* m_favoritesHeader{nullptr};
     QTreeWidgetItem* m_locationsHeader{nullptr};
+    QTreeWidgetItem* m_tagsHeader{nullptr};
     QTreeWidgetItem* m_trashHeader{nullptr};
 };

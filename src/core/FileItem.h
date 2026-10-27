@@ -48,6 +48,7 @@ public:
     [[nodiscard]] mode_t posixMode() const noexcept { return m_posixMode; }
     [[nodiscard]] const QString& owner() const noexcept { return m_owner; }
     [[nodiscard]] const QString& group() const noexcept { return m_group; }
+    [[nodiscard]] const QStringList& tags() const noexcept { return m_tags; }
 
     [[nodiscard]] QIcon icon() const;
 
@@ -69,6 +70,7 @@ private:
     QDateTime m_accessed;
     QString m_kind;
     QString m_mimeTypeName;
+    QStringList m_tags;
 
     bool m_isDir{false};
     bool m_isFile{false};

@@ -1,4 +1,5 @@
 #include "FileSystemModel.h"
+#include "TagManager.h"
 #include <QFileInfo>
 #include <algorithm>
 
@@ -6,10 +7,21 @@ FileSystemModel::FileSystemModel(QObject* parent)
     : QAbstractItemModel(parent)
 {
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &FileSystemModel::onDirectoryChanged);
+    connect(&TagManager::instance(), &TagManager::tagsChanged, this, [this](const QString& path, const QStringList& /*tags*/) {
+        for (int i = 0; i < m_items.size(); ++i) {
+            if (m_items[i].path() == path) {
+                m_items[i].refresh();
+                QModelIndex idx = index(i, 0);
+                emit dataChanged(idx, index(i, columnCount() - 1), {FileTagsRole, Qt::DisplayRole});
+                break;
+            }
+        }
+    });
 }
 
 void FileSystemModel::setRootPath(const QString& path)
 {
+    m_activeTag.clear();
     QString cleanPath = QDir::cleanPath(path);
     if (m_rootPath == cleanPath) return;
 
@@ -22,6 +34,17 @@ void FileSystemModel::setRootPath(const QString& path)
         m_watcher.addPath(m_rootPath);
     }
 
+    populate();
+    emit rootPathChanged(m_rootPath);
+}
+
+void FileSystemModel::setTaggedFiles(const QString& tag)
+{
+    if (!m_rootPath.isEmpty() && !m_rootPath.startsWith(QStringLiteral("tag://"))) {
+        m_watcher.removePath(m_rootPath);
+    }
+    m_activeTag = tag;
+    m_rootPath = QStringLiteral("tag://") + tag;
     populate();
     emit rootPathChanged(m_rootPath);
 }
@@ -57,7 +80,16 @@ void FileSystemModel::populate()
     beginResetModel();
     m_items.clear();
 
-    if (!m_rootPath.isEmpty()) {
+    if (!m_activeTag.isEmpty()) {
+        QStringList paths = TagManager::instance().filesForTag(m_activeTag);
+        m_items.reserve(paths.size());
+        for (const auto& p : paths) {
+            if (QFileInfo::exists(p)) {
+                m_items.emplace_back(p);
+            }
+        }
+        sortInternal();
+    } else if (!m_rootPath.isEmpty()) {
         QDir dir(m_rootPath);
         QDir::Filters filters = QDir::NoDotAndDotDot | QDir::AllEntries | QDir::System;
         if (m_showHidden) {
@@ -202,6 +234,8 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const
         return item.owner();
     case FileGroupRole:
         return item.group();
+    case FileTagsRole:
+        return item.tags();
     default:
         break;
     }

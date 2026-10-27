@@ -43,6 +43,7 @@ private slots:
 
 private:
     void setupGeneralSection(QVBoxLayout* layout, const FileItem& item);
+    void setupTagsSection(QVBoxLayout* layout, const QString& path);
     void setupOpenWithSection(QVBoxLayout* layout, const FileItem& item);
     void setupPermissionsSection(QVBoxLayout* layout, const FileItem& item);
 

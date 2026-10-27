@@ -1,4 +1,6 @@
 #include "GetInfoDialog.h"
+#include "TagManager.h"
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -80,6 +82,7 @@ GetInfoDialog::GetInfoDialog(const QString& path, QWidget* parent)
     mainLayout->addLayout(header);
 
     setupGeneralSection(mainLayout, m_item);
+    setupTagsSection(mainLayout, m_path);
 
     if (!m_item.isDir()) {
         setupOpenWithSection(mainLayout, m_item);
@@ -150,6 +153,43 @@ void GetInfoDialog::setupGeneralSection(QVBoxLayout* layout, const FileItem& ite
     }
 
     layout->addWidget(generalBox);
+}
+
+void GetInfoDialog::setupTagsSection(QVBoxLayout* layout, const QString& path)
+{
+    auto* tagBox = new QGroupBox(QStringLiteral("Tags:"), this);
+    auto* tagLayout = new QHBoxLayout(tagBox);
+    tagLayout->setSpacing(8);
+    tagLayout->setContentsMargins(12, 10, 12, 10);
+
+    for (const auto& tagInfo : TagManager::standardTags()) {
+        auto* btn = new QToolButton(tagBox);
+        btn->setFixedSize(24, 24);
+        btn->setCheckable(true);
+        btn->setChecked(TagManager::instance().hasTag(path, tagInfo.name));
+        btn->setToolTip(tagInfo.name);
+
+        auto updateStyle = [btn, color = tagInfo.color]() {
+            bool checked = btn->isChecked();
+            btn->setStyleSheet(QStringLiteral(
+                "QToolButton {"
+                "  border-radius: 12px;"
+                "  background-color: %1;"
+                "  border: %2;"
+                "}"
+            ).arg(color.name()).arg(checked ? QStringLiteral("3px solid #ffffff") : QStringLiteral("1px solid rgba(0,0,0,0.25)")));
+        };
+        updateStyle();
+
+        connect(btn, &QToolButton::clicked, this, [path, tag = tagInfo.name, btn, updateStyle]() {
+            TagManager::instance().toggleTag(path, tag);
+            updateStyle();
+        });
+
+        tagLayout->addWidget(btn);
+    }
+    tagLayout->addStretch();
+    layout->addWidget(tagBox);
 }
 
 void GetInfoDialog::setupOpenWithSection(QVBoxLayout* layout, const FileItem& item)

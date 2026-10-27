@@ -66,6 +66,8 @@ private:
     QLabel* m_kindLabel{nullptr};
     QLabel* m_sizeLabel{nullptr};
     QLabel* m_modifiedLabel{nullptr};
+    QWidget* m_tagsContainer{nullptr};
+    QHBoxLayout* m_tagsLayout{nullptr};
 };
 
 class ColumnView : public QScrollArea {

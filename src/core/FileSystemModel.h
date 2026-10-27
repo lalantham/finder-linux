@@ -32,7 +32,8 @@ public:
         FilePermissionsRole,
         FileOwnerRole,
         FileGroupRole,
-        FileFormattedSizeRole
+        FileFormattedSizeRole,
+        FileTagsRole
     };
 
     enum class SortField {
@@ -46,6 +47,9 @@ public:
     ~FileSystemModel() override = default;
 
     void setRootPath(const QString& path);
+    void setTaggedFiles(const QString& tag);
+    [[nodiscard]] bool isTaggedView() const noexcept { return !m_activeTag.isEmpty(); }
+    [[nodiscard]] const QString& activeTag() const noexcept { return m_activeTag; }
     [[nodiscard]] const QString& rootPath() const noexcept { return m_rootPath; }
 
     void setShowHidden(bool show);
@@ -89,6 +93,7 @@ private:
     void sortInternal();
 
     QString m_rootPath;
+    QString m_activeTag;
     bool m_showHidden{false};
     bool m_directoriesFirst{true};
     int m_sortColumn{ColName};
