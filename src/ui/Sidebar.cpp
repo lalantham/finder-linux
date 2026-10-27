@@ -2,6 +2,10 @@
 #include "SidebarSettingsDialog.h"
 #include "AppSettings.h"
 #include "XdgTrash.h"
+#include <QApplication>
+#include <QClipboard>
+#include <QMessageBox>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QDir>
 #include <QFileIconProvider>
@@ -127,7 +131,7 @@ void Sidebar::populateLocations()
     // Mounted volumes
     QVector<VolumeEntry> volumes = VolumeManager::mountedVolumes();
     for (const auto& vol : volumes) {
-        if (AppSettings::instance().isLocationHidden(vol.path) || AppSettings::instance().isLocationHidden(vol.name)) {
+        if (AppSettings::instance().isLocationHidden(vol.path)) {
             continue;
         }
 
@@ -179,7 +183,22 @@ void Sidebar::selectPath(const QString& path)
 
 void Sidebar::contextMenuEvent(QContextMenuEvent* event)
 {
-    QTreeWidgetItem* item = itemAt(event->pos());
+    QPoint vpPos = viewport()->mapFromGlobal(event->globalPos());
+    QTreeWidgetItem* item = itemAt(vpPos);
+    if (!item) {
+        item = itemAt(QPoint(10, vpPos.y()));
+    }
+    if (!item) {
+        item = itemAt(event->pos());
+    }
+    if (!item) {
+        item = itemAt(QPoint(10, event->pos().y()));
+    }
+
+    if (item) {
+        setCurrentItem(item);
+    }
+
     QMenu menu(this);
 
     if (item) {
@@ -252,7 +271,77 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
         bool isLocation = item->data(0, IsLocationRole).toBool();
         QString path = item->data(0, PathRole).toString();
 
-        if (isCustom) {
+        // Open action
+        auto* openAct = menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")), QStringLiteral("Open"), this, [this, path]() {
+            if (!path.isEmpty()) {
+                emit pathSelected(path);
+            }
+        });
+        QFont f = openAct->font();
+        f.setBold(true);
+        openAct->setFont(f);
+
+        // Open in New Tab
+        if (!path.isEmpty()) {
+            menu.addAction(QStringLiteral("Open in New Tab"), this, [this, path]() {
+                emit openInNewTabRequested(path);
+            });
+        }
+
+        // Open in Terminal
+        if (!isTrash && !path.isEmpty()) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")), QStringLiteral("Open in Terminal"), this, [path]() {
+                QStringList terms = {
+                    QStringLiteral("x-terminal-emulator"),
+                    QStringLiteral("ptyxis"),
+                    QStringLiteral("gnome-terminal"),
+                    QStringLiteral("konsole"),
+                    QStringLiteral("xfce4-terminal"),
+                    QStringLiteral("kitty"),
+                    QStringLiteral("alacritty"),
+                    QStringLiteral("xterm")
+                };
+                for (const auto& term : terms) {
+                    if (QProcess::startDetached(term, QStringList(), path)) {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Copy Path
+        if (!path.isEmpty()) {
+            menu.addAction(QStringLiteral("Copy Path"), this, [path]() {
+                QApplication::clipboard()->setText(path);
+            });
+        }
+
+        menu.addSeparator();
+
+        // Location specific or Favorite specific actions
+        if (isLocation) {
+            if (isTrash) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash"), this, &Sidebar::emptyTrashRequested);
+                menu.addSeparator();
+            } else if (path != QStringLiteral("/") && !path.isEmpty()) {
+                // Eject / Unmount
+                menu.addAction(QIcon::fromTheme(QStringLiteral("media-eject")), QStringLiteral("Eject / Unmount"), this, [this, path]() {
+                    QString err;
+                    if (VolumeManager::unmountVolume(path, &err)) {
+                        emit volumeUnmounted(path);
+                        refresh();
+                    } else {
+                        QMessageBox::warning(this, QStringLiteral("Cannot Unmount"), err);
+                    }
+                });
+                menu.addSeparator();
+            }
+
+            menu.addAction(QStringLiteral("Hide from Sidebar"), this, [this, path]() {
+                AppSettings::instance().hideLocation(path);
+                refresh();
+            });
+        } else if (isCustom) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-remove")), QStringLiteral("Unpin from Sidebar"), this, [this, path]() {
                 AppSettings::instance().removeFavorite(path);
                 refresh();
@@ -262,23 +351,11 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
                 AppSettings::instance().hideFavorite(path);
                 refresh();
             });
-        } else if (isLocation) {
-            if (isTrash) {
-                menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash"), this, &Sidebar::emptyTrashRequested);
-                menu.addSeparator();
-            }
-            menu.addAction(QStringLiteral("Hide from Sidebar"), this, [this, path, item]() {
-                AppSettings::instance().hideLocation(path);
-                AppSettings::instance().hideLocation(item->text(0));
-                refresh();
-            });
         }
 
-        if (!path.isEmpty() && !isTrash) {
+        // Get Info
+        if (!path.isEmpty()) {
             menu.addSeparator();
-            menu.addAction(QStringLiteral("Open in New Tab"), this, [this, path]() {
-                emit openInNewTabRequested(path);
-            });
             menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")), QStringLiteral("Get Info"), this, [this, path]() {
                 emit getInfoRequested(path);
             });

@@ -117,13 +117,13 @@ void SidebarSettingsDialog::setupUi()
     for (const auto& vol : volumes) {
         auto* cb = new QCheckBox(vol.name, m_locationsContainer);
         cb->setIcon(vol.icon);
-        bool isHidden = AppSettings::instance().isLocationHidden(vol.path) || AppSettings::instance().isLocationHidden(vol.name);
+        cb->setToolTip(vol.path);
+        bool isHidden = AppSettings::instance().isLocationHidden(vol.path);
         cb->setChecked(!isHidden);
 
-        connect(cb, &QCheckBox::toggled, this, [this, path = vol.path, name = vol.name](bool checked) {
+        connect(cb, &QCheckBox::toggled, this, [this, path = vol.path](bool checked) {
             if (checked) {
                 AppSettings::instance().unhideLocation(path);
-                AppSettings::instance().unhideLocation(name);
             } else {
                 AppSettings::instance().hideLocation(path);
             }

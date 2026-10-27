@@ -22,4 +22,6 @@ public:
     static QVector<VolumeEntry> mountedVolumes();
     static VolumeEntry rootVolume();
     static bool isLocationMounted(const QString& path);
+    static bool isMountPoint(const QString& path);
+    static bool unmountVolume(const QString& mountPoint, QString* errorOut = nullptr);
 };

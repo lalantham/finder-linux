@@ -102,6 +102,16 @@ void MainWindow::setupUi()
         dlg->show();
     });
     connect(m_sidebar, &Sidebar::emptyTrashRequested, this, &MainWindow::onEmptyTrash);
+    connect(m_sidebar, &Sidebar::volumeUnmounted, this, [this](const QString& p) {
+        auto* page = m_tabManager->currentPage();
+        if (page) {
+            if (page->currentPath().startsWith(p)) {
+                page->navigateTo(QDir::homePath());
+            } else {
+                page->refresh();
+            }
+        }
+    });
 
     m_tabManager = new TabManager(m_mainSplitter);
     connect(m_tabManager, &TabManager::activePageChanged, this, &MainWindow::onActivePageChanged);
@@ -677,6 +687,26 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                     m_tabManager->createTab(primaryPath);
                 });
 
+                bool isMount = VolumeManager::isMountPoint(primaryPath);
+                if (isMount && primaryPath != QStringLiteral("/")) {
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("media-eject")), QStringLiteral("Eject / Unmount"), this, [this, primaryPath]() {
+                        QString err;
+                        if (VolumeManager::unmountVolume(primaryPath, &err)) {
+                            m_sidebar->refresh();
+                            auto* page = m_tabManager->currentPage();
+                            if (page) {
+                                if (page->currentPath().startsWith(primaryPath)) {
+                                    page->navigateTo(QDir::homePath());
+                                } else {
+                                    page->refresh();
+                                }
+                            }
+                        } else {
+                            QMessageBox::warning(this, QStringLiteral("Cannot Unmount"), err);
+                        }
+                    });
+                }
+
                 bool isPinned = AppSettings::instance().customFavorites().contains(primaryPath);
                 if (isPinned) {
                     menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-remove")), QStringLiteral("Unpin from Sidebar"), this, [this, primaryPath]() {
@@ -747,13 +777,17 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             dlg->show();
         });
 
-        // Rename (only for single)
-        if (single) {
+        bool isMount = isDir && VolumeManager::isMountPoint(primaryPath);
+
+        // Rename (only for single and non-mount)
+        if (single && !isMount) {
             menu.addAction(QStringLiteral("Rename"), this, &MainWindow::onRename);
         }
 
-        // Duplicate
-        menu.addAction(QStringLiteral("Duplicate"), this, &MainWindow::onDuplicate);
+        // Duplicate (non-mount)
+        if (!isMount) {
+            menu.addAction(QStringLiteral("Duplicate"), this, &MainWindow::onDuplicate);
+        }
 
         // Make Link / Alias
         menu.addAction(QStringLiteral("Make Link / Alias"), this, &MainWindow::onMakeSymlink);
@@ -786,13 +820,12 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             });
         }
 
-        menu.addSeparator();
-
-        // Move to Trash
-        menu.addAction(QIcon::fromTheme(QStringLiteral("user-trash")), QStringLiteral("Move to Trash"), this, &MainWindow::onMoveToTrash);
-
-        // Delete Permanently
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), QStringLiteral("Delete Permanently"), this, &MainWindow::onDeletePermanently);
+        // Move to Trash and Delete Permanently (suppressed for mounts)
+        if (!isMount) {
+            menu.addSeparator();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("user-trash")), QStringLiteral("Move to Trash"), this, &MainWindow::onMoveToTrash);
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), QStringLiteral("Delete Permanently"), this, &MainWindow::onDeletePermanently);
+        }
 
         // If folder, also offer "Open in Terminal"
         if (single && isDir) {

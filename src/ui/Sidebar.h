@@ -18,6 +18,7 @@ signals:
     void openInNewTabRequested(const QString& path);
     void getInfoRequested(const QString& path);
     void emptyTrashRequested();
+    void volumeUnmounted(const QString& path);
 
 public slots:
     void openManageSidebarDialog();
