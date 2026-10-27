@@ -322,7 +322,6 @@ void ColumnView::addColumn(const QString& path, bool animate)
         anim->start(QAbstractAnimation::DeleteWhenStopped);
     }
 
-    autoExpandUiIfNeeded();
     scrollToRightAnimated();
 }
 
@@ -345,46 +344,7 @@ void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool
     } else {
         m_previewPane->setItem(path);
         m_previewPane->show();
-        autoExpandUiIfNeeded();
         scrollToRightAnimated();
-    }
-}
-
-void ColumnView::autoExpandUiIfNeeded()
-{
-    QWidget* topWin = window();
-    if (!topWin || topWin->isMaximized() || topWin->isFullScreen()) {
-        return;
-    }
-
-    // Calculate needed width
-    int neededColumnsWidth = static_cast<int>(m_columns.size()) * 240;
-    if (m_previewPane && m_previewPane->isVisible()) {
-        neededColumnsWidth += 280;
-    }
-
-    int currentViewWidth = viewport()->width();
-    int neededExtra = neededColumnsWidth - currentViewWidth;
-
-    if (neededExtra > 0) {
-        QScreen* screen = topWin->screen();
-        if (!screen) {
-            screen = QGuiApplication::primaryScreen();
-        }
-        if (screen) {
-            QRect avail = screen->availableGeometry();
-            int maxWinWidth = avail.width() - 40; // Screen margin
-            int targetWidth = qMin(topWin->width() + neededExtra + 20, maxWinWidth);
-
-            if (targetWidth > topWin->width()) {
-                auto* anim = new QPropertyAnimation(topWin, "size", this);
-                anim->setDuration(240);
-                anim->setStartValue(topWin->size());
-                anim->setEndValue(QSize(targetWidth, topWin->height()));
-                anim->setEasingCurve(QEasingCurve::OutCubic);
-                anim->start(QAbstractAnimation::DeleteWhenStopped);
-            }
-        }
     }
 }
 
@@ -393,12 +353,16 @@ void ColumnView::scrollToRightAnimated()
     QScrollBar* hBar = horizontalScrollBar();
     if (!hBar) return;
 
-    QTimer::singleShot(30, this, [this, hBar]() {
+    if (m_container) {
+        m_container->adjustSize();
+    }
+
+    QTimer::singleShot(40, this, [this, hBar]() {
         int endVal = hBar->maximum();
-        if (hBar->value() >= endVal) return;
+        if (endVal <= 0 || hBar->value() >= endVal) return;
 
         auto* anim = new QPropertyAnimation(hBar, "value", this);
-        anim->setDuration(240);
+        anim->setDuration(250);
         anim->setStartValue(hBar->value());
         anim->setEndValue(endVal);
         anim->setEasingCurve(QEasingCurve::OutCubic);

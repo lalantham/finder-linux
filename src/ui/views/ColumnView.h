@@ -86,7 +86,6 @@ private:
     void addColumn(const QString& path, bool animate = true);
     void truncateColumnsAfter(int columnIndex);
     void scrollToRightAnimated();
-    void autoExpandUiIfNeeded();
 
     QString m_rootPath;
     QWidget* m_container{nullptr};
