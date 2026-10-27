@@ -1,4 +1,5 @@
 #include "ListView.h"
+#include "DesktopAppsManager.h"
 #include <QHeaderView>
 #include <QMouseEvent>
 #include <QKeyEvent>
@@ -54,7 +55,7 @@ void ListView::onItemActivated(const QModelIndex& index)
     if (isDir) {
         emit openPathRequested(path);
     } else {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        DesktopAppsManager::launchFile(path);
     }
 }
 

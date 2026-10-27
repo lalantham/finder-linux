@@ -1,4 +1,5 @@
 #include "IconView.h"
+#include "DesktopAppsManager.h"
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QContextMenuEvent>
@@ -49,7 +50,7 @@ void IconView::onItemActivated(const QModelIndex& index)
     if (isDir) {
         emit openPathRequested(path);
     } else {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        DesktopAppsManager::launchFile(path);
     }
 }
 

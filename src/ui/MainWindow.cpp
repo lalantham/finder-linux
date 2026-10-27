@@ -652,7 +652,7 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                 if (isDir) {
                     openPath(primaryPath);
                 } else {
-                    QDesktopServices::openUrl(QUrl::fromLocalFile(primaryPath));
+                    DesktopAppsManager::launchFile(primaryPath);
                 }
             });
             QFont f = openAct->font();
@@ -703,7 +703,7 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                     if (QFileInfo(p).isDir()) {
                         openPath(p);
                     } else {
-                        QDesktopServices::openUrl(QUrl::fromLocalFile(p));
+                        DesktopAppsManager::launchFile(p);
                     }
                 }
             });

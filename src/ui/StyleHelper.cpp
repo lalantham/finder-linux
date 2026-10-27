@@ -1,7 +1,17 @@
 #include "StyleHelper.h"
+#include "ThemeManager.h"
 
-QString StyleHelper::lightThemeStyle()
+static QString resolveAccent(const QString& accentColor)
 {
+    if (!accentColor.isEmpty()) {
+        return accentColor;
+    }
+    return ThemeManager::instance().accentColorHex();
+}
+
+QString StyleHelper::lightThemeStyle(const QString& accentColor)
+{
+    QString acc = resolveAccent(accentColor);
     return QStringLiteral(
         "QWidget {"
         "  color: #1d1d1f;"
@@ -26,7 +36,7 @@ QString StyleHelper::lightThemeStyle()
         "  background-color: rgba(0, 0, 0, 0.08);"
         "}"
         "QMenuBar::item:pressed {"
-        "  background-color: #007aff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "}"
         "QToolBar {"
@@ -56,7 +66,7 @@ QString StyleHelper::lightThemeStyle()
         "  background-color: rgba(0, 0, 0, 0.05);"
         "}"
         "QTreeWidget#sidebar::item:selected {"
-        "  background-color: #007aff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "  font-weight: 500;"
         "}"
@@ -65,7 +75,7 @@ QString StyleHelper::lightThemeStyle()
         "  alternate-background-color: #fbfbfb;"
         "  border: none;"
         "  color: #1d1d1f;"
-        "  selection-background-color: #007aff;"
+        "  selection-background-color: %1;"
         "  selection-color: #ffffff;"
         "  outline: none;"
         "  font-size: 13px;"
@@ -116,7 +126,7 @@ QString StyleHelper::lightThemeStyle()
         "  border-radius: 4px;"
         "}"
         "QMenu::item:selected {"
-        "  background-color: #007aff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "}"
         "QScrollBar:vertical {"
@@ -151,11 +161,12 @@ QString StyleHelper::lightThemeStyle()
         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
         "  width: 0px;"
         "}"
-    );
+    ).arg(acc);
 }
 
-QString StyleHelper::darkThemeStyle()
+QString StyleHelper::darkThemeStyle(const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     return QStringLiteral(
         "QWidget {"
         "  color: #f5f5f7;"
@@ -180,7 +191,7 @@ QString StyleHelper::darkThemeStyle()
         "  background-color: rgba(255, 255, 255, 0.12);"
         "}"
         "QMenuBar::item:pressed {"
-        "  background-color: #0a84ff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "}"
         "QToolBar {"
@@ -210,7 +221,7 @@ QString StyleHelper::darkThemeStyle()
         "  background-color: rgba(255, 255, 255, 0.08);"
         "}"
         "QTreeWidget#sidebar::item:selected {"
-        "  background-color: #0a84ff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "  font-weight: 500;"
         "}"
@@ -219,7 +230,7 @@ QString StyleHelper::darkThemeStyle()
         "  alternate-background-color: #252526;"
         "  border: none;"
         "  color: #f5f5f7;"
-        "  selection-background-color: #0a84ff;"
+        "  selection-background-color: %1;"
         "  selection-color: #ffffff;"
         "  outline: none;"
         "  font-size: 13px;"
@@ -270,7 +281,7 @@ QString StyleHelper::darkThemeStyle()
         "  border-radius: 4px;"
         "}"
         "QMenu::item:selected {"
-        "  background-color: #0a84ff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "}"
         "QScrollBar:vertical {"
@@ -305,11 +316,12 @@ QString StyleHelper::darkThemeStyle()
         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
         "  width: 0px;"
         "}"
-    );
+    ).arg(acc);
 }
 
-QString StyleHelper::segmentedButtonLeftStyle(bool isDark)
+QString StyleHelper::segmentedButtonLeftStyle(bool isDark, const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     if (isDark) {
         return QStringLiteral(
             "QToolButton {"
@@ -324,9 +336,9 @@ QString StyleHelper::segmentedButtonLeftStyle(bool isDark)
             "  margin-right: -1px;"
             "}"
             "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: #0a84ff; color: #ffffff; border-color: #0a84ff; }"
+            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
             "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        );
+        ).arg(acc);
     }
     return QStringLiteral(
         "QToolButton {"
@@ -341,13 +353,14 @@ QString StyleHelper::segmentedButtonLeftStyle(bool isDark)
         "  margin-right: -1px;"
         "}"
         "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: #007aff; color: #ffffff; border-color: #007aff; }"
+        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
         "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    );
+    ).arg(acc);
 }
 
-QString StyleHelper::segmentedButtonMidStyle(bool isDark)
+QString StyleHelper::segmentedButtonMidStyle(bool isDark, const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     if (isDark) {
         return QStringLiteral(
             "QToolButton {"
@@ -359,9 +372,9 @@ QString StyleHelper::segmentedButtonMidStyle(bool isDark)
             "  margin-right: -1px;"
             "}"
             "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: #0a84ff; color: #ffffff; border-color: #0a84ff; }"
+            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
             "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        );
+        ).arg(acc);
     }
     return QStringLiteral(
         "QToolButton {"
@@ -373,13 +386,14 @@ QString StyleHelper::segmentedButtonMidStyle(bool isDark)
         "  margin-right: -1px;"
         "}"
         "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: #007aff; color: #ffffff; border-color: #007aff; }"
+        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
         "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    );
+    ).arg(acc);
 }
 
-QString StyleHelper::segmentedButtonRightStyle(bool isDark)
+QString StyleHelper::segmentedButtonRightStyle(bool isDark, const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     if (isDark) {
         return QStringLiteral(
             "QToolButton {"
@@ -393,9 +407,9 @@ QString StyleHelper::segmentedButtonRightStyle(bool isDark)
             "  padding: 4px 8px;"
             "}"
             "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: #0a84ff; color: #ffffff; border-color: #0a84ff; }"
+            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
             "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        );
+        ).arg(acc);
     }
     return QStringLiteral(
         "QToolButton {"
@@ -409,13 +423,14 @@ QString StyleHelper::segmentedButtonRightStyle(bool isDark)
         "  padding: 4px 8px;"
         "}"
         "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: #007aff; color: #ffffff; border-color: #007aff; }"
+        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
         "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    );
+    ).arg(acc);
 }
 
-QString StyleHelper::segmentedButtonSingleStyle(bool isDark)
+QString StyleHelper::segmentedButtonSingleStyle(bool isDark, const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     if (isDark) {
         return QStringLiteral(
             "QToolButton {"
@@ -426,9 +441,9 @@ QString StyleHelper::segmentedButtonSingleStyle(bool isDark)
             "  padding: 4px 10px;"
             "}"
             "QToolButton:hover { background: #454548; }"
-            "QToolButton:checked { background: #0a84ff; color: #ffffff; border-color: #0a84ff; }"
+            "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
             "QToolButton:disabled { color: #636366; background: #2c2c2e; border-color: #3a3a3c; }"
-        );
+        ).arg(acc);
     }
     return QStringLiteral(
         "QToolButton {"
@@ -439,13 +454,14 @@ QString StyleHelper::segmentedButtonSingleStyle(bool isDark)
         "  padding: 4px 10px;"
         "}"
         "QToolButton:hover { background: #ebebeb; }"
-        "QToolButton:checked { background: #007aff; color: #ffffff; border-color: #007aff; }"
+        "QToolButton:checked { background: %1; color: #ffffff; border-color: %1; }"
         "QToolButton:disabled { color: #aeaeb2; background: #f2f2f7; border-color: #d1d1d6; }"
-    );
+    ).arg(acc);
 }
 
-QString StyleHelper::searchBarStyle(bool isDark)
+QString StyleHelper::searchBarStyle(bool isDark, const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     if (isDark) {
         return QStringLiteral(
             "QLineEdit {"
@@ -457,9 +473,9 @@ QString StyleHelper::searchBarStyle(bool isDark)
             "  font-size: 12px;"
             "}"
             "QLineEdit:focus {"
-            "  border: 1px solid #0a84ff;"
+            "  border: 1px solid %1;"
             "}"
-        );
+        ).arg(acc);
     }
     return QStringLiteral(
         "QLineEdit {"
@@ -471,9 +487,9 @@ QString StyleHelper::searchBarStyle(bool isDark)
         "  font-size: 12px;"
         "}"
         "QLineEdit:focus {"
-        "  border: 1px solid #007aff;"
+        "  border: 1px solid %1;"
         "}"
-    );
+    ).arg(acc);
 }
 
 QString StyleHelper::breadcrumbButtonStyle(bool isDark)
@@ -510,8 +526,9 @@ QString StyleHelper::breadcrumbButtonStyle(bool isDark)
     );
 }
 
-QString StyleHelper::sidebarStyle(bool isDark)
+QString StyleHelper::sidebarStyle(bool isDark, const QString& accentColor)
 {
+    QString acc = resolveAccent(accentColor);
     if (isDark) {
         return QStringLiteral(
             "QTreeWidget#sidebar {"
@@ -531,11 +548,11 @@ QString StyleHelper::sidebarStyle(bool isDark)
             "  background-color: rgba(255, 255, 255, 0.08);"
             "}"
             "QTreeWidget#sidebar::item:selected {"
-            "  background-color: #0a84ff;"
+            "  background-color: %1;"
             "  color: #ffffff;"
             "  font-weight: 500;"
             "}"
-        );
+        ).arg(acc);
     }
     return QStringLiteral(
         "QTreeWidget#sidebar {"
@@ -555,9 +572,9 @@ QString StyleHelper::sidebarStyle(bool isDark)
         "  background-color: rgba(0, 0, 0, 0.05);"
         "}"
         "QTreeWidget#sidebar::item:selected {"
-        "  background-color: #007aff;"
+        "  background-color: %1;"
         "  color: #ffffff;"
         "  font-weight: 500;"
         "}"
-    );
+    ).arg(acc);
 }

@@ -5,15 +5,15 @@
 
 class StyleHelper {
 public:
-    static QString lightThemeStyle();
-    static QString darkThemeStyle();
+    static QString lightThemeStyle(const QString& accentColor = QString());
+    static QString darkThemeStyle(const QString& accentColor = QString());
 
-    static QString segmentedButtonLeftStyle(bool isDark = false);
-    static QString segmentedButtonMidStyle(bool isDark = false);
-    static QString segmentedButtonRightStyle(bool isDark = false);
-    static QString segmentedButtonSingleStyle(bool isDark = false);
+    static QString segmentedButtonLeftStyle(bool isDark = false, const QString& accentColor = QString());
+    static QString segmentedButtonMidStyle(bool isDark = false, const QString& accentColor = QString());
+    static QString segmentedButtonRightStyle(bool isDark = false, const QString& accentColor = QString());
+    static QString segmentedButtonSingleStyle(bool isDark = false, const QString& accentColor = QString());
 
-    static QString searchBarStyle(bool isDark = false);
+    static QString searchBarStyle(bool isDark = false, const QString& accentColor = QString());
     static QString breadcrumbButtonStyle(bool isDark = false);
-    static QString sidebarStyle(bool isDark = false);
+    static QString sidebarStyle(bool isDark = false, const QString& accentColor = QString());
 };

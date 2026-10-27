@@ -1,4 +1,5 @@
 #include "GalleryView.h"
+#include "DesktopAppsManager.h"
 #include "PreviewManager.h"
 #include "FileItem.h"
 #include "FileItemDelegate.h"
@@ -128,7 +129,7 @@ void GalleryView::onItemDoubleClicked(const QModelIndex& index)
     if (isDir) {
         emit openPathRequested(path);
     } else {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        DesktopAppsManager::launchFile(path);
     }
 }
 

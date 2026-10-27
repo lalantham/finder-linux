@@ -1,4 +1,5 @@
 #include "ColumnView.h"
+#include "DesktopAppsManager.h"
 #include "PreviewManager.h"
 #include "FileItem.h"
 #include "ThemeManager.h"
@@ -34,7 +35,7 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     // Row selection or hover background
     if (isSelected) {
         painter->setPen(Qt::NoPen);
-        painter->setBrush(isDark ? QColor(0x0a, 0x84, 0xff) : QColor(0x00, 0x7a, 0xff));
+        painter->setBrush(ThemeManager::instance().accentColor());
         painter->drawRoundedRect(option.rect.adjusted(4, 1, -4, -1), 5, 5);
     } else if (isHovered) {
         painter->setPen(Qt::NoPen);
@@ -295,7 +296,7 @@ void ColumnView::addColumn(const QString& path, bool animate)
         if (isDir) {
             emit openPathRequested(itemPath);
         } else {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(itemPath));
+            DesktopAppsManager::launchFile(itemPath);
         }
     });
 

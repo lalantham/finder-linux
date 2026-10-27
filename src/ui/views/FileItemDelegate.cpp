@@ -64,12 +64,12 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
         QString elidedText = fm.elidedText(text, Qt::ElideMiddle, textRect.width() * 2);
 
         if (isSelected) {
-            // macOS selection pill around label
+            // Selection pill around label using system accent color
             QRect labelBound = fm.boundingRect(textRect, Qt::AlignHCenter | Qt::TextWordWrap, elidedText);
             labelBound.adjust(-6, -2, 6, 2);
 
             painter->setPen(Qt::NoPen);
-            painter->setBrush(QColor(0x00, 0x7a, 0xff)); // macOS system blue
+            painter->setBrush(ThemeManager::instance().accentColor());
             painter->drawRoundedRect(labelBound, 5, 5);
 
             painter->setPen(Qt::white);
@@ -83,7 +83,7 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
         // List / Table / Column Mode
         if (isSelected) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(QColor(0x00, 0x7a, 0xff));
+            painter->setBrush(ThemeManager::instance().accentColor());
             painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
             painter->setPen(Qt::white);
         } else if (isHovered) {

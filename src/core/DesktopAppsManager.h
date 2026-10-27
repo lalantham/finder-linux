@@ -19,6 +19,7 @@ public:
     static QString defaultAppIdForMime(const QString& mimeType);
     static bool setDefaultAppForMime(const QString& mimeType, const QString& desktopFileId);
     static bool launchApp(const QString& desktopFileId, const QString& filePath);
+    static bool launchFile(const QString& filePath);
     static QVector<AppEntry> allDesktopApps();
 
 private:
