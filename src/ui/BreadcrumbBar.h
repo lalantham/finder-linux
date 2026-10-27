@@ -14,6 +14,7 @@ public:
     void setPath(const QString& path);
     [[nodiscard]] QString currentPath() const noexcept { return m_currentPath; }
     void showPathEditor();
+    void updateThemeStyles(bool isDark);
 
 signals:
     void pathSelected(const QString& path);

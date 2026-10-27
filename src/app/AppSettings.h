@@ -61,7 +61,7 @@ private:
     bool m_showHiddenFiles{false};
     bool m_directoriesFirst{true};
     int m_iconSize{64};
-    AppTheme m_theme{AppTheme::Light};
+    AppTheme m_theme{AppTheme::System};
     QString m_defaultPath;
     QStringList m_customFavorites;
     QByteArray m_windowGeometry;

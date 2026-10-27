@@ -182,17 +182,23 @@ void MainWindow::setupMenusAndShortcuts()
 
     // Theme Menu
     auto* themeMenu = mBar->addMenu(QStringLiteral("&Theme"));
-    themeMenu->addAction(QStringLiteral("Light"), this, []() {
+    themeMenu->addAction(QStringLiteral("Light"), this, [this]() {
         AppSettings::instance().setTheme(AppTheme::Light);
         ThemeManager::instance().applyTheme(AppTheme::Light);
+        if (auto* p = m_tabManager->currentPage()) p->refresh();
+        m_sidebar->refresh();
     });
-    themeMenu->addAction(QStringLiteral("Dark"), this, []() {
+    themeMenu->addAction(QStringLiteral("Dark"), this, [this]() {
         AppSettings::instance().setTheme(AppTheme::Dark);
         ThemeManager::instance().applyTheme(AppTheme::Dark);
+        if (auto* p = m_tabManager->currentPage()) p->refresh();
+        m_sidebar->refresh();
     });
-    themeMenu->addAction(QStringLiteral("Follow System"), this, []() {
+    themeMenu->addAction(QStringLiteral("Follow System"), this, [this]() {
         AppSettings::instance().setTheme(AppTheme::System);
         ThemeManager::instance().applyTheme(AppTheme::System);
+        if (auto* p = m_tabManager->currentPage()) p->refresh();
+        m_sidebar->refresh();
     });
 }
 

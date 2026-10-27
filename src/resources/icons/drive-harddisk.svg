@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="driveGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e8e8ea"/>
+      <stop offset="50%" stop-color="#c8c8cc"/>
+      <stop offset="100%" stop-color="#a4a4a8"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <!-- Drive enclosure -->
+  <rect x="24" y="24" width="80" height="80" rx="10" fill="url(#driveGrad)" stroke="#8e8e93" stroke-width="2" filter="url(#shadow)"/>
+  <!-- Top drive metallic face -->
+  <rect x="32" y="32" width="64" height="52" rx="6" fill="#dedee2" stroke="#bcbcc0" stroke-width="1.5"/>
+  <circle cx="64" cy="58" r="16" fill="#b8b8bc" stroke="#9e9ea2" stroke-width="1.5"/>
+  <circle cx="64" cy="58" r="5" fill="#dedee2"/>
+  <!-- Status LED -->
+  <circle cx="94" cy="94" r="3" fill="#34c759"/>
+  <!-- Vent slots -->
+  <line x1="36" y1="94" x2="52" y2="94" stroke="#7c7c80" stroke-width="2" stroke-linecap="round"/>
+  <line x1="56" y1="94" x2="72" y2="94" stroke="#7c7c80" stroke-width="2" stroke-linecap="round"/>
+</svg>

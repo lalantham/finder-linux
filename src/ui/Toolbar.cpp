@@ -1,5 +1,6 @@
 #include "Toolbar.h"
 #include "StyleHelper.h"
+#include "ThemeManager.h"
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QLabel>
@@ -24,6 +25,9 @@ Toolbar::Toolbar(QWidget* parent)
     setupActionButtons();
     addSeparator();
     setupSearch();
+
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, &Toolbar::updateThemeStyles);
+    updateThemeStyles(ThemeManager::instance().isDark());
 }
 
 void Toolbar::setupNavigationControls()
@@ -194,4 +198,24 @@ void Toolbar::setShowHidden(bool show)
 void Toolbar::onViewButtonClicked(int id)
 {
     emit viewModeChanged(static_cast<ViewMode>(id));
+}
+
+void Toolbar::updateThemeStyles(bool isDark)
+{
+    if (m_backBtn) m_backBtn->setStyleSheet(StyleHelper::segmentedButtonLeftStyle(isDark));
+    if (m_fwdBtn) m_fwdBtn->setStyleSheet(StyleHelper::segmentedButtonRightStyle(isDark));
+
+    if (m_iconViewBtn) m_iconViewBtn->setStyleSheet(StyleHelper::segmentedButtonLeftStyle(isDark));
+    if (m_listViewBtn) m_listViewBtn->setStyleSheet(StyleHelper::segmentedButtonMidStyle(isDark));
+    if (m_colViewBtn) m_colViewBtn->setStyleSheet(StyleHelper::segmentedButtonMidStyle(isDark));
+    if (m_galViewBtn) m_galViewBtn->setStyleSheet(StyleHelper::segmentedButtonRightStyle(isDark));
+
+    if (m_newFolderBtn) m_newFolderBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_quickLookBtn) m_quickLookBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_getInfoBtn) m_getInfoBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_hiddenBtn) m_hiddenBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_moreBtn) m_moreBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+
+    if (m_searchEdit) m_searchEdit->setStyleSheet(StyleHelper::searchBarStyle(isDark));
+    if (m_breadcrumb) m_breadcrumb->updateThemeStyles(isDark);
 }

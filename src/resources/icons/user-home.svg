@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="backGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#4aa7f7"/>
+      <stop offset="100%" stop-color="#1f7fd8"/>
+    </linearGradient>
+    <linearGradient id="frontGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#70bcfa"/>
+      <stop offset="25%" stop-color="#44a4f6"/>
+      <stop offset="100%" stop-color="#1973cd"/>
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  <path d="M 14 26 C 14 20 19 16 25 16 L 48 16 C 53 16 57 19 60 23 L 66 31 C 69 35 73 37 78 37 L 103 37 C 109 37 114 42 114 48 L 114 96 C 114 102 109 107 103 107 L 25 107 C 19 107 14 102 14 96 Z" fill="url(#backGrad)" filter="url(#shadow)"/>
+  <rect x="22" y="34" width="84" height="60" rx="5" fill="#f0f7ff" opacity="0.9"/>
+  <path d="M 14 49 C 14 43 18 39 24 39 L 104 39 C 110 39 114 43 114 49 L 114 98 C 114 104 109 109 103 109 L 25 109 C 19 109 14 104 14 98 Z" fill="url(#frontGrad)" filter="url(#shadow)"/>
+  <path d="M 14 50 L 114 50" stroke="#9ad1fc" stroke-width="1.2" opacity="0.7"/>
+  <!-- Home glyph -->
+  <path d="M 64 58 L 46 72 L 50 72 L 50 88 C 50 90 52 92 54 92 L 60 92 L 60 81 C 60 79 62 77 64 77 C 66 77 68 79 68 81 L 68 92 L 74 92 C 76 92 78 90 78 88 L 78 72 L 82 72 Z" fill="#ffffff" opacity="0.95"/>
+</svg>

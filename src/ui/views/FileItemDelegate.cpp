@@ -1,5 +1,6 @@
 #include "FileItemDelegate.h"
 #include "FileSystemModel.h"
+#include "ThemeManager.h"
 #include <QPainter>
 #include <QApplication>
 #include <QPainterPath>
@@ -66,7 +67,7 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
 
             painter->setPen(Qt::white);
         } else {
-            painter->setPen(option.palette.color(QPalette::Text));
+            painter->setPen(ThemeManager::instance().isDark() ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f));
         }
 
         painter->drawText(textRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, elidedText);
@@ -82,9 +83,9 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(128, 128, 128, 25));
             painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
-            painter->setPen(option.palette.color(QPalette::Text));
+            painter->setPen(ThemeManager::instance().isDark() ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f));
         } else {
-            painter->setPen(option.palette.color(QPalette::Text));
+            painter->setPen(ThemeManager::instance().isDark() ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f));
         }
 
         // Draw Icon if column 0

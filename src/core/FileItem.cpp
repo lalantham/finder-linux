@@ -1,6 +1,8 @@
 #include "FileItem.h"
 #include <QFileIconProvider>
 #include <QLocale>
+#include <QDir>
+#include <QStandardPaths>
 #include <cmath>
 
 FileItem::FileItem(const QString& absolutePath)
@@ -97,8 +99,36 @@ void FileItem::initFromInfo(const QFileInfo& info)
     }
 }
 
+#include <QStandardPaths>
+
 QIcon FileItem::icon() const
 {
+    if (m_isDir) {
+        QString clean = QDir::cleanPath(m_path);
+        if (clean == QDir::homePath()) {
+            return QIcon(QStringLiteral(":/icons/user-home.svg"));
+        }
+        if (clean == QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)) {
+            return QIcon(QStringLiteral(":/icons/user-desktop.svg"));
+        }
+        if (clean == QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)) {
+            return QIcon(QStringLiteral(":/icons/folder-documents.svg"));
+        }
+        if (clean == QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)) {
+            return QIcon(QStringLiteral(":/icons/folder-download.svg"));
+        }
+        if (clean == QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)) {
+            return QIcon(QStringLiteral(":/icons/folder-pictures.svg"));
+        }
+        if (clean == QStandardPaths::writableLocation(QStandardPaths::MusicLocation)) {
+            return QIcon(QStringLiteral(":/icons/folder-music.svg"));
+        }
+        if (clean == QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)) {
+            return QIcon(QStringLiteral(":/icons/folder-videos.svg"));
+        }
+        return QIcon(QStringLiteral(":/icons/folder.svg"));
+    }
+
     static QFileIconProvider iconProvider;
     QFileInfo info(m_path);
     return iconProvider.icon(info);

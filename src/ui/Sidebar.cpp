@@ -18,6 +18,7 @@ static constexpr int IsTrashRole = Qt::UserRole + 12;
 Sidebar::Sidebar(QWidget* parent)
     : QTreeWidget(parent)
 {
+    setObjectName(QStringLiteral("sidebar"));
     setHeaderHidden(true);
     setRootIsDecorated(false);
     setIndentation(12);
@@ -25,6 +26,9 @@ Sidebar::Sidebar(QWidget* parent)
     setAcceptDrops(true);
     setDropIndicatorShown(true);
     setSelectionMode(QAbstractItemView::SingleSelection);
+    setFocusPolicy(Qt::NoFocus);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
 
@@ -52,9 +56,7 @@ void Sidebar::populateFavorites()
     m_favoritesHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
     m_favoritesHeader->setFlags(Qt::ItemIsEnabled);
 
-    QFileIconProvider iconProv;
-
-    auto addFavItem = [this, &iconProv](const QString& name, const QString& path, const QString& iconThemeName, bool isCustom = false) {
+    auto addFavItem = [this](const QString& name, const QString& path, const QString& resourceIcon, bool isCustom = false) {
         if (!QDir(path).exists()) return;
 
         auto* item = new QTreeWidgetItem(m_favoritesHeader);
@@ -62,36 +64,39 @@ void Sidebar::populateFavorites()
         item->setData(0, PathRole, path);
         item->setData(0, IsCustomFavRole, isCustom);
 
-        QIcon icon = QIcon::fromTheme(iconThemeName, iconProv.icon(QFileIconProvider::Folder));
+        QIcon icon(resourceIcon);
+        if (icon.isNull()) {
+            icon = QIcon::fromTheme(QStringLiteral("folder"));
+        }
         item->setIcon(0, icon);
     };
 
     QString homePath = QDir::homePath();
-    addFavItem(QStringLiteral("Home"), homePath, QStringLiteral("user-home"));
+    addFavItem(QStringLiteral("Home"), homePath, QStringLiteral(":/icons/user-home.svg"));
 
     QString desktopPath = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
-    addFavItem(QStringLiteral("Desktop"), desktopPath, QStringLiteral("user-desktop"));
+    addFavItem(QStringLiteral("Desktop"), desktopPath, QStringLiteral(":/icons/user-desktop.svg"));
 
     QString docsPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-    addFavItem(QStringLiteral("Documents"), docsPath, QStringLiteral("folder-documents"));
+    addFavItem(QStringLiteral("Documents"), docsPath, QStringLiteral(":/icons/folder-documents.svg"));
 
     QString downPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
-    addFavItem(QStringLiteral("Downloads"), downPath, QStringLiteral("folder-download"));
+    addFavItem(QStringLiteral("Downloads"), downPath, QStringLiteral(":/icons/folder-download.svg"));
 
     QString picsPath = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
-    addFavItem(QStringLiteral("Pictures"), picsPath, QStringLiteral("folder-pictures"));
+    addFavItem(QStringLiteral("Pictures"), picsPath, QStringLiteral(":/icons/folder-pictures.svg"));
 
     QString musicPath = QStandardPaths::writableLocation(QStandardPaths::MusicLocation);
-    addFavItem(QStringLiteral("Music"), musicPath, QStringLiteral("folder-music"));
+    addFavItem(QStringLiteral("Music"), musicPath, QStringLiteral(":/icons/folder-music.svg"));
 
     QString videosPath = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
-    addFavItem(QStringLiteral("Videos"), videosPath, QStringLiteral("folder-videos"));
+    addFavItem(QStringLiteral("Videos"), videosPath, QStringLiteral(":/icons/folder-videos.svg"));
 
     // Custom favorites
     const QStringList customFavs = AppSettings::instance().customFavorites();
     for (const auto& fav : customFavs) {
         QFileInfo fi(fav);
-        addFavItem(fi.fileName(), fav, QStringLiteral("folder"), true);
+        addFavItem(fi.fileName(), fav, QStringLiteral(":/icons/folder.svg"), true);
     }
 }
 
@@ -112,7 +117,7 @@ void Sidebar::populateLocations()
         auto* item = new QTreeWidgetItem(m_locationsHeader);
         item->setText(0, vol.name);
         item->setData(0, PathRole, vol.path);
-        item->setIcon(0, vol.icon);
+        item->setIcon(0, QIcon(QStringLiteral(":/icons/drive-harddisk.svg")));
     }
 
     // Trash item
@@ -120,8 +125,7 @@ void Sidebar::populateLocations()
     trashItem->setText(0, QStringLiteral("Trash"));
     trashItem->setData(0, PathRole, XdgTrash::trashFilesDirectory());
     trashItem->setData(0, IsTrashRole, true);
-    trashItem->setIcon(0, QIcon::fromTheme(QStringLiteral("user-trash"),
-                         QIcon::fromTheme(QStringLiteral("edit-delete"))));
+    trashItem->setIcon(0, QIcon(QStringLiteral(":/icons/user-trash.svg")));
 }
 
 void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)

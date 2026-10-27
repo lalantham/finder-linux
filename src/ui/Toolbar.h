@@ -19,6 +19,7 @@ public:
     void setCanGoForward(bool can);
     void setViewMode(ViewMode mode);
     void setShowHidden(bool show);
+    void updateThemeStyles(bool isDark);
 
     [[nodiscard]] BreadcrumbBar* breadcrumbBar() const noexcept { return m_breadcrumb; }
 
