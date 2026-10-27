@@ -107,7 +107,7 @@ void TabPage::goUp()
 void TabPage::refresh()
 {
     m_model->refresh();
-    m_columnView->setRootPath(m_currentPath);
+    m_columnView->refresh();
 }
 
 void TabPage::setViewMode(ViewMode mode)

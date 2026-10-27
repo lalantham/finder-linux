@@ -282,6 +282,55 @@ void ColumnView::setRootPath(const QString& path)
     addColumn(path, false);
 }
 
+void ColumnView::refresh()
+{
+    QString selected = m_selectedPath;
+
+    for (int i = 0; i < m_columns.size(); ++i) {
+        auto* col = m_columns[i];
+        if (!QDir(col->path()).exists()) {
+            truncateColumnsAfter(i - 1);
+            break;
+        }
+
+        // Remember which item was selected in this column
+        QString colSelectedPath;
+        QModelIndex currIdx = col->currentIndex();
+        if (currIdx.isValid()) {
+            colSelectedPath = currIdx.data(FileSystemModel::FilePathRole).toString();
+        }
+
+        col->model()->refresh();
+
+        // Restore selection if it still exists
+        if (!colSelectedPath.isEmpty()) {
+            bool found = false;
+            for (int r = 0; r < col->model()->rowCount(); ++r) {
+                QModelIndex idx = col->model()->index(r, 0);
+                if (idx.data(FileSystemModel::FilePathRole).toString() == colSelectedPath) {
+                    col->setCurrentIndex(idx);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found && i == m_columns.size() - 1 && !selected.isEmpty() && !QFileInfo::exists(selected)) {
+                // The selected item in the last column was deleted
+                m_selectedPath.clear();
+                m_previewPane->hide();
+            }
+        }
+    }
+
+    if (!m_selectedPath.isEmpty()) {
+        if (!QFileInfo::exists(m_selectedPath)) {
+            m_selectedPath.clear();
+            m_previewPane->hide();
+        } else if (m_previewPane->isVisible()) {
+            m_previewPane->setItem(m_selectedPath);
+        }
+    }
+}
+
 void ColumnView::addColumn(const QString& path, bool animate)
 {
     int colIndex = static_cast<int>(m_columns.size());

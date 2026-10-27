@@ -74,6 +74,7 @@ public:
     explicit ColumnView(QWidget* parent = nullptr);
 
     void setRootPath(const QString& path);
+    void refresh();
     [[nodiscard]] QString rootPath() const { return m_rootPath; }
     [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
     [[nodiscard]] QStringList selectedPaths() const { return m_selectedPath.isEmpty() ? QStringList{} : QStringList{m_selectedPath}; }

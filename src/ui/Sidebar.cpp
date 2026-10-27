@@ -47,12 +47,22 @@ Sidebar::Sidebar(QWidget* parent)
 
 void Sidebar::refresh()
 {
+    QString currentSelected;
+    QTreeWidgetItem* curr = currentItem();
+    if (curr) {
+        currentSelected = curr->data(0, PathRole).toString();
+    }
+
     clear();
 
     populateFavorites();
     populateLocations();
 
     expandAll();
+
+    if (!currentSelected.isEmpty()) {
+        selectPath(currentSelected);
+    }
 }
 
 void Sidebar::populateFavorites()

@@ -648,9 +648,16 @@ void MainWindow::onOperationFinished(const OperationResult& result)
 {
     m_progressDialog->hide();
     if (TabPage* page = m_tabManager->currentPage()) {
-        page->refresh();
+        if (!QDir(page->currentPath()).exists()) {
+            page->goUp();
+        } else {
+            page->refresh();
+        }
     }
     m_sidebar->refresh();
+    if (TabPage* page = m_tabManager->currentPage()) {
+        m_sidebar->selectPath(page->currentPath());
+    }
     updateStatusInfo();
 
     if (!result.success && !result.errorMessage.isEmpty()) {
