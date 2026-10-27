@@ -7,6 +7,16 @@
 #include <QListView>
 #include <QVector>
 #include <QLabel>
+#include <QStyledItemDelegate>
+
+class ColumnItemDelegate : public QStyledItemDelegate {
+    Q_OBJECT
+
+public:
+    explicit ColumnItemDelegate(QObject* parent = nullptr);
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+    [[nodiscard]] QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
+};
 
 class ColumnBrowserList : public QListView {
     Q_OBJECT
@@ -21,6 +31,8 @@ signals:
     void itemDoubleClicked(const QString& path, bool isDir);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
+    void navigateLeftRequested();
+    void navigateRightRequested();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
@@ -71,9 +83,10 @@ private slots:
     void onColumnItemSelected(int columnIndex, const QString& path, bool isDir);
 
 private:
-    void addColumn(const QString& path);
+    void addColumn(const QString& path, bool animate = true);
     void truncateColumnsAfter(int columnIndex);
-    void scrollToRight();
+    void scrollToRightAnimated();
+    void autoExpandUiIfNeeded();
 
     QString m_rootPath;
     QWidget* m_container{nullptr};

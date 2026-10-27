@@ -1,12 +1,92 @@
 #include "ColumnView.h"
 #include "PreviewManager.h"
 #include "FileItem.h"
+#include "ThemeManager.h"
 #include <QScrollBar>
 #include <QKeyEvent>
 #include <QVBoxLayout>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QPushButton>
+#include <QPainter>
+#include <QFileIconProvider>
+#include <QPropertyAnimation>
+#include <QTimer>
+#include <QScreen>
+#include <QGuiApplication>
+
+// ColumnItemDelegate
+ColumnItemDelegate::ColumnItemDelegate(QObject* parent)
+    : QStyledItemDelegate(parent)
+{
+}
+
+void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+
+    bool isSelected = option.state & QStyle::State_Selected;
+    bool isHovered = option.state & QStyle::State_MouseOver;
+    bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
+    bool isDark = ThemeManager::instance().isDark();
+
+    // Row selection or hover background
+    if (isSelected) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(isDark ? QColor(0x0a, 0x84, 0xff) : QColor(0x00, 0x7a, 0xff));
+        painter->drawRoundedRect(option.rect.adjusted(4, 1, -4, -1), 5, 5);
+    } else if (isHovered) {
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(isDark ? QColor(255, 255, 255, 18) : QColor(0, 0, 0, 14));
+        painter->drawRoundedRect(option.rect.adjusted(4, 1, -4, -1), 5, 5);
+    }
+
+    // Draw Icon (18x18)
+    int textLeft = option.rect.left() + 10;
+    QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+    if (icon.isNull()) {
+        static QFileIconProvider fallbackProv;
+        icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"), fallbackProv.icon(QFileIconProvider::Folder))
+                     : QIcon::fromTheme(QStringLiteral("text-x-generic"), fallbackProv.icon(QFileIconProvider::File));
+    }
+    QRect iconRect(textLeft, option.rect.top() + (option.rect.height() - 18) / 2, 18, 18);
+    icon.paint(painter, iconRect);
+    textLeft += 24;
+
+    // Text label
+    int rightMargin = isDir ? 24 : 8;
+    QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - rightMargin, option.rect.height());
+    QString text = index.data(Qt::DisplayRole).toString();
+
+    QFont font = option.font;
+    font.setPointSize(10);
+    painter->setFont(font);
+
+    QFontMetrics fm(font);
+    QString elidedText = fm.elidedText(text, Qt::ElideMiddle, textRect.width());
+
+    painter->setPen(isSelected ? Qt::white : (isDark ? QColor(0xf5, 0xf5, 0xf7) : QColor(0x1d, 0x1d, 0x1f)));
+    painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, elidedText);
+
+    // Draw iconic macOS right chevron for folders
+    if (isDir) {
+        QRect chevronRect(option.rect.right() - 20, option.rect.top(), 14, option.rect.height());
+        painter->setPen(isSelected ? Qt::white : (isDark ? QColor(0x8e, 0x8e, 0x93) : QColor(0x99, 0x99, 0x9e)));
+        QFont chFont = font;
+        chFont.setBold(true);
+        chFont.setPointSize(11);
+        painter->setFont(chFont);
+        painter->drawText(chevronRect, Qt::AlignCenter, QStringLiteral("›"));
+    }
+
+    painter->restore();
+}
+
+QSize ColumnItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& /*index*/) const
+{
+    return QSize(option.rect.width(), 26);
+}
 
 // ColumnBrowserList
 ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
@@ -20,6 +100,18 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     setFixedWidth(240);
     setUniformItemSizes(true);
     setEditTriggers(QAbstractItemView::NoEditTriggers);
+    setItemDelegate(new ColumnItemDelegate(this));
+    setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    setStyleSheet(QStringLiteral(
+        "QListView {"
+        "  background: transparent;"
+        "  border: none;"
+        "  border-right: 1px solid rgba(128, 128, 128, 0.22);"
+        "  outline: none;"
+        "}"
+    ));
 
     connect(selectionModel(), &QItemSelectionModel::currentChanged, this, &ColumnBrowserList::onSelectionChanged);
     connect(this, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
@@ -48,6 +140,17 @@ void ColumnBrowserList::keyPressEvent(QKeyEvent* event)
         }
         return;
     }
+    if (event->key() == Qt::Key_Left) {
+        emit navigateLeftRequested();
+        return;
+    }
+    if (event->key() == Qt::Key_Right) {
+        QModelIndex idx = currentIndex();
+        if (idx.isValid() && idx.data(FileSystemModel::FileIsDirRole).toBool()) {
+            emit navigateRightRequested();
+        }
+        return;
+    }
     QListView::keyPressEvent(event);
 }
 
@@ -56,6 +159,13 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
     : QWidget(parent)
 {
     setFixedWidth(280);
+    setStyleSheet(QStringLiteral(
+        "ColumnPreviewPane {"
+        "  background: transparent;"
+        "  border-left: 1px solid rgba(128, 128, 128, 0.22);"
+        "}"
+    ));
+
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 20, 16, 20);
     layout->setSpacing(10);
@@ -81,15 +191,15 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
     layout->addWidget(line);
 
     m_kindLabel = new QLabel(this);
-    m_kindLabel->setStyleSheet(QStringLiteral("color: #777777; font-size: 11px;"));
+    m_kindLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     layout->addWidget(m_kindLabel);
 
     m_sizeLabel = new QLabel(this);
-    m_sizeLabel->setStyleSheet(QStringLiteral("color: #777777; font-size: 11px;"));
+    m_sizeLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     layout->addWidget(m_sizeLabel);
 
     m_modifiedLabel = new QLabel(this);
-    m_modifiedLabel->setStyleSheet(QStringLiteral("color: #777777; font-size: 11px;"));
+    m_modifiedLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     layout->addWidget(m_modifiedLabel);
 
     layout->addSpacing(12);
@@ -133,7 +243,7 @@ ColumnView::ColumnView(QWidget* parent)
     m_container = new QWidget(this);
     m_layout = new QHBoxLayout(m_container);
     m_layout->setContentsMargins(0, 0, 0, 0);
-    m_layout->setSpacing(1);
+    m_layout->setSpacing(0);
 
     m_previewPane = new ColumnPreviewPane(m_container);
     m_previewPane->hide();
@@ -147,7 +257,6 @@ ColumnView::ColumnView(QWidget* parent)
 void ColumnView::setRootPath(const QString& path)
 {
     m_rootPath = path;
-    // Clear existing columns
     for (auto* col : m_columns) {
         m_layout->removeWidget(col);
         col->deleteLater();
@@ -155,15 +264,14 @@ void ColumnView::setRootPath(const QString& path)
     m_columns.clear();
     m_previewPane->hide();
 
-    addColumn(path);
+    addColumn(path, false);
 }
 
-void ColumnView::addColumn(const QString& path)
+void ColumnView::addColumn(const QString& path, bool animate)
 {
     int colIndex = static_cast<int>(m_columns.size());
     auto* col = new ColumnBrowserList(path, m_container);
 
-    // Insert column before the preview pane
     m_layout->insertWidget(colIndex, col);
     m_columns.append(col);
 
@@ -182,7 +290,40 @@ void ColumnView::addColumn(const QString& path)
     connect(col, &ColumnBrowserList::quickLookRequested, this, &ColumnView::quickLookRequested);
     connect(col, &ColumnBrowserList::getInfoRequested, this, &ColumnView::getInfoRequested);
 
-    scrollToRight();
+    // Keyboard navigation across columns
+    connect(col, &ColumnBrowserList::navigateLeftRequested, this, [this, colIndex]() {
+        if (colIndex > 0 && colIndex - 1 < m_columns.size()) {
+            m_columns[colIndex - 1]->setFocus();
+        }
+    });
+
+    connect(col, &ColumnBrowserList::navigateRightRequested, this, [this, colIndex]() {
+        if (colIndex + 1 < m_columns.size()) {
+            auto* nextCol = m_columns[colIndex + 1];
+            nextCol->setFocus();
+            if (nextCol->model()->rowCount() > 0 && !nextCol->currentIndex().isValid()) {
+                nextCol->setCurrentIndex(nextCol->model()->index(0, 0));
+            }
+        }
+    });
+
+    // Animate column slide-in width if traversing
+    if (animate) {
+        col->setMaximumWidth(0);
+        auto* anim = new QPropertyAnimation(col, "maximumWidth", this);
+        anim->setDuration(200);
+        anim->setStartValue(0);
+        anim->setEndValue(240);
+        anim->setEasingCurve(QEasingCurve::OutCubic);
+        connect(anim, &QPropertyAnimation::finished, this, [col]() {
+            col->setMaximumWidth(QWIDGETSIZE_MAX);
+            col->setFixedWidth(240);
+        });
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
+    autoExpandUiIfNeeded();
+    scrollToRightAnimated();
 }
 
 void ColumnView::truncateColumnsAfter(int columnIndex)
@@ -200,18 +341,67 @@ void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool
 
     if (isDir) {
         m_previewPane->hide();
-        addColumn(path);
+        addColumn(path, true);
     } else {
         m_previewPane->setItem(path);
         m_previewPane->show();
-        scrollToRight();
+        autoExpandUiIfNeeded();
+        scrollToRightAnimated();
     }
 }
 
-void ColumnView::scrollToRight()
+void ColumnView::autoExpandUiIfNeeded()
+{
+    QWidget* topWin = window();
+    if (!topWin || topWin->isMaximized() || topWin->isFullScreen()) {
+        return;
+    }
+
+    // Calculate needed width
+    int neededColumnsWidth = static_cast<int>(m_columns.size()) * 240;
+    if (m_previewPane && m_previewPane->isVisible()) {
+        neededColumnsWidth += 280;
+    }
+
+    int currentViewWidth = viewport()->width();
+    int neededExtra = neededColumnsWidth - currentViewWidth;
+
+    if (neededExtra > 0) {
+        QScreen* screen = topWin->screen();
+        if (!screen) {
+            screen = QGuiApplication::primaryScreen();
+        }
+        if (screen) {
+            QRect avail = screen->availableGeometry();
+            int maxWinWidth = avail.width() - 40; // Screen margin
+            int targetWidth = qMin(topWin->width() + neededExtra + 20, maxWinWidth);
+
+            if (targetWidth > topWin->width()) {
+                auto* anim = new QPropertyAnimation(topWin, "size", this);
+                anim->setDuration(240);
+                anim->setStartValue(topWin->size());
+                anim->setEndValue(QSize(targetWidth, topWin->height()));
+                anim->setEasingCurve(QEasingCurve::OutCubic);
+                anim->start(QAbstractAnimation::DeleteWhenStopped);
+            }
+        }
+    }
+}
+
+void ColumnView::scrollToRightAnimated()
 {
     QScrollBar* hBar = horizontalScrollBar();
-    if (hBar) {
-        hBar->setValue(hBar->maximum());
-    }
+    if (!hBar) return;
+
+    QTimer::singleShot(30, this, [this, hBar]() {
+        int endVal = hBar->maximum();
+        if (hBar->value() >= endVal) return;
+
+        auto* anim = new QPropertyAnimation(hBar, "value", this);
+        anim->setDuration(240);
+        anim->setStartValue(hBar->value());
+        anim->setEndValue(endVal);
+        anim->setEasingCurve(QEasingCurve::OutCubic);
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    });
 }
