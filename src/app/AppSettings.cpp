@@ -1,4 +1,6 @@
 #include "AppSettings.h"
+#include "VolumeManager.h"
+#include "XdgTrash.h"
 #include <QDir>
 #include <QStandardPaths>
 
@@ -29,6 +31,7 @@ void AppSettings::load()
     m_favoriteOrder = s.value(QStringLiteral("favoriteOrder")).toStringList();
     m_hiddenFavorites = s.value(QStringLiteral("hiddenFavorites")).toStringList();
     m_hiddenLocations = s.value(QStringLiteral("hiddenLocations")).toStringList();
+    m_locationOrder = s.value(QStringLiteral("locationOrder")).toStringList();
     m_windowGeometry = s.value(QStringLiteral("windowGeometry")).toByteArray();
     m_windowState = s.value(QStringLiteral("windowState")).toByteArray();
 }
@@ -45,6 +48,7 @@ void AppSettings::save()
     s.setValue(QStringLiteral("favoriteOrder"), m_favoriteOrder);
     s.setValue(QStringLiteral("hiddenFavorites"), m_hiddenFavorites);
     s.setValue(QStringLiteral("hiddenLocations"), m_hiddenLocations);
+    s.setValue(QStringLiteral("locationOrder"), m_locationOrder);
     s.setValue(QStringLiteral("windowGeometry"), m_windowGeometry);
     s.setValue(QStringLiteral("windowState"), m_windowState);
 }
@@ -242,7 +246,94 @@ void AppSettings::unhideAllLocations()
 void AppSettings::resetSidebarDefaults()
 {
     m_favoriteOrder.clear();
+    m_locationOrder.clear();
     m_hiddenFavorites.clear();
     m_hiddenLocations.clear();
     save();
+}
+
+QStringList AppSettings::locationOrder() const
+{
+    QStringList allKnown;
+    const auto volumes = VolumeManager::mountedVolumes();
+    for (const auto& v : volumes) {
+        if (!allKnown.contains(v.path)) {
+            allKnown.append(v.path);
+        }
+    }
+    QString trashPath = XdgTrash::trashFilesDirectory();
+    if (!allKnown.contains(trashPath)) {
+        allKnown.append(trashPath);
+    }
+
+    if (m_locationOrder.isEmpty()) {
+        return allKnown;
+    }
+
+    QStringList result;
+    for (const auto& path : m_locationOrder) {
+        if (allKnown.contains(path) && !result.contains(path)) {
+            result.append(path);
+        }
+    }
+    for (const auto& path : allKnown) {
+        if (!result.contains(path)) {
+            result.append(path);
+        }
+    }
+    return result;
+}
+
+void AppSettings::setLocationOrder(const QStringList& order)
+{
+    m_locationOrder = order;
+    save();
+}
+
+void AppSettings::reorderLocation(const QString& path, int newIndex)
+{
+    QStringList order = locationOrder();
+    if (!order.contains(path)) {
+        order.append(path);
+    }
+    order.removeAll(path);
+    int clampedIndex = qBound(0, newIndex, static_cast<int>(order.size()));
+    order.insert(clampedIndex, path);
+    setLocationOrder(order);
+}
+
+void AppSettings::moveLocationUp(const QString& path)
+{
+    QStringList order = locationOrder();
+    int idx = static_cast<int>(order.indexOf(path));
+    if (idx > 0) {
+        order.swapItemsAt(idx, idx - 1);
+        setLocationOrder(order);
+    }
+}
+
+void AppSettings::moveLocationDown(const QString& path)
+{
+    QStringList order = locationOrder();
+    int idx = static_cast<int>(order.indexOf(path));
+    if (idx >= 0 && idx < static_cast<int>(order.size()) - 1) {
+        order.swapItemsAt(idx, idx + 1);
+        setLocationOrder(order);
+    }
+}
+
+void AppSettings::moveLocationToTop(const QString& path)
+{
+    QStringList order = locationOrder();
+    order.removeAll(path);
+    order.prepend(path);
+    setLocationOrder(order);
+}
+
+void AppSettings::moveLocationToBottom(const QString& path)
+{
+    QStringList order = locationOrder();
+    order.removeAll(path);
+    order.append(path);
+    setLocationOrder(order);
 }

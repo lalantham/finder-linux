@@ -74,6 +74,14 @@ public:
     void unhideAllLocations();
     [[nodiscard]] bool isLocationHidden(const QString& pathOrName) const { return m_hiddenLocations.contains(pathOrName); }
 
+    [[nodiscard]] QStringList locationOrder() const;
+    void setLocationOrder(const QStringList& order);
+    void reorderLocation(const QString& path, int newIndex);
+    void moveLocationUp(const QString& path);
+    void moveLocationDown(const QString& path);
+    void moveLocationToTop(const QString& path);
+    void moveLocationToBottom(const QString& path);
+
     void resetSidebarDefaults();
 
     [[nodiscard]] QByteArray windowGeometry() const noexcept { return m_windowGeometry; }
@@ -95,6 +103,7 @@ private:
     QStringList m_favoriteOrder;
     QStringList m_hiddenFavorites;
     QStringList m_hiddenLocations;
+    QStringList m_locationOrder;
     QByteArray m_windowGeometry;
     QByteArray m_windowState;
 };

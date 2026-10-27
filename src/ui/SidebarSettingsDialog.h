@@ -25,7 +25,5 @@ private:
     void populateLocationsList();
 
     QListWidget* m_favsList{nullptr};
-    QWidget* m_locationsContainer{nullptr};
-
-    QVector<QPair<QString, QCheckBox*>> m_locationBoxes;
+    QListWidget* m_locationsList{nullptr};
 };

@@ -68,58 +68,30 @@ void SidebarSettingsDialog::setupUi()
     contentLayout->addWidget(favGroup);
 
     // 2. Locations / Partitions Group
-    auto* locGroup = new QGroupBox(QStringLiteral("Locations & Partitions"), scrollContent);
+    auto* locGroup = new QGroupBox(QStringLiteral("Locations && Partitions (Reorder & Visibility)"), scrollContent);
     auto* locLayout = new QVBoxLayout(locGroup);
-    locLayout->setSpacing(6);
+    locLayout->setSpacing(8);
 
-    m_locationsContainer = new QWidget(locGroup);
-    auto* locsInnerLayout = new QVBoxLayout(m_locationsContainer);
-    locsInnerLayout->setContentsMargins(0, 0, 0, 0);
-    locsInnerLayout->setSpacing(6);
+    auto* locHint = new QLabel(QStringLiteral("Arrange locations order using <b>Top</b>, <b>▲</b>, <b>▼</b>:"), locGroup);
+    locHint->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
+    locLayout->addWidget(locHint);
 
-    QFileIconProvider iconProv;
-    auto volumes = VolumeManager::mountedVolumes();
-    for (const auto& vol : volumes) {
-        auto* cb = new QCheckBox(vol.name, m_locationsContainer);
-        cb->setIcon(vol.icon);
-        cb->setToolTip(vol.path);
-        bool isHidden = AppSettings::instance().isLocationHidden(vol.path);
-        cb->setChecked(!isHidden);
+    m_locationsList = new QListWidget(locGroup);
+    m_locationsList->setMinimumHeight(200);
+    locLayout->addWidget(m_locationsList);
 
-        connect(cb, &QCheckBox::toggled, this, [this, path = vol.path](bool checked) {
-            if (checked) {
-                AppSettings::instance().unhideLocation(path);
-            } else {
-                AppSettings::instance().hideLocation(path);
-            }
-            emit sidebarChanged();
-        });
-
-        m_locationBoxes.append({vol.path, cb});
-        locsInnerLayout->addWidget(cb);
-    }
-
-    // Trash checkbox
-    QString trashPath = XdgTrash::trashFilesDirectory();
-    auto* trashCb = new QCheckBox(QStringLiteral("Trash"), m_locationsContainer);
-    trashCb->setIcon(QIcon::fromTheme(QStringLiteral("user-trash"),
-                     QIcon::fromTheme(QStringLiteral("trash-empty"),
-                     iconProv.icon(QFileIconProvider::Trashcan))));
-    trashCb->setChecked(!AppSettings::instance().isLocationHidden(trashPath) && !AppSettings::instance().isLocationHidden(QStringLiteral("Trash")));
-    connect(trashCb, &QCheckBox::toggled, this, [this, trashPath](bool checked) {
-        if (checked) {
-            AppSettings::instance().unhideLocation(trashPath);
-            AppSettings::instance().unhideLocation(QStringLiteral("Trash"));
-        } else {
-            AppSettings::instance().hideLocation(trashPath);
-            AppSettings::instance().hideLocation(QStringLiteral("Trash"));
-        }
+    auto* locBtnRow = new QHBoxLayout();
+    auto* resetLocOrderBtn = new QPushButton(QStringLiteral("Reset Locations Order"), locGroup);
+    resetLocOrderBtn->setToolTip(QStringLiteral("Reset locations order back to defaults"));
+    connect(resetLocOrderBtn, &QPushButton::clicked, this, [this]() {
+        AppSettings::instance().setLocationOrder({});
+        populateLocationsList();
         emit sidebarChanged();
     });
-    m_locationBoxes.append({trashPath, trashCb});
-    locsInnerLayout->addWidget(trashCb);
+    locBtnRow->addWidget(resetLocOrderBtn);
+    locBtnRow->addStretch();
+    locLayout->addLayout(locBtnRow);
 
-    locLayout->addWidget(m_locationsContainer);
     contentLayout->addWidget(locGroup);
 
     scrollArea->setWidget(scrollContent);
@@ -140,6 +112,7 @@ void SidebarSettingsDialog::setupUi()
     mainLayout->addLayout(btnRow);
 
     populateFavoritesList();
+    populateLocationsList();
 }
 
 void SidebarSettingsDialog::populateFavoritesList()
@@ -286,16 +259,116 @@ void SidebarSettingsDialog::onPinFolderClicked()
     }
 }
 
+void SidebarSettingsDialog::populateLocationsList()
+{
+    m_locationsList->clear();
+    const QStringList orderedLocs = AppSettings::instance().locationOrder();
+    const auto volumes = VolumeManager::mountedVolumes();
+    const QString trashPath = XdgTrash::trashFilesDirectory();
+
+    QFileIconProvider iconProv;
+
+    struct LocInfo {
+        QString name;
+        QIcon icon;
+        QString path;
+    };
+
+    QMap<QString, LocInfo> locMap;
+    for (const auto& vol : volumes) {
+        locMap[vol.path] = {vol.name, vol.icon, vol.path};
+    }
+    locMap[trashPath] = {
+        QStringLiteral("Trash"),
+        QIcon::fromTheme(QStringLiteral("user-trash"),
+        QIcon::fromTheme(QStringLiteral("trash-empty"),
+        iconProv.icon(QFileIconProvider::Trashcan))),
+        trashPath
+    };
+
+    for (int i = 0; i < orderedLocs.size(); ++i) {
+        const QString& path = orderedLocs[i];
+        if (!locMap.contains(path)) continue;
+        const auto& info = locMap[path];
+
+        auto* item = new QListWidgetItem();
+        auto* rowWidget = new QWidget(m_locationsList);
+        auto* rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(6, 2, 6, 2);
+        rowLayout->setSpacing(6);
+
+        auto* cb = new QCheckBox(rowWidget);
+        bool isHidden = AppSettings::instance().isLocationHidden(path);
+        if (path == trashPath) {
+            isHidden = isHidden || AppSettings::instance().isLocationHidden(QStringLiteral("Trash"));
+        }
+        cb->setChecked(!isHidden);
+        connect(cb, &QCheckBox::toggled, this, [this, path, trashPath](bool checked) {
+            if (checked) {
+                AppSettings::instance().unhideLocation(path);
+                if (path == trashPath) AppSettings::instance().unhideLocation(QStringLiteral("Trash"));
+            } else {
+                AppSettings::instance().hideLocation(path);
+                if (path == trashPath) AppSettings::instance().hideLocation(QStringLiteral("Trash"));
+            }
+            emit sidebarChanged();
+        });
+        rowLayout->addWidget(cb);
+
+        auto* iconLabel = new QLabel(rowWidget);
+        iconLabel->setPixmap(info.icon.pixmap(18, 18));
+        rowLayout->addWidget(iconLabel);
+
+        auto* nameLabel = new QLabel(QStringLiteral("<b>%1</b> <span style='color:#888;'>(%2)</span>").arg(info.name, path), rowWidget);
+        rowLayout->addWidget(nameLabel);
+        rowLayout->addStretch();
+
+        // Top button
+        auto* topBtn = new QPushButton(QStringLiteral("Top"), rowWidget);
+        topBtn->setToolTip(QStringLiteral("Move to Top"));
+        topBtn->setFixedWidth(38);
+        topBtn->setEnabled(i > 0);
+        connect(topBtn, &QPushButton::clicked, this, [this, path]() {
+            AppSettings::instance().moveLocationToTop(path);
+            populateLocationsList();
+            emit sidebarChanged();
+        });
+        rowLayout->addWidget(topBtn);
+
+        // Up button
+        auto* upBtn = new QPushButton(QStringLiteral("▲"), rowWidget);
+        upBtn->setToolTip(QStringLiteral("Move Up"));
+        upBtn->setFixedWidth(28);
+        upBtn->setEnabled(i > 0);
+        connect(upBtn, &QPushButton::clicked, this, [this, path]() {
+            AppSettings::instance().moveLocationUp(path);
+            populateLocationsList();
+            emit sidebarChanged();
+        });
+        rowLayout->addWidget(upBtn);
+
+        // Down button
+        auto* downBtn = new QPushButton(QStringLiteral("▼"), rowWidget);
+        downBtn->setToolTip(QStringLiteral("Move Down"));
+        downBtn->setFixedWidth(28);
+        downBtn->setEnabled(i < orderedLocs.size() - 1);
+        connect(downBtn, &QPushButton::clicked, this, [this, path]() {
+            AppSettings::instance().moveLocationDown(path);
+            populateLocationsList();
+            emit sidebarChanged();
+        });
+        rowLayout->addWidget(downBtn);
+
+        item->setSizeHint(rowWidget->sizeHint());
+        m_locationsList->addItem(item);
+        m_locationsList->setItemWidget(item, rowWidget);
+    }
+}
+
 void SidebarSettingsDialog::onRestoreDefaultsClicked()
 {
     AppSettings::instance().resetSidebarDefaults();
-
-    for (auto& pair : m_locationBoxes) {
-        pair.second->blockSignals(true);
-        pair.second->setChecked(true);
-        pair.second->blockSignals(false);
-    }
-
     populateFavoritesList();
+    populateLocationsList();
     emit sidebarChanged();
 }

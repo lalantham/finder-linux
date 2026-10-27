@@ -151,32 +151,42 @@ void Sidebar::populateLocations()
 
     QFileIconProvider iconProv;
 
-    // Mounted volumes
     QVector<VolumeEntry> volumes = VolumeManager::mountedVolumes();
-    for (const auto& vol : volumes) {
-        if (AppSettings::instance().isLocationHidden(vol.path)) {
-            continue;
-        }
-
-        auto* item = new QTreeWidgetItem(m_locationsHeader);
-        item->setText(0, vol.name);
-        item->setData(0, PathRole, vol.path);
-        item->setData(0, IsLocationRole, true);
-        item->setIcon(0, vol.icon);
-    }
-
-    // Trash item
     QString trashPath = XdgTrash::trashFilesDirectory();
-    if (!AppSettings::instance().isLocationHidden(trashPath) && !AppSettings::instance().isLocationHidden(QStringLiteral("Trash"))) {
-        auto* trashItem = new QTreeWidgetItem(m_locationsHeader);
-        trashItem->setText(0, QStringLiteral("Trash"));
-        trashItem->setData(0, PathRole, trashPath);
-        trashItem->setData(0, IsTrashRole, true);
-        trashItem->setData(0, IsLocationRole, true);
-        trashItem->setIcon(0, QIcon::fromTheme(QStringLiteral("user-trash"),
-                             QIcon::fromTheme(QStringLiteral("trash-empty"),
-                             QIcon::fromTheme(QStringLiteral("edit-delete"),
-                             iconProv.icon(QFileIconProvider::Trashcan)))));
+
+    struct LocData {
+        QString name;
+        QIcon icon;
+        bool isTrash{false};
+    };
+    QMap<QString, LocData> map;
+    for (const auto& vol : volumes) {
+        map[vol.path] = {vol.name, vol.icon, false};
+    }
+    map[trashPath] = {
+        QStringLiteral("Trash"),
+        QIcon::fromTheme(QStringLiteral("user-trash"),
+        QIcon::fromTheme(QStringLiteral("trash-empty"),
+        QIcon::fromTheme(QStringLiteral("edit-delete"),
+        iconProv.icon(QFileIconProvider::Trashcan)))),
+        true
+    };
+
+    const QStringList orderedLocs = AppSettings::instance().locationOrder();
+    for (const auto& path : orderedLocs) {
+        if (!map.contains(path)) continue;
+        if (AppSettings::instance().isLocationHidden(path)) continue;
+        if (path == trashPath && AppSettings::instance().isLocationHidden(QStringLiteral("Trash"))) continue;
+
+        const auto& data = map[path];
+        auto* item = new QTreeWidgetItem(m_locationsHeader);
+        item->setText(0, data.name);
+        item->setData(0, PathRole, path);
+        item->setData(0, IsLocationRole, true);
+        if (data.isTrash) {
+            item->setData(0, IsTrashRole, true);
+        }
+        item->setIcon(0, data.icon);
     }
 }
 
@@ -469,6 +479,37 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             });
         }
 
+        // Arrangement actions for Locations
+        if (isLocation) {
+            menu.addSeparator();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
+                AppSettings::instance().moveLocationToTop(path);
+                refresh();
+                selectPath(path);
+            });
+            auto* arrangeMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("view-sort-ascending")), QStringLiteral("Arrange"));
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
+                AppSettings::instance().moveLocationToTop(path);
+                refresh();
+                selectPath(path);
+            });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-up")), QStringLiteral("Move Up"), this, [this, path]() {
+                AppSettings::instance().moveLocationUp(path);
+                refresh();
+                selectPath(path);
+            });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-down")), QStringLiteral("Move Down"), this, [this, path]() {
+                AppSettings::instance().moveLocationDown(path);
+                refresh();
+                selectPath(path);
+            });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-bottom")), QStringLiteral("Move to Bottom"), this, [this, path]() {
+                AppSettings::instance().moveLocationToBottom(path);
+                refresh();
+                selectPath(path);
+            });
+        }
+
         menu.addSeparator();
         menu.addAction(QStringLiteral("Manage Sidebar..."), this, &Sidebar::openManageSidebarDialog);
 
@@ -525,15 +566,23 @@ void Sidebar::openManageSidebarDialog()
 void Sidebar::startDrag(Qt::DropActions /*supportedActions*/)
 {
     QTreeWidgetItem* item = currentItem();
-    if (!item || item->parent() != m_favoritesHeader) {
-        return; // Only allow dragging favorite items
+    if (!item) return;
+
+    bool isFav = (item->parent() == m_favoritesHeader);
+    bool isLoc = (item->parent() == m_locationsHeader);
+    if (!isFav && !isLoc) {
+        return; // Only allow dragging favorite items or location items
     }
 
     QString path = item->data(0, PathRole).toString();
     if (path.isEmpty()) return;
 
     auto* mimeData = new QMimeData();
-    mimeData->setData(QStringLiteral("application/x-finder-sidebar-item"), path.toUtf8());
+    if (isFav) {
+        mimeData->setData(QStringLiteral("application/x-finder-sidebar-item"), path.toUtf8());
+    } else {
+        mimeData->setData(QStringLiteral("application/x-finder-sidebar-location"), path.toUtf8());
+    }
     mimeData->setUrls({QUrl::fromLocalFile(path)});
 
     auto* drag = new QDrag(this);
@@ -563,6 +612,7 @@ void Sidebar::startDrag(Qt::DropActions /*supportedActions*/)
 void Sidebar::dragEnterEvent(QDragEnterEvent* event)
 {
     if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item")) ||
+        event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-location")) ||
         event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
     }
@@ -575,6 +625,19 @@ void Sidebar::dragMoveEvent(QDragMoveEvent* event)
         QModelIndex idx = indexAt(vpPos);
         QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
         if (item && (item == m_favoritesHeader || item->parent() == m_favoritesHeader)) {
+            setCurrentItem(item);
+            event->acceptProposedAction();
+            return;
+        }
+        event->ignore();
+        return;
+    }
+
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-location"))) {
+        QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+        QModelIndex idx = indexAt(vpPos);
+        QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
+        if (item && (item == m_locationsHeader || item->parent() == m_locationsHeader)) {
             setCurrentItem(item);
             event->acceptProposedAction();
             return;
@@ -622,6 +685,40 @@ void Sidebar::dropEvent(QDropEvent* event)
                 }
 
                 AppSettings::instance().reorderFavorite(draggedPath, targetIndex);
+                refresh();
+                selectPath(draggedPath);
+                event->acceptProposedAction();
+                return;
+            }
+        }
+        event->ignore();
+        return;
+    }
+
+    // 2. Reordering location items inside sidebar
+    if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-location"))) {
+        QString draggedPath = QString::fromUtf8(event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-location")));
+        if (!draggedPath.isEmpty()) {
+            QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+            QModelIndex idx = indexAt(vpPos);
+            QTreeWidgetItem* target = idx.isValid() ? itemFromIndex(idx) : nullptr;
+
+            if (target && (target == m_locationsHeader || target->parent() == m_locationsHeader)) {
+                QStringList currentOrder = AppSettings::instance().locationOrder();
+                int targetIndex = 0;
+                if (target == m_locationsHeader) {
+                    targetIndex = 0; // Dropped on header -> move to top
+                } else {
+                    QString targetPath = target->data(0, PathRole).toString();
+                    targetIndex = static_cast<int>(currentOrder.indexOf(targetPath));
+                    if (targetIndex < 0) targetIndex = 0;
+                    QRect rect = visualItemRect(target);
+                    if (vpPos.y() > rect.center().y()) {
+                        targetIndex++; // Dropped on lower half -> place after target
+                    }
+                }
+
+                AppSettings::instance().reorderLocation(draggedPath, targetIndex);
                 refresh();
                 selectPath(draggedPath);
                 event->acceptProposedAction();

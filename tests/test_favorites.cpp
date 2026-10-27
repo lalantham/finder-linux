@@ -17,6 +17,10 @@ private slots:
     void testMoveUpAndDown();
     void testReorder();
     void testRemoveFavorite();
+    void testLocationOrder();
+    void testMoveLocationToTop();
+    void testMoveLocationUpAndDown();
+    void testReorderLocation();
 };
 
 void TestFavorites::init()
@@ -113,6 +117,50 @@ void TestFavorites::testRemoveFavorite()
     AppSettings::instance().removeFavorite(testPath);
     QVERIFY(!AppSettings::instance().customFavorites().contains(testPath));
     QVERIFY(!AppSettings::instance().favoriteOrder().contains(testPath));
+}
+
+void TestFavorites::testLocationOrder()
+{
+    QStringList order = AppSettings::instance().locationOrder();
+    QVERIFY(!order.isEmpty());
+    QVERIFY(order.contains(QStringLiteral("/")));
+}
+
+void TestFavorites::testMoveLocationToTop()
+{
+    QStringList order = AppSettings::instance().locationOrder();
+    if (order.size() >= 2) {
+        QString secondItem = order.at(1);
+        AppSettings::instance().moveLocationToTop(secondItem);
+        QStringList orderAfter = AppSettings::instance().locationOrder();
+        QCOMPARE(orderAfter.first(), secondItem);
+    }
+}
+
+void TestFavorites::testMoveLocationUpAndDown()
+{
+    QStringList initial = AppSettings::instance().locationOrder();
+    if (initial.size() >= 2) {
+        QString item = initial.at(1);
+        AppSettings::instance().moveLocationUp(item);
+        QStringList afterUp = AppSettings::instance().locationOrder();
+        QCOMPARE(afterUp.at(0), item);
+
+        AppSettings::instance().moveLocationDown(item);
+        QStringList afterDown = AppSettings::instance().locationOrder();
+        QCOMPARE(afterDown.at(1), item);
+    }
+}
+
+void TestFavorites::testReorderLocation()
+{
+    QStringList initial = AppSettings::instance().locationOrder();
+    if (initial.size() >= 3) {
+        QString firstItem = initial.at(0);
+        AppSettings::instance().reorderLocation(firstItem, 2);
+        QStringList afterReorder = AppSettings::instance().locationOrder();
+        QCOMPARE(afterReorder.at(2), firstItem);
+    }
 }
 
 QTEST_MAIN(TestFavorites)
