@@ -35,14 +35,18 @@ private slots:
 
     // File operations
     void onNewFolder();
+    void onNewTextFile();
     void onRename();
     void onCopy();
     void onCut();
     void onPaste();
     void onDuplicate();
+    void onMakeSymlink();
+    void onCopyPath();
     void onMoveToTrash();
     void onDeletePermanently();
     void onEmptyTrash();
+    void onContextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
 
     // Inspection & Preview
     void onQuickLook();

@@ -17,6 +17,7 @@ signals:
     void activePageChanged(TabPage* page);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
 
 private slots:
     void onTabCloseRequested(int index);

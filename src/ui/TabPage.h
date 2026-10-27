@@ -35,6 +35,7 @@ public:
     [[nodiscard]] FileSystemModel* model() const noexcept { return m_model; }
     [[nodiscard]] QString selectedFilePath() const;
     [[nodiscard]] QStringList selectedFilePaths() const;
+    void selectAll();
 
 signals:
     void pathChanged(const QString& newPath);
@@ -42,6 +43,7 @@ signals:
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
     void statusMessageChanged(const QString& message);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
 
 private slots:
     void onDirectoryLoaded(const QString& path, int itemCount);

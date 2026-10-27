@@ -15,6 +15,7 @@ signals:
     void openPathRequested(const QString& path);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
 
 protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;

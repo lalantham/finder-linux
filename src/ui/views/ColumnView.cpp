@@ -154,6 +154,17 @@ void ColumnBrowserList::keyPressEvent(QKeyEvent* event)
     QListView::keyPressEvent(event);
 }
 
+void ColumnBrowserList::contextMenuEvent(QContextMenuEvent* event)
+{
+    QModelIndex idx = indexAt(event->pos());
+    QStringList paths;
+    if (idx.isValid()) {
+        setCurrentIndex(idx);
+        paths.append(idx.data(FileSystemModel::FilePathRole).toString());
+    }
+    emit contextMenuRequested(event->globalPos(), paths);
+}
+
 // ColumnPreviewPane
 ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
     : QWidget(parent)
@@ -257,6 +268,7 @@ ColumnView::ColumnView(QWidget* parent)
 void ColumnView::setRootPath(const QString& path)
 {
     m_rootPath = path;
+    m_selectedPath.clear();
     for (auto* col : m_columns) {
         m_layout->removeWidget(col);
         col->deleteLater();
@@ -289,6 +301,7 @@ void ColumnView::addColumn(const QString& path, bool animate)
 
     connect(col, &ColumnBrowserList::quickLookRequested, this, &ColumnView::quickLookRequested);
     connect(col, &ColumnBrowserList::getInfoRequested, this, &ColumnView::getInfoRequested);
+    connect(col, &ColumnBrowserList::contextMenuRequested, this, &ColumnView::contextMenuRequested);
 
     // Keyboard navigation across columns
     connect(col, &ColumnBrowserList::navigateLeftRequested, this, [this, colIndex]() {
@@ -336,6 +349,7 @@ void ColumnView::truncateColumnsAfter(int columnIndex)
 
 void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool isDir)
 {
+    m_selectedPath = path;
     truncateColumnsAfter(columnIndex);
 
     if (isDir) {

@@ -85,29 +85,19 @@ void IconView::keyPressEvent(QKeyEvent* event)
 void IconView::contextMenuEvent(QContextMenuEvent* event)
 {
     QModelIndex idx = indexAt(event->pos());
-    QMenu menu(this);
-
+    QStringList paths;
     if (idx.isValid()) {
-        QString path = idx.data(FileSystemModel::FilePathRole).toString();
-        bool isDir = idx.data(FileSystemModel::FileIsDirRole).toBool();
-
-        auto* actOpen = menu.addAction(isDir ? QStringLiteral("Open") : QStringLiteral("Open With Default App"));
-        connect(actOpen, &QAction::triggered, this, [this, idx]() {
-            onItemActivated(idx);
-        });
-
-        auto* actQuickLook = menu.addAction(QStringLiteral("Quick Look"));
-        connect(actQuickLook, &QAction::triggered, this, [this, path]() {
-            emit quickLookRequested(path);
-        });
-
-        auto* actGetInfo = menu.addAction(QStringLiteral("Get Info"));
-        connect(actGetInfo, &QAction::triggered, this, [this, path]() {
-            emit getInfoRequested(path);
-        });
-
-        menu.addSeparator();
+        if (!selectionModel()->isSelected(idx)) {
+            setCurrentIndex(idx);
+        }
+        QModelIndexList selected = selectionModel()->selectedIndexes();
+        for (const auto& i : selected) {
+            QString p = i.data(FileSystemModel::FilePathRole).toString();
+            if (!p.isEmpty() && !paths.contains(p)) paths.append(p);
+        }
+        if (paths.isEmpty()) {
+            paths.append(idx.data(FileSystemModel::FilePathRole).toString());
+        }
     }
-
-    menu.exec(event->globalPos());
+    emit contextMenuRequested(event->globalPos(), paths);
 }

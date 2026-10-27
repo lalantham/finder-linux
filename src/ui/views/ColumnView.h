@@ -33,9 +33,11 @@ signals:
     void getInfoRequested(const QString& path);
     void navigateLeftRequested();
     void navigateRightRequested();
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
 
 private slots:
     void onSelectionChanged();
@@ -73,11 +75,14 @@ public:
 
     void setRootPath(const QString& path);
     [[nodiscard]] QString rootPath() const { return m_rootPath; }
+    [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
+    [[nodiscard]] QStringList selectedPaths() const { return m_selectedPath.isEmpty() ? QStringList{} : QStringList{m_selectedPath}; }
 
 signals:
     void openPathRequested(const QString& path);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
 
 private slots:
     void onColumnItemSelected(int columnIndex, const QString& path, bool isDir);
@@ -88,6 +93,7 @@ private:
     void scrollToRightAnimated();
 
     QString m_rootPath;
+    QString m_selectedPath;
     QWidget* m_container{nullptr};
     QHBoxLayout* m_layout{nullptr};
     QVector<ColumnBrowserList*> m_columns;

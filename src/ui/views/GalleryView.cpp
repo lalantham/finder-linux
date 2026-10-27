@@ -142,3 +142,12 @@ void GalleryView::keyPressEvent(QKeyEvent* event)
     }
     QWidget::keyPressEvent(event);
 }
+
+void GalleryView::contextMenuEvent(QContextMenuEvent* event)
+{
+    QStringList paths;
+    if (!m_selectedPath.isEmpty()) {
+        paths.append(m_selectedPath);
+    }
+    emit contextMenuRequested(event->globalPos(), paths);
+}

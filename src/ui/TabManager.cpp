@@ -25,6 +25,7 @@ TabPage* TabManager::createTab(const QString& path)
     connect(page, &TabPage::pathChanged, this, &TabManager::onPagePathChanged);
     connect(page, &TabPage::quickLookRequested, this, &TabManager::quickLookRequested);
     connect(page, &TabPage::getInfoRequested, this, &TabManager::getInfoRequested);
+    connect(page, &TabPage::contextMenuRequested, this, &TabManager::contextMenuRequested);
 
     // If only 1 tab, hide tab bar just like Finder does unless multiple tabs open
     tabBar()->setVisible(count() > 1);

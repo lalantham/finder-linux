@@ -42,6 +42,9 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent)
         });
         connect(view, &std::remove_pointer_t<decltype(view)>::quickLookRequested, this, &TabPage::quickLookRequested);
         connect(view, &std::remove_pointer_t<decltype(view)>::getInfoRequested, this, &TabPage::getInfoRequested);
+        connect(view, &std::remove_pointer_t<decltype(view)>::contextMenuRequested, this, [this](const QPoint& pos, const QStringList& paths) {
+            emit contextMenuRequested(pos, paths, m_currentPath);
+        });
     };
 
     connectView(m_iconView);
@@ -155,14 +158,22 @@ QString TabPage::selectedFilePath() const
         break;
     }
     case ViewMode::Column:
+        return m_columnView->selectedPath();
     case ViewMode::Gallery:
-        break;
+        return m_galleryView->selectedPath();
     }
     return {};
 }
 
 QStringList TabPage::selectedFilePaths() const
 {
+    if (m_viewMode == ViewMode::Column) {
+        return m_columnView->selectedPaths();
+    }
+    if (m_viewMode == ViewMode::Gallery) {
+        return m_galleryView->selectedFilePaths();
+    }
+
     QStringList paths;
     QModelIndexList indexes;
     if (m_viewMode == ViewMode::Icon) {
@@ -178,4 +189,13 @@ QStringList TabPage::selectedFilePaths() const
         }
     }
     return paths;
+}
+
+void TabPage::selectAll()
+{
+    if (m_viewMode == ViewMode::Icon) {
+        m_iconView->selectAll();
+    } else if (m_viewMode == ViewMode::List) {
+        m_listView->selectAll();
+    }
 }

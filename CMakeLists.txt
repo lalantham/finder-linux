@@ -47,6 +47,8 @@ set(FINDER_CORE_SOURCES
     src/core/SearchEngine.h
     src/core/UndoManager.cpp
     src/core/UndoManager.h
+    src/core/DesktopAppsManager.cpp
+    src/core/DesktopAppsManager.h
     src/operations/FileOperation.h
     src/operations/FileOperationEngine.cpp
     src/operations/FileOperationEngine.h
@@ -77,6 +79,8 @@ set(FINDER_UI_SOURCES
     src/operations/ConflictDialog.h
     src/preview/PreviewManager.cpp
     src/preview/PreviewManager.h
+    src/preview/AppChooserDialog.cpp
+    src/preview/AppChooserDialog.h
     src/preview/QuickLookDialog.cpp
     src/preview/QuickLookDialog.h
     src/preview/GetInfoDialog.cpp
