@@ -1,0 +1,36 @@
+#pragma once
+
+#include "VolumeManager.h"
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
+
+class Sidebar : public QTreeWidget {
+    Q_OBJECT
+
+public:
+    explicit Sidebar(QWidget* parent = nullptr);
+
+    void refresh();
+    void selectPath(const QString& path);
+
+signals:
+    void pathSelected(const QString& path);
+    void emptyTrashRequested();
+
+protected:
+    void contextMenuEvent(QContextMenuEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+
+private slots:
+    void onItemClicked(QTreeWidgetItem* item, int column);
+
+private:
+    void populateFavorites();
+    void populateLocations();
+
+    QTreeWidgetItem* m_favoritesHeader{nullptr};
+    QTreeWidgetItem* m_locationsHeader{nullptr};
+    QTreeWidgetItem* m_trashHeader{nullptr};
+};

@@ -1,0 +1,121 @@
+#include "FileItemDelegate.h"
+#include "FileSystemModel.h"
+#include <QPainter>
+#include <QApplication>
+#include <QPainterPath>
+
+FileItemDelegate::FileItemDelegate(QObject* parent)
+    : QStyledItemDelegate(parent)
+{
+}
+
+void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+    bool isSelected = option.state & QStyle::State_Selected;
+    bool isHovered = option.state & QStyle::State_MouseOver;
+
+    // Check if drawing in icon mode or table/tree mode
+    if (option.decorationPosition == QStyleOptionViewItem::Top) {
+        // Finder Icon Mode
+        QRect itemRect = option.rect;
+
+        // Hover highlight
+        if (isHovered && !isSelected) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(128, 128, 128, 30));
+            painter->drawRoundedRect(itemRect.adjusted(4, 4, -4, -4), 8, 8);
+        }
+
+        // Draw icon centered at top
+        int iconAreaHeight = m_iconSize;
+        QRect iconRect(itemRect.left() + (itemRect.width() - m_iconSize) / 2,
+                       itemRect.top() + 6,
+                       m_iconSize,
+                       iconAreaHeight);
+
+        QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+        icon.paint(painter, iconRect, Qt::AlignCenter);
+
+        // Draw text below icon
+        QRect textRect(itemRect.left() + 4,
+                       iconRect.bottom() + 6,
+                       itemRect.width() - 8,
+                       itemRect.height() - iconAreaHeight - 12);
+
+        QString text = index.data(Qt::DisplayRole).toString();
+
+        QFont font = option.font;
+        font.setPointSize(10);
+        painter->setFont(font);
+
+        QFontMetrics fm(font);
+        QString elidedText = fm.elidedText(text, Qt::ElideMiddle, textRect.width() * 2);
+
+        if (isSelected) {
+            // macOS selection pill around label
+            QRect labelBound = fm.boundingRect(textRect, Qt::AlignHCenter | Qt::TextWordWrap, elidedText);
+            labelBound.adjust(-6, -2, 6, 2);
+
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(0x00, 0x7a, 0xff)); // macOS system blue
+            painter->drawRoundedRect(labelBound, 5, 5);
+
+            painter->setPen(Qt::white);
+        } else {
+            painter->setPen(option.palette.color(QPalette::Text));
+        }
+
+        painter->drawText(textRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWordWrap, elidedText);
+
+    } else {
+        // List / Table / Column Mode
+        if (isSelected) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(0x00, 0x7a, 0xff));
+            painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
+            painter->setPen(Qt::white);
+        } else if (isHovered) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(128, 128, 128, 25));
+            painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
+            painter->setPen(option.palette.color(QPalette::Text));
+        } else {
+            painter->setPen(option.palette.color(QPalette::Text));
+        }
+
+        // Draw Icon if column 0
+        int textLeft = option.rect.left() + 6;
+        if (index.column() == 0) {
+            QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+            QRect iconRect(textLeft, option.rect.top() + (option.rect.height() - 18) / 2, 18, 18);
+            icon.paint(painter, iconRect);
+            textLeft += 24;
+        }
+
+        QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - 4, option.rect.height());
+        QString text = index.data(Qt::DisplayRole).toString();
+
+        QFont font = option.font;
+        font.setPointSize(10);
+        painter->setFont(font);
+
+        painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, text);
+    }
+
+    painter->restore();
+}
+
+QSize FileItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    if (option.decorationPosition == QStyleOptionViewItem::Top) {
+        // Icon View size hint: icon size + margin + 2-3 lines of text
+        int w = qMax(m_iconSize + 36, 96);
+        int h = m_iconSize + 48;
+        return QSize(w, h);
+    }
+    return QSize(option.rect.width(), 24);
+}
