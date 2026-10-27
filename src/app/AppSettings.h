@@ -29,7 +29,10 @@ public:
     void setViewMode(ViewMode mode) { m_viewMode = mode; }
 
     [[nodiscard]] bool showHiddenFiles() const noexcept { return m_showHiddenFiles; }
-    void setShowHiddenFiles(bool show) { m_showHiddenFiles = show; }
+    void setShowHiddenFiles(bool show) {
+        m_showHiddenFiles = show;
+        save();
+    }
 
     [[nodiscard]] bool directoriesFirst() const noexcept { return m_directoriesFirst; }
     void setDirectoriesFirst(bool dirsFirst) { m_directoriesFirst = dirsFirst; }

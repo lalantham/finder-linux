@@ -121,6 +121,7 @@ void TabPage::setViewMode(ViewMode mode)
 void TabPage::setShowHidden(bool show)
 {
     m_model->setShowHidden(show);
+    m_columnView->setShowHidden(show);
 }
 
 void TabPage::setFilterQuery(const QString& query)

@@ -201,7 +201,9 @@ void MainWindow::setupMenusAndShortcuts()
     viewMenu->addAction(QStringLiteral("as Columns"), QKeySequence(Qt::CTRL | Qt::Key_3), this, [this]() { onViewModeChanged(ViewMode::Column); });
     viewMenu->addAction(QStringLiteral("as Gallery"), QKeySequence(Qt::CTRL | Qt::Key_4), this, [this]() { onViewModeChanged(ViewMode::Gallery); });
     viewMenu->addSeparator();
-    viewMenu->addAction(QStringLiteral("Toggle Hidden Files"), QKeySequence(Qt::CTRL | Qt::Key_H), this, &MainWindow::onToggleHidden);
+    m_toggleHiddenAction = viewMenu->addAction(QStringLiteral("Toggle Hidden Files"), QKeySequence(Qt::CTRL | Qt::Key_H), this, &MainWindow::onToggleHidden);
+    m_toggleHiddenAction->setCheckable(true);
+    m_toggleHiddenAction->setChecked(AppSettings::instance().showHiddenFiles());
     viewMenu->addAction(QStringLiteral("Customize Sidebar..."), m_sidebar, &Sidebar::openManageSidebarDialog);
 
     // Go Menu
@@ -605,10 +607,10 @@ void MainWindow::onToggleHidden()
     bool show = !AppSettings::instance().showHiddenFiles();
     AppSettings::instance().setShowHiddenFiles(show);
     m_toolbar->setShowHidden(show);
-
-    if (TabPage* page = m_tabManager->currentPage()) {
-        page->setShowHidden(show);
+    if (m_toggleHiddenAction) {
+        m_toggleHiddenAction->setChecked(show);
     }
+    m_tabManager->setShowHidden(show);
 }
 
 void MainWindow::onOpenTerminal()

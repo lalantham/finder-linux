@@ -1,4 +1,5 @@
 #include "ColumnView.h"
+#include "AppSettings.h"
 #include "DesktopAppsManager.h"
 #include "PreviewManager.h"
 #include "FileItem.h"
@@ -95,6 +96,7 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     , m_path(path)
 {
     m_model = new FileSystemModel(this);
+    m_model->setShowHidden(AppSettings::instance().showHiddenFiles());
     m_model->setRootPath(path);
     setModel(m_model);
 
@@ -252,6 +254,7 @@ void ColumnPreviewPane::setItem(const QString& path)
 // ColumnView
 ColumnView::ColumnView(QWidget* parent)
     : QScrollArea(parent)
+    , m_showHidden(AppSettings::instance().showHiddenFiles())
 {
     setWidgetResizable(true);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -336,10 +339,19 @@ void ColumnView::refresh()
     }
 }
 
+void ColumnView::setShowHidden(bool show)
+{
+    m_showHidden = show;
+    for (auto* col : m_columns) {
+        col->model()->setShowHidden(show);
+    }
+}
+
 void ColumnView::addColumn(const QString& path, bool animate)
 {
     int colIndex = static_cast<int>(m_columns.size());
     auto* col = new ColumnBrowserList(path, m_container);
+    col->model()->setShowHidden(m_showHidden);
 
     m_layout->insertWidget(colIndex, col);
     m_columns.append(col);

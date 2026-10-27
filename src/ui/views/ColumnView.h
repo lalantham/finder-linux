@@ -76,6 +76,8 @@ public:
 
     void setRootPath(const QString& path);
     void refresh();
+    void setShowHidden(bool show);
+    [[nodiscard]] bool showHidden() const noexcept { return m_showHidden; }
     [[nodiscard]] QString rootPath() const { return m_rootPath; }
     [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
     [[nodiscard]] QStringList selectedPaths() const { return m_selectedPath.isEmpty() ? QStringList{} : QStringList{m_selectedPath}; }
@@ -97,6 +99,7 @@ private:
 
     QString m_rootPath;
     QString m_selectedPath;
+    bool m_showHidden{false};
     QWidget* m_container{nullptr};
     QHBoxLayout* m_layout{nullptr};
     QVector<ColumnBrowserList*> m_columns;

@@ -1,4 +1,5 @@
 #include "Toolbar.h"
+#include "AppSettings.h"
 #include "StyleHelper.h"
 #include "ThemeManager.h"
 #include <QHBoxLayout>
@@ -139,6 +140,7 @@ void Toolbar::setupActionButtons()
     m_hiddenBtn = new QToolButton(this);
     m_hiddenBtn->setText(QStringLiteral(".*"));
     m_hiddenBtn->setCheckable(true);
+    m_hiddenBtn->setChecked(AppSettings::instance().showHiddenFiles());
     m_hiddenBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle());
     m_hiddenBtn->setToolTip(QStringLiteral("Show/Hide Hidden Files (Ctrl+H)"));
     connect(m_hiddenBtn, &QToolButton::clicked, this, &Toolbar::toggleHiddenRequested);

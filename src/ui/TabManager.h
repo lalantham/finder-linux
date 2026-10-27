@@ -12,6 +12,7 @@ public:
     TabPage* createTab(const QString& path);
     void closeCurrentTab();
     [[nodiscard]] TabPage* currentPage() const;
+    void setShowHidden(bool show);
 
 signals:
     void activePageChanged(TabPage* page);

@@ -47,6 +47,15 @@ TabPage* TabManager::currentPage() const
     return qobject_cast<TabPage*>(currentWidget());
 }
 
+void TabManager::setShowHidden(bool show)
+{
+    for (int i = 0; i < count(); ++i) {
+        if (auto* page = qobject_cast<TabPage*>(widget(i))) {
+            page->setShowHidden(show);
+        }
+    }
+}
+
 void TabManager::onTabCloseRequested(int index)
 {
     if (count() <= 1) return;

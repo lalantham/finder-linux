@@ -87,6 +87,7 @@ private:
     UndoManager* m_undoManager{nullptr};
     ProgressDialog* m_progressDialog{nullptr};
     QuickLookDialog* m_quickLookDialog{nullptr};
+    QAction* m_toggleHiddenAction{nullptr};
 
     QStringList m_clipboardPaths;
     bool m_isCutOperation{false};
