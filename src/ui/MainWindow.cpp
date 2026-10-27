@@ -100,6 +100,8 @@ void MainWindow::setupUi()
     connect(m_tabManager, &TabManager::quickLookRequested, this, [this](const QString& p) {
         m_quickLookDialog->showFile(p);
         m_quickLookDialog->show();
+        m_quickLookDialog->raise();
+        m_quickLookDialog->activateWindow();
     });
     connect(m_tabManager, &TabManager::getInfoRequested, this, [this](const QString& p) {
         auto* dlg = new GetInfoDialog(p, this);
@@ -505,6 +507,8 @@ void MainWindow::onQuickLook()
     if (!paths.isEmpty()) {
         m_quickLookDialog->setFiles(paths);
         m_quickLookDialog->show();
+        m_quickLookDialog->raise();
+        m_quickLookDialog->activateWindow();
     }
 }
 

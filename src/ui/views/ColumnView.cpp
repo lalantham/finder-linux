@@ -259,6 +259,8 @@ ColumnView::ColumnView(QWidget* parent)
 
     m_previewPane = new ColumnPreviewPane(m_container);
     m_previewPane->hide();
+    connect(m_previewPane, &ColumnPreviewPane::quickLookRequested, this, &ColumnView::quickLookRequested);
+    connect(m_previewPane, &ColumnPreviewPane::getInfoRequested, this, &ColumnView::getInfoRequested);
 
     m_layout->addWidget(m_previewPane);
     m_layout->addStretch();
