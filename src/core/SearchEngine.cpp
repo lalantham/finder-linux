@@ -15,13 +15,11 @@ void SearchWorker::cancel()
 
 bool SearchWorker::matchesFilter(const QFileInfo& fi) const
 {
-    if (m_filter.query.isEmpty()) {
-        return true;
-    }
-
-    Qt::CaseSensitivity cs = m_filter.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
-    if (!fi.fileName().contains(m_filter.query, cs)) {
-        return false;
+    if (!m_filter.query.isEmpty()) {
+        Qt::CaseSensitivity cs = m_filter.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+        if (!fi.fileName().contains(m_filter.query, cs)) {
+            return false;
+        }
     }
 
     if (m_filter.minSize >= 0 && fi.size() < m_filter.minSize) {
@@ -33,11 +31,72 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const
     }
 
     if (!m_filter.kindFilter.isEmpty()) {
-        QMimeDatabase db;
-        QMimeType mime = db.mimeTypeForFile(fi);
-        if (!mime.name().contains(m_filter.kindFilter, Qt::CaseInsensitive) &&
-            !mime.comment().contains(m_filter.kindFilter, Qt::CaseInsensitive)) {
+        QString k = m_filter.kindFilter.toLower();
+        QString ext = fi.suffix().toLower();
+        if (k == QStringLiteral("folders") || k == QStringLiteral("folder")) {
+            if (!fi.isDir()) return false;
+        } else if (fi.isDir()) {
             return false;
+        } else if (k == QStringLiteral("images") || k == QStringLiteral("image")) {
+            static const QSet<QString> imgExts = {
+                QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+                QStringLiteral("bmp"), QStringLiteral("ico"), QStringLiteral("tiff"), QStringLiteral("tif")
+            };
+            if (!imgExts.contains(ext)) {
+                QMimeDatabase db;
+                QMimeType mime = db.mimeTypeForFile(fi);
+                if (!mime.name().startsWith(QStringLiteral("image/"))) return false;
+            }
+        } else if (k == QStringLiteral("documents") || k == QStringLiteral("document")) {
+            static const QSet<QString> docExts = {
+                QStringLiteral("pdf"), QStringLiteral("doc"), QStringLiteral("docx"),
+                QStringLiteral("txt"), QStringLiteral("md"), QStringLiteral("rtf"),
+                QStringLiteral("odt"), QStringLiteral("xls"), QStringLiteral("xlsx"),
+                QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")
+            };
+            if (!docExts.contains(ext)) {
+                QMimeDatabase db;
+                QMimeType mime = db.mimeTypeForFile(fi);
+                if (!mime.name().startsWith(QStringLiteral("text/")) &&
+                    mime.name() != QStringLiteral("application/pdf")) return false;
+            }
+        } else if (k == QStringLiteral("videos") || k == QStringLiteral("video")) {
+            static const QSet<QString> vidExts = {
+                QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
+                QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("wmv"),
+                QStringLiteral("flv"), QStringLiteral("m4v")
+            };
+            if (!vidExts.contains(ext)) {
+                QMimeDatabase db;
+                QMimeType mime = db.mimeTypeForFile(fi);
+                if (!mime.name().startsWith(QStringLiteral("video/"))) return false;
+            }
+        } else if (k == QStringLiteral("audio")) {
+            static const QSet<QString> audExts = {
+                QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("wav"),
+                QStringLiteral("ogg"), QStringLiteral("m4a"), QStringLiteral("aac"),
+                QStringLiteral("wma"), QStringLiteral("opus")
+            };
+            if (!audExts.contains(ext)) {
+                QMimeDatabase db;
+                QMimeType mime = db.mimeTypeForFile(fi);
+                if (!mime.name().startsWith(QStringLiteral("audio/"))) return false;
+            }
+        } else if (k == QStringLiteral("archives") || k == QStringLiteral("archive")) {
+            static const QSet<QString> arcExts = {
+                QStringLiteral("zip"), QStringLiteral("tar"), QStringLiteral("gz"),
+                QStringLiteral("bz2"), QStringLiteral("xz"), QStringLiteral("7z"),
+                QStringLiteral("rar"), QStringLiteral("tgz")
+            };
+            if (!arcExts.contains(ext)) return false;
+        } else {
+            QMimeDatabase db;
+            QMimeType mime = db.mimeTypeForFile(fi);
+            if (!mime.name().contains(k, Qt::CaseInsensitive) &&
+                !mime.comment().contains(k, Qt::CaseInsensitive)) {
+                return false;
+            }
         }
     }
 

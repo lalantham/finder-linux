@@ -52,6 +52,16 @@ public:
     [[nodiscard]] const QString& activeTag() const noexcept { return m_activeTag; }
     [[nodiscard]] const QString& rootPath() const noexcept { return m_rootPath; }
 
+    void setFilterQuery(const QString& query, const QString& kind = QString());
+    [[nodiscard]] const QString& filterQuery() const noexcept { return m_filterQuery; }
+    [[nodiscard]] const QString& filterKind() const noexcept { return m_filterKind; }
+
+    void setSearchResults(const QVector<FileItem>& items);
+    void appendSearchResults(const QVector<FileItem>& items);
+    void clearSearchResults();
+    [[nodiscard]] bool isSearchResultsView() const noexcept { return m_isSearchResultsView; }
+    void exitSearchResults();
+
     void setShowHidden(bool show);
     [[nodiscard]] bool showHidden() const noexcept { return m_showHidden; }
 
@@ -91,14 +101,20 @@ private slots:
 private:
     void populate();
     void sortInternal();
+    void applyFilterInternal();
+    static bool itemMatchesFilter(const FileItem& item, const QString& query, const QString& kind);
 
     QString m_rootPath;
     QString m_activeTag;
+    QString m_filterQuery;
+    QString m_filterKind;
+    bool m_isSearchResultsView{false};
     bool m_showHidden{false};
     bool m_directoriesFirst{true};
     int m_sortColumn{ColName};
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
 
     QVector<FileItem> m_items;
+    QVector<FileItem> m_allFolderItems;
     QFileSystemWatcher m_watcher;
 };

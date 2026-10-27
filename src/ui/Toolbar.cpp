@@ -5,6 +5,8 @@
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QLabel>
+#include <QKeyEvent>
+#include <QShortcut>
 
 Toolbar::Toolbar(QWidget* parent)
     : QToolBar(parent)
@@ -167,7 +169,35 @@ void Toolbar::setupSearch()
     m_searchEdit->setFixedWidth(180);
     m_searchEdit->setStyleSheet(StyleHelper::searchBarStyle());
     connect(m_searchEdit, &QLineEdit::textChanged, this, &Toolbar::searchTextChanged);
+
+    // Escape in search line edit clears it
+    auto* escShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), m_searchEdit);
+    connect(escShortcut, &QShortcut::activated, this, [this]() {
+        m_searchEdit->clear();
+        m_searchEdit->clearFocus();
+    });
+
     addWidget(m_searchEdit);
+}
+
+void Toolbar::focusSearch()
+{
+    if (m_searchEdit) {
+        m_searchEdit->setFocus();
+        m_searchEdit->selectAll();
+    }
+}
+
+void Toolbar::clearSearch()
+{
+    if (m_searchEdit) {
+        m_searchEdit->clear();
+    }
+}
+
+QString Toolbar::searchQuery() const
+{
+    return m_searchEdit ? m_searchEdit->text() : QString();
 }
 
 void Toolbar::setPath(const QString& path)

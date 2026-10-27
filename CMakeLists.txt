@@ -67,6 +67,8 @@ set(FINDER_UI_SOURCES
     src/ui/BreadcrumbBar.h
     src/ui/Toolbar.cpp
     src/ui/Toolbar.h
+    src/ui/SearchScopeBar.cpp
+    src/ui/SearchScopeBar.h
     src/ui/Sidebar.cpp
     src/ui/Sidebar.h
     src/ui/SidebarSettingsDialog.cpp

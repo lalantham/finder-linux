@@ -21,6 +21,10 @@ public:
     void setShowHidden(bool show);
     void updateThemeStyles(bool isDark);
 
+    void focusSearch();
+    void clearSearch();
+    [[nodiscard]] QString searchQuery() const;
+
     [[nodiscard]] BreadcrumbBar* breadcrumbBar() const noexcept { return m_breadcrumb; }
 
 signals:

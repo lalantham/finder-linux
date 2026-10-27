@@ -33,7 +33,29 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent)
     m_viewStack->addWidget(m_columnView);
     m_viewStack->addWidget(m_galleryView);
 
+    m_searchScopeBar = new SearchScopeBar(this);
+    m_searchScopeBar->hide();
+    layout->addWidget(m_searchScopeBar);
+
     layout->addWidget(m_viewStack);
+
+    m_searchEngine = new SearchEngine(this);
+    connect(m_searchEngine, &SearchEngine::itemFound, this, &TabPage::onSearchItemFound);
+    connect(m_searchEngine, &SearchEngine::searchFinished, this, &TabPage::onSearchFinished);
+
+    m_searchBatchTimer = new QTimer(this);
+    connect(m_searchBatchTimer, &QTimer::timeout, this, &TabPage::onSearchBatchTimer);
+
+    connect(m_searchScopeBar, &SearchScopeBar::scopeChanged, this, [this](SearchScope) {
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::kindChanged, this, [this](const QString&) {
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::subfoldersToggled, this, [this](bool) {
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::clearRequested, this, &TabPage::searchClearRequested);
 
     // Forward view signals
     auto connectView = [this](auto* view) {
@@ -64,6 +86,10 @@ void TabPage::navigateTo(const QString& path, bool recordHistory)
 {
     QString cleanPath = QDir::cleanPath(path);
     if (!QDir(cleanPath).exists()) return;
+
+    if (m_model->isSearchResultsView() || !m_searchQuery.isEmpty()) {
+        emit searchClearRequested();
+    }
 
     if (recordHistory && !m_currentPath.isEmpty() && m_currentPath != cleanPath) {
         m_backHistory.append(m_currentPath);
@@ -126,12 +152,108 @@ void TabPage::setShowHidden(bool show)
 
 void TabPage::setFilterQuery(const QString& query)
 {
-    // Filter items in the current directory if query is present
-    if (query.isEmpty()) {
-        m_model->refresh();
+    m_searchQuery = query.trimmed();
+    if (m_searchQuery.isEmpty()) {
+        m_searchScopeBar->hide();
+        m_searchEngine->stopSearch();
+        if (m_searchBatchTimer->isActive()) {
+            m_searchBatchTimer->stop();
+        }
+        m_pendingSearchResults.clear();
+        m_model->exitSearchResults();
+        m_model->setFilterQuery(QString(), QString());
+        if (m_viewMode != m_preSearchViewMode && m_preSearchViewMode == ViewMode::Column) {
+            setViewMode(m_preSearchViewMode);
+        }
+        updateStatus();
     } else {
-        // Can filter or re-populate matching items
-        m_model->refresh();
+        if (m_searchScopeBar->isHidden()) {
+            m_preSearchViewMode = m_viewMode;
+            m_searchScopeBar->reset();
+            m_searchScopeBar->show();
+        }
+        QFileInfo fi(m_currentPath);
+        m_searchScopeBar->setCurrentFolderName(fi.fileName().isEmpty() ? m_currentPath : fi.fileName());
+        runSearch();
+    }
+}
+
+void TabPage::runSearch()
+{
+    if (m_searchQuery.isEmpty()) {
+        setFilterQuery(QString());
+        return;
+    }
+
+    SearchScope scope = m_searchScopeBar->currentScope();
+    QString kind = m_searchScopeBar->currentKind();
+    bool subfolders = m_searchScopeBar->isSubfolders();
+
+    if (scope == SearchScope::ThisFolder && !subfolders) {
+        // Mode 1: Instant In-Memory Filter on Current Folder
+        m_searchEngine->stopSearch();
+        if (m_searchBatchTimer->isActive()) m_searchBatchTimer->stop();
+        m_pendingSearchResults.clear();
+        m_model->exitSearchResults();
+        m_model->setFilterQuery(m_searchQuery, kind);
+        int count = m_model->rowCount();
+        m_searchScopeBar->setStatusText(QStringLiteral("%1 item%2 found").arg(count).arg(count == 1 ? "" : "s"));
+    } else {
+        // Mode 2: Recursive Search (This Folder Subdirectories OR Everywhere)
+        m_searchEngine->stopSearch();
+        if (m_searchBatchTimer->isActive()) m_searchBatchTimer->stop();
+        m_pendingSearchResults.clear();
+
+        QString searchPath = (scope == SearchScope::ThisFolder) ? m_currentPath : QDir::homePath();
+
+        // If in Column view, switch to List view for flat search results
+        if (m_viewMode == ViewMode::Column) {
+            setViewMode(ViewMode::List);
+        }
+
+        m_model->clearSearchResults();
+        m_searchScopeBar->setStatusText(scope == SearchScope::ThisFolder
+            ? QStringLiteral("Searching \"%1\"...").arg(m_searchScopeBar->currentFolderName())
+            : QStringLiteral("Searching Everywhere..."));
+
+        SearchFilter filter;
+        filter.query = m_searchQuery;
+        filter.searchPath = searchPath;
+        filter.recursive = true;
+        filter.kindFilter = kind;
+        filter.includeHidden = AppSettings::instance().showHiddenFiles();
+
+        m_searchEngine->startSearch(filter);
+        m_searchBatchTimer->start(60);
+    }
+}
+
+void TabPage::onSearchItemFound(const FileItem& item)
+{
+    m_pendingSearchResults.append(item);
+}
+
+void TabPage::onSearchBatchTimer()
+{
+    if (!m_pendingSearchResults.isEmpty()) {
+        m_model->appendSearchResults(m_pendingSearchResults);
+        m_pendingSearchResults.clear();
+        int count = m_model->rowCount();
+        m_searchScopeBar->setStatusText(QStringLiteral("%1 items found...").arg(count));
+    }
+}
+
+void TabPage::onSearchFinished(int total)
+{
+    onSearchBatchTimer();
+    m_searchBatchTimer->stop();
+    m_searchScopeBar->setStatusText(QStringLiteral("%1 item%2 found").arg(total).arg(total == 1 ? "" : "s"));
+}
+
+void TabPage::updateThemeStyles(bool isDark)
+{
+    if (m_searchScopeBar) {
+        m_searchScopeBar->updateThemeStyles(isDark);
     }
 }
 

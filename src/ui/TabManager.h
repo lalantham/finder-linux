@@ -20,6 +20,7 @@ signals:
     void getInfoRequested(const QString& path);
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
+    void searchClearRequested();
 
 private slots:
     void onTabCloseRequested(int index);

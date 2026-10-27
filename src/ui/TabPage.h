@@ -6,9 +6,12 @@
 #include "ListView.h"
 #include "ColumnView.h"
 #include "GalleryView.h"
+#include "SearchScopeBar.h"
+#include "SearchEngine.h"
 #include <QWidget>
 #include <QStackedWidget>
 #include <QVector>
+#include <QTimer>
 
 class TabPage : public QWidget {
     Q_OBJECT
@@ -45,19 +48,34 @@ signals:
     void statusMessageChanged(const QString& message);
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
+    void searchClearRequested();
+
+public slots:
+    void updateThemeStyles(bool isDark);
 
 private slots:
     void onDirectoryLoaded(const QString& path, int itemCount);
+    void runSearch();
+    void onSearchBatchTimer();
+    void onSearchItemFound(const FileItem& item);
+    void onSearchFinished(int total);
 
 private:
     void updateStatus();
 
     QString m_currentPath;
+    QString m_searchQuery;
     QVector<QString> m_backHistory;
     QVector<QString> m_forwardHistory;
 
     FileSystemModel* m_model{nullptr};
     ViewMode m_viewMode{ViewMode::Icon};
+    ViewMode m_preSearchViewMode{ViewMode::Icon};
+
+    SearchScopeBar* m_searchScopeBar{nullptr};
+    SearchEngine* m_searchEngine{nullptr};
+    QTimer* m_searchBatchTimer{nullptr};
+    QVector<FileItem> m_pendingSearchResults;
 
     QStackedWidget* m_viewStack{nullptr};
     IconView* m_iconView{nullptr};

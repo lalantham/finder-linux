@@ -22,6 +22,9 @@ FileSystemModel::FileSystemModel(QObject* parent)
 void FileSystemModel::setRootPath(const QString& path)
 {
     m_activeTag.clear();
+    m_filterQuery.clear();
+    m_filterKind.clear();
+    m_isSearchResultsView = false;
     QString cleanPath = QDir::cleanPath(path);
     if (m_rootPath == cleanPath) return;
 
@@ -40,6 +43,9 @@ void FileSystemModel::setRootPath(const QString& path)
 
 void FileSystemModel::setTaggedFiles(const QString& tag)
 {
+    m_filterQuery.clear();
+    m_filterKind.clear();
+    m_isSearchResultsView = false;
     if (!m_rootPath.isEmpty() && !m_rootPath.startsWith(QStringLiteral("tag://"))) {
         m_watcher.removePath(m_rootPath);
     }
@@ -79,16 +85,17 @@ void FileSystemModel::populate()
 {
     beginResetModel();
     m_items.clear();
+    m_allFolderItems.clear();
 
     if (!m_activeTag.isEmpty()) {
         QStringList paths = TagManager::instance().filesForTag(m_activeTag);
-        m_items.reserve(paths.size());
+        m_allFolderItems.reserve(paths.size());
         for (const auto& p : paths) {
             if (QFileInfo::exists(p)) {
-                m_items.emplace_back(p);
+                m_allFolderItems.emplace_back(p);
             }
         }
-        sortInternal();
+        applyFilterInternal();
     } else if (!m_rootPath.isEmpty()) {
         QDir dir(m_rootPath);
         QDir::Filters filters = QDir::NoDotAndDotDot | QDir::AllEntries | QDir::System;
@@ -97,14 +104,161 @@ void FileSystemModel::populate()
         }
 
         QFileInfoList entries = dir.entryInfoList(filters, QDir::NoSort);
-        m_items.reserve(entries.size());
+        m_allFolderItems.reserve(entries.size());
         for (const auto& fi : entries) {
-            m_items.emplace_back(fi);
+            m_allFolderItems.emplace_back(fi);
         }
 
-        sortInternal();
+        applyFilterInternal();
     }
 
+    endResetModel();
+    emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
+}
+
+bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& query, const QString& kind)
+{
+    if (!query.isEmpty()) {
+        bool matchesName = item.fileName().contains(query, Qt::CaseInsensitive);
+        bool matchesTag = false;
+        const QStringList tags = item.tags();
+        for (const auto& t : tags) {
+            if (t.contains(query, Qt::CaseInsensitive)) {
+                matchesTag = true;
+                break;
+            }
+        }
+        if (!matchesName && !matchesTag) {
+            return false;
+        }
+    }
+
+    if (!kind.isEmpty()) {
+        QString k = kind.toLower();
+        QString ext = item.suffix().toLower();
+        if (k == QStringLiteral("folders") || k == QStringLiteral("folder")) {
+            if (!item.isDir()) return false;
+        } else if (item.isDir()) {
+            return false;
+        } else if (k == QStringLiteral("images") || k == QStringLiteral("image")) {
+            static const QSet<QString> imgExts = {
+                QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
+                QStringLiteral("bmp"), QStringLiteral("ico"), QStringLiteral("tiff"), QStringLiteral("tif")
+            };
+            if (!imgExts.contains(ext) && !item.kind().contains(QStringLiteral("image"), Qt::CaseInsensitive)) {
+                return false;
+            }
+        } else if (k == QStringLiteral("documents") || k == QStringLiteral("document")) {
+            static const QSet<QString> docExts = {
+                QStringLiteral("pdf"), QStringLiteral("doc"), QStringLiteral("docx"),
+                QStringLiteral("txt"), QStringLiteral("md"), QStringLiteral("rtf"),
+                QStringLiteral("odt"), QStringLiteral("xls"), QStringLiteral("xlsx"),
+                QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")
+            };
+            if (!docExts.contains(ext) &&
+                !item.kind().contains(QStringLiteral("document"), Qt::CaseInsensitive) &&
+                !item.kind().contains(QStringLiteral("text"), Qt::CaseInsensitive)) {
+                return false;
+            }
+        } else if (k == QStringLiteral("videos") || k == QStringLiteral("video")) {
+            static const QSet<QString> vidExts = {
+                QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
+                QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("wmv"),
+                QStringLiteral("flv"), QStringLiteral("m4v")
+            };
+            if (!vidExts.contains(ext) && !item.kind().contains(QStringLiteral("video"), Qt::CaseInsensitive)) {
+                return false;
+            }
+        } else if (k == QStringLiteral("audio")) {
+            static const QSet<QString> audExts = {
+                QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("wav"),
+                QStringLiteral("ogg"), QStringLiteral("m4a"), QStringLiteral("aac"),
+                QStringLiteral("wma"), QStringLiteral("opus")
+            };
+            if (!audExts.contains(ext) && !item.kind().contains(QStringLiteral("audio"), Qt::CaseInsensitive)) {
+                return false;
+            }
+        } else if (k == QStringLiteral("archives") || k == QStringLiteral("archive")) {
+            static const QSet<QString> arcExts = {
+                QStringLiteral("zip"), QStringLiteral("tar"), QStringLiteral("gz"),
+                QStringLiteral("bz2"), QStringLiteral("xz"), QStringLiteral("7z"),
+                QStringLiteral("rar"), QStringLiteral("tgz")
+            };
+            if (!arcExts.contains(ext) && !item.kind().contains(QStringLiteral("archive"), Qt::CaseInsensitive)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+void FileSystemModel::applyFilterInternal()
+{
+    if (m_filterQuery.isEmpty() && m_filterKind.isEmpty()) {
+        m_items = m_allFolderItems;
+    } else {
+        m_items.clear();
+        m_items.reserve(m_allFolderItems.size());
+        for (const auto& item : m_allFolderItems) {
+            if (itemMatchesFilter(item, m_filterQuery, m_filterKind)) {
+                m_items.push_back(item);
+            }
+        }
+    }
+    sortInternal();
+}
+
+void FileSystemModel::setFilterQuery(const QString& query, const QString& kind)
+{
+    beginResetModel();
+    m_filterQuery = query;
+    m_filterKind = kind;
+    m_isSearchResultsView = false;
+    applyFilterInternal();
+    endResetModel();
+    emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
+}
+
+void FileSystemModel::setSearchResults(const QVector<FileItem>& items)
+{
+    beginResetModel();
+    m_isSearchResultsView = true;
+    m_items = items;
+    sortInternal();
+    endResetModel();
+    emit directoryLoaded(QStringLiteral("search://"), static_cast<int>(m_items.size()));
+}
+
+void FileSystemModel::appendSearchResults(const QVector<FileItem>& items)
+{
+    if (items.isEmpty()) return;
+    int firstRow = static_cast<int>(m_items.size());
+    int lastRow = firstRow + static_cast<int>(items.size()) - 1;
+    beginInsertRows(QModelIndex(), firstRow, lastRow);
+    m_items.append(items);
+    endInsertRows();
+}
+
+void FileSystemModel::clearSearchResults()
+{
+    beginResetModel();
+    m_isSearchResultsView = true;
+    m_items.clear();
+    endResetModel();
+    emit directoryLoaded(QStringLiteral("search://"), 0);
+}
+
+void FileSystemModel::exitSearchResults()
+{
+    if (!m_isSearchResultsView) return;
+    beginResetModel();
+    m_isSearchResultsView = false;
+    m_filterQuery.clear();
+    m_filterKind.clear();
+    m_items = m_allFolderItems;
+    sortInternal();
     endResetModel();
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
 }
@@ -207,6 +361,10 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const
     }
 
     if (role == Qt::ToolTipRole) {
+        if (m_isSearchResultsView) {
+            return QStringLiteral("%1\nPath: %2\nSize: %3\nModified: %4\nKind: %5")
+                .arg(item.fileName(), item.path(), item.formattedSize(), item.modified().toString(), item.kind());
+        }
         return QStringLiteral("%1\nSize: %2\nModified: %3\nKind: %4")
             .arg(item.fileName(), item.formattedSize(), item.modified().toString(), item.kind());
     }

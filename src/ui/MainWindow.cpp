@@ -143,6 +143,9 @@ void MainWindow::setupUi()
     });
     connect(m_tabManager, &TabManager::contextMenuRequested, this, &MainWindow::onContextMenuRequested);
     connect(m_tabManager, &TabManager::fileDropRequested, this, &MainWindow::onFilesDropped);
+    connect(m_tabManager, &TabManager::searchClearRequested, this, [this]() {
+        m_toolbar->clearSearch();
+    });
 
     m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(m_tabManager);
@@ -204,6 +207,10 @@ void MainWindow::setupMenusAndShortcuts()
     editMenu->addAction(QStringLiteral("Paste"), QKeySequence(Qt::CTRL | Qt::Key_V), this, &MainWindow::onPaste);
     editMenu->addSeparator();
     editMenu->addAction(QStringLiteral("Rename"), QKeySequence(Qt::Key_F2), this, &MainWindow::onRename);
+    editMenu->addSeparator();
+    editMenu->addAction(QStringLiteral("Find..."), QKeySequence::Find, this, [this]() {
+        m_toolbar->focusSearch();
+    });
 
     // View Menu
     auto* viewMenu = mBar->addMenu(QStringLiteral("&View"));
