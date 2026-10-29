@@ -339,10 +339,11 @@ QStringList TabPage::selectedFilePaths() const
     if (m_viewMode == ViewMode::Icon) {
         indexes = m_iconView->selectionModel()->selectedIndexes();
     } else if (m_viewMode == ViewMode::List) {
-        indexes = m_listView->selectionModel()->selectedRows();
+        indexes = m_listView->selectionModel()->selectedIndexes();
     }
 
     for (const auto& idx : indexes) {
+        if (idx.column() != 0) continue;
         QString p = idx.data(FileSystemModel::FilePathRole).toString();
         if (!p.isEmpty() && !paths.contains(p)) {
             paths.append(p);
@@ -357,5 +358,9 @@ void TabPage::selectAll()
         m_iconView->selectAll();
     } else if (m_viewMode == ViewMode::List) {
         m_listView->selectAll();
+    } else if (m_viewMode == ViewMode::Column) {
+        m_columnView->selectAll();
+    } else if (m_viewMode == ViewMode::Gallery) {
+        m_galleryView->selectAll();
     }
 }

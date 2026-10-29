@@ -33,7 +33,7 @@ ListView::ListView(QWidget* parent)
     header()->setStretchLastSection(true);
 
     m_delegate = new FileItemDelegate(this);
-    setItemDelegateForColumn(FileSystemModel::ColName, m_delegate);
+    setItemDelegate(m_delegate);
 
     m_springTimer = new QTimer(this);
     m_springTimer->setSingleShot(true);

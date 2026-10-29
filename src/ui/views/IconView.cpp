@@ -23,6 +23,7 @@ IconView::IconView(QWidget* parent)
     setWordWrap(true);
     setUniformItemSizes(false);
     setSelectionMode(QAbstractItemView::ExtendedSelection);
+    setMovement(QListView::Static);
     setDragEnabled(true);
     setAcceptDrops(true);
     setDropIndicatorShown(true);

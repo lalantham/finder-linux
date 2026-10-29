@@ -53,6 +53,8 @@ GalleryView::GalleryView(QWidget* parent)
     m_filmstrip->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_filmstrip->setFixedHeight(110);
     m_filmstrip->setSpacing(8);
+    m_filmstrip->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_filmstrip->setMovement(QListView::Static);
 
     auto* delegate = new FileItemDelegate(m_filmstrip);
     delegate->setIconSize(48);
@@ -144,10 +146,30 @@ void GalleryView::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
-void GalleryView::contextMenuEvent(QContextMenuEvent* event)
+QStringList GalleryView::selectedFilePaths() const
 {
     QStringList paths;
-    if (!m_selectedPath.isEmpty()) {
+    if (!m_filmstrip || !m_filmstrip->selectionModel()) return paths;
+    for (const auto& idx : m_filmstrip->selectionModel()->selectedIndexes()) {
+        QString p = idx.data(FileSystemModel::FilePathRole).toString();
+        if (!p.isEmpty() && !paths.contains(p)) {
+            paths.append(p);
+        }
+    }
+    return paths.isEmpty() ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{}) : paths;
+}
+
+void GalleryView::selectAll()
+{
+    if (m_filmstrip) {
+        m_filmstrip->selectAll();
+    }
+}
+
+void GalleryView::contextMenuEvent(QContextMenuEvent* event)
+{
+    QStringList paths = selectedFilePaths();
+    if (paths.isEmpty() && !m_selectedPath.isEmpty()) {
         paths.append(m_selectedPath);
     }
     emit contextMenuRequested(event->globalPos(), paths);

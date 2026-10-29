@@ -134,6 +134,8 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     setFixedWidth(240);
     setUniformItemSizes(true);
     setEditTriggers(QAbstractItemView::NoEditTriggers);
+    setSelectionMode(QAbstractItemView::ExtendedSelection);
+    setMovement(QListView::Static);
     m_delegate = new ColumnItemDelegate(this);
     setItemDelegate(m_delegate);
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -158,6 +160,7 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
 
     connect(m_model, &FileSystemModel::fileDropRequested, this, &ColumnBrowserList::fileDropRequested);
     connect(selectionModel(), &QItemSelectionModel::currentChanged, this, &ColumnBrowserList::onSelectionChanged);
+    connect(selectionModel(), &QItemSelectionModel::selectionChanged, this, &ColumnBrowserList::onSelectionChanged);
     connect(this, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
         if (!index.isValid()) return;
         QString itemPath = index.data(FileSystemModel::FilePathRole).toString();
@@ -166,13 +169,39 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     });
 }
 
+QStringList ColumnBrowserList::selectedPaths() const
+{
+    QStringList paths;
+    if (!selectionModel()) return paths;
+    for (const auto& idx : selectionModel()->selectedIndexes()) {
+        QString p = idx.data(FileSystemModel::FilePathRole).toString();
+        if (!p.isEmpty() && !paths.contains(p)) {
+            paths.append(p);
+        }
+    }
+    return paths;
+}
+
 void ColumnBrowserList::onSelectionChanged()
 {
-    QModelIndex idx = currentIndex();
-    if (!idx.isValid()) return;
-    QString itemPath = idx.data(FileSystemModel::FilePathRole).toString();
-    bool isDir = idx.data(FileSystemModel::FileIsDirRole).toBool();
-    emit itemSelected(itemPath, isDir);
+    QStringList paths = selectedPaths();
+    if (paths.isEmpty()) {
+        emit selectionCleared();
+        return;
+    }
+    if (paths.size() == 1) {
+        QModelIndex idx = currentIndex();
+        if (idx.isValid()) {
+            QString itemPath = idx.data(FileSystemModel::FilePathRole).toString();
+            bool isDir = idx.data(FileSystemModel::FileIsDirRole).toBool();
+            emit itemSelected(itemPath, isDir);
+        } else {
+            QString itemPath = paths.first();
+            emit itemSelected(itemPath, QFileInfo(itemPath).isDir());
+        }
+    } else {
+        emit multipleItemsSelected(paths);
+    }
 }
 
 void ColumnBrowserList::dragEnterEvent(QDragEnterEvent* event)
@@ -291,8 +320,15 @@ void ColumnBrowserList::contextMenuEvent(QContextMenuEvent* event)
     QModelIndex idx = indexAt(event->pos());
     QStringList paths;
     if (idx.isValid()) {
-        setCurrentIndex(idx);
-        paths.append(idx.data(FileSystemModel::FilePathRole).toString());
+        if (!selectionModel()->isSelected(idx)) {
+            setCurrentIndex(idx);
+            paths.append(idx.data(FileSystemModel::FilePathRole).toString());
+        } else {
+            paths = selectedPaths();
+            if (paths.isEmpty()) {
+                paths.append(idx.data(FileSystemModel::FilePathRole).toString());
+            }
+        }
     }
     emit contextMenuRequested(event->globalPos(), paths, m_path);
 }
@@ -353,11 +389,11 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
 
     layout->addSpacing(12);
 
-    auto* qlBtn = new QPushButton(QStringLiteral("Quick Look"), this);
-    connect(qlBtn, &QPushButton::clicked, this, [this]() {
+    m_qlBtn = new QPushButton(QStringLiteral("Quick Look"), this);
+    connect(m_qlBtn, &QPushButton::clicked, this, [this]() {
         if (!m_currentPath.isEmpty()) emit quickLookRequested(m_currentPath);
     });
-    layout->addWidget(qlBtn);
+    layout->addWidget(m_qlBtn);
 
     layout->addStretch();
 }
@@ -365,6 +401,7 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
 void ColumnPreviewPane::setItem(const QString& path)
 {
     m_currentPath = path;
+    if (m_qlBtn) m_qlBtn->setEnabled(true);
     FileItem item(path);
 
     m_nameLabel->setText(item.fileName());
@@ -413,6 +450,49 @@ void ColumnPreviewPane::setItem(const QString& path)
         m_iconLabel->setPixmap(pix);
     } else {
         m_iconLabel->setPixmap(item.icon().pixmap(96, 96));
+    }
+}
+
+void ColumnPreviewPane::setMultipleItems(const QStringList& paths)
+{
+    m_currentPath.clear();
+    QFileIconProvider iconProv;
+    m_iconLabel->setPixmap(QIcon::fromTheme(QStringLiteral("document-multiple"),
+                           iconProv.icon(QFileIconProvider::Folder)).pixmap(64, 64));
+    m_nameLabel->setText(QStringLiteral("%1 items selected").arg(paths.size()));
+    m_kindLabel->setText(QStringLiteral("Multiple Items"));
+
+    qint64 totalBytes = 0;
+    int dirCount = 0;
+    int fileCount = 0;
+    for (const auto& p : paths) {
+        QFileInfo fi(p);
+        if (fi.isDir()) {
+            dirCount++;
+        } else {
+            fileCount++;
+            totalBytes += fi.size();
+        }
+    }
+    QString countStr;
+    if (dirCount > 0 && fileCount > 0) {
+        countStr = QStringLiteral("%1 folders, %2 files").arg(dirCount).arg(fileCount);
+    } else if (dirCount > 0) {
+        countStr = QStringLiteral("%1 folders").arg(dirCount);
+    } else {
+        countStr = QStringLiteral("%1 files").arg(fileCount);
+    }
+    m_sizeLabel->setText(QStringLiteral("Size: %1 (%2)").arg(FileItem::formatSize(totalBytes), countStr));
+    m_modifiedLabel->clear();
+
+    QLayoutItem* child;
+    while ((child = m_tagsLayout->takeAt(0)) != nullptr) {
+        if (child->widget()) delete child->widget();
+        delete child;
+    }
+    m_tagsContainer->hide();
+    if (m_qlBtn) {
+        m_qlBtn->setEnabled(false);
     }
 }
 
@@ -571,6 +651,22 @@ void ColumnView::addColumn(const QString& path, bool animate)
         }
     });
 
+    connect(col, &ColumnBrowserList::multipleItemsSelected, this, [this, col](const QStringList& paths) {
+        if (m_isRefreshing) return;
+        int idx = static_cast<int>(m_columns.indexOf(col));
+        if (idx >= 0) {
+            onColumnMultipleItemsSelected(idx, paths);
+        }
+    });
+
+    connect(col, &ColumnBrowserList::selectionCleared, this, [this, col]() {
+        if (m_isRefreshing) return;
+        int idx = static_cast<int>(m_columns.indexOf(col));
+        if (idx >= 0) {
+            onColumnSelectionCleared(idx);
+        }
+    });
+
     connect(col, &ColumnBrowserList::itemDoubleClicked, this, [this](const QString& itemPath, bool isDir) {
         if (isDir) {
             emit openPathRequested(itemPath);
@@ -635,7 +731,9 @@ void ColumnView::truncateColumnsAfter(int columnIndex)
 void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool isDir)
 {
     if (m_isRefreshing) return;
+    m_activeColumnIndex = columnIndex;
     m_selectedPath = path;
+    m_selectedPaths = {path};
     truncateColumnsAfter(columnIndex);
 
     if (isDir) {
@@ -645,6 +743,55 @@ void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool
         m_previewPane->setItem(path);
         m_previewPane->show();
         scrollToRightAnimated();
+    }
+}
+
+void ColumnView::onColumnMultipleItemsSelected(int columnIndex, const QStringList& paths)
+{
+    if (m_isRefreshing) return;
+    m_activeColumnIndex = columnIndex;
+    m_selectedPaths = paths;
+    m_selectedPath.clear();
+    truncateColumnsAfter(columnIndex);
+
+    m_previewPane->setMultipleItems(paths);
+    m_previewPane->show();
+    scrollToRightAnimated();
+}
+
+void ColumnView::onColumnSelectionCleared(int columnIndex)
+{
+    if (m_isRefreshing) return;
+    if (m_activeColumnIndex == columnIndex) {
+        m_selectedPath.clear();
+        m_selectedPaths.clear();
+        m_previewPane->hide();
+        truncateColumnsAfter(columnIndex);
+    }
+}
+
+QStringList ColumnView::selectedPaths() const
+{
+    int numCols = static_cast<int>(m_columns.size());
+    if (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols) {
+        QStringList paths = m_columns[m_activeColumnIndex]->selectedPaths();
+        if (!paths.isEmpty()) return paths;
+    }
+    for (int i = numCols - 1; i >= 0; --i) {
+        QStringList paths = m_columns[i]->selectedPaths();
+        if (!paths.isEmpty()) return paths;
+    }
+    return m_selectedPaths.isEmpty() ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{}) : m_selectedPaths;
+}
+
+void ColumnView::selectAll()
+{
+    int numCols = static_cast<int>(m_columns.size());
+    int colIdx = (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols)
+                 ? m_activeColumnIndex
+                 : (numCols - 1);
+    if (colIdx >= 0 && colIdx < numCols) {
+        m_columns[colIdx]->selectAll();
     }
 }
 

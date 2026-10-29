@@ -15,7 +15,8 @@ public:
 
     void setFileSystemModel(FileSystemModel* model);
     [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
-    [[nodiscard]] QStringList selectedFilePaths() const { return m_selectedPath.isEmpty() ? QStringList{} : QStringList{m_selectedPath}; }
+    [[nodiscard]] QStringList selectedFilePaths() const;
+    void selectAll();
 
 signals:
     void openPathRequested(const QString& path);

@@ -7,6 +7,7 @@
 #include <QListView>
 #include <QVector>
 #include <QLabel>
+#include <QPushButton>
 #include <QStyledItemDelegate>
 
 class ColumnItemDelegate : public QStyledItemDelegate {
@@ -31,9 +32,12 @@ public:
     explicit ColumnBrowserList(const QString& path, QWidget* parent = nullptr);
     [[nodiscard]] QString path() const { return m_path; }
     [[nodiscard]] FileSystemModel* model() const { return m_model; }
+    [[nodiscard]] QStringList selectedPaths() const;
 
 signals:
     void itemSelected(const QString& path, bool isDir);
+    void multipleItemsSelected(const QStringList& paths);
+    void selectionCleared();
     void itemDoubleClicked(const QString& path, bool isDir);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
@@ -70,6 +74,7 @@ class ColumnPreviewPane : public QWidget {
 public:
     explicit ColumnPreviewPane(QWidget* parent = nullptr);
     void setItem(const QString& path);
+    void setMultipleItems(const QStringList& paths);
 
 signals:
     void quickLookRequested(const QString& path);
@@ -84,6 +89,7 @@ private:
     QLabel* m_modifiedLabel{nullptr};
     QWidget* m_tagsContainer{nullptr};
     QHBoxLayout* m_tagsLayout{nullptr};
+    QPushButton* m_qlBtn{nullptr};
 };
 
 class ColumnView : public QScrollArea {
@@ -99,7 +105,8 @@ public:
     [[nodiscard]] QString rootPath() const { return m_rootPath; }
     [[nodiscard]] QString activeDirectory() const;
     [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
-    [[nodiscard]] QStringList selectedPaths() const { return m_selectedPath.isEmpty() ? QStringList{} : QStringList{m_selectedPath}; }
+    [[nodiscard]] QStringList selectedPaths() const;
+    void selectAll();
 
 signals:
     void openPathRequested(const QString& path);
@@ -110,6 +117,8 @@ signals:
 
 private slots:
     void onColumnItemSelected(int columnIndex, const QString& path, bool isDir);
+    void onColumnMultipleItemsSelected(int columnIndex, const QStringList& paths);
+    void onColumnSelectionCleared(int columnIndex);
 
 private:
     void addColumn(const QString& path, bool animate = true);
@@ -118,6 +127,8 @@ private:
 
     QString m_rootPath;
     QString m_selectedPath;
+    QStringList m_selectedPaths;
+    int m_activeColumnIndex{-1};
     bool m_showHidden{false};
     bool m_isRefreshing{false};
     QWidget* m_container{nullptr};

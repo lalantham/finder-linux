@@ -34,7 +34,12 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
             painter->setPen(QPen(acc, 2.0));
             painter->setBrush(QColor(acc.red(), acc.green(), acc.blue(), 45));
             painter->drawRoundedRect(itemRect.adjusted(3, 3, -3, -3), 8, 8);
-        } else if (isHovered && !isSelected) {
+        } else if (isSelected) {
+            QColor acc = ThemeManager::instance().accentColor();
+            painter->setPen(QPen(acc, 1.5));
+            painter->setBrush(QColor(acc.red(), acc.green(), acc.blue(), 40));
+            painter->drawRoundedRect(itemRect.adjusted(3, 3, -3, -3), 8, 8);
+        } else if (isHovered) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(128, 128, 128, 30));
             painter->drawRoundedRect(itemRect.adjusted(4, 4, -4, -4), 8, 8);
@@ -116,12 +121,24 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
         } else if (isSelected) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(ThemeManager::instance().accentColor());
-            painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
+            if (index.column() == 0) {
+                painter->drawRoundedRect(option.rect.adjusted(2, 1, 0, -1), 4, 4);
+            } else if (index.column() == 3) {
+                painter->drawRoundedRect(option.rect.adjusted(0, 1, -2, -1), 4, 4);
+            } else {
+                painter->drawRect(option.rect.adjusted(0, 1, 0, -1));
+            }
             painter->setPen(Qt::white);
         } else if (isHovered) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(128, 128, 128, 25));
-            painter->drawRoundedRect(option.rect.adjusted(2, 1, -2, -1), 4, 4);
+            if (index.column() == 0) {
+                painter->drawRoundedRect(option.rect.adjusted(2, 1, 0, -1), 4, 4);
+            } else if (index.column() == 3) {
+                painter->drawRoundedRect(option.rect.adjusted(0, 1, -2, -1), 4, 4);
+            } else {
+                painter->drawRect(option.rect.adjusted(0, 1, 0, -1));
+            }
             painter->setPen(ThemeManager::instance().textColor());
         } else {
             painter->setPen(ThemeManager::instance().textColor());
