@@ -18,6 +18,7 @@ add_finder_test(test_undo test_undo.cpp)
 add_finder_test(test_tags test_tags.cpp)
 add_finder_test(test_favorites test_favorites.cpp)
 add_finder_test(test_archives test_archives.cpp)
+add_finder_test(test_volumemanager test_volumemanager.cpp)
 
 add_executable(test_selection test_selection.cpp)
 target_link_libraries(test_selection PRIVATE

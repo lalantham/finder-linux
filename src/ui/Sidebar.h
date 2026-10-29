@@ -4,6 +4,8 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QStyledItemDelegate>
+#include <QFileSystemWatcher>
+#include <QTimer>
 
 class SidebarItemDelegate : public QStyledItemDelegate {
     Q_OBJECT
@@ -53,6 +55,7 @@ protected:
 private slots:
     void onItemClicked(QTreeWidgetItem* item, int column);
     void onSpringTimeout();
+    void checkVolumeChanges();
 
 private:
     void resetSpringTimer();
@@ -64,6 +67,9 @@ private:
     SidebarItemDelegate* m_delegate{nullptr};
     QTimer* m_springTimer{nullptr};
     QString m_springHoverPath;
+    QFileSystemWatcher* m_volumeWatcher{nullptr};
+    QTimer* m_volumePollTimer{nullptr};
+    QString m_lastVolumeFingerprint;
     QTreeWidgetItem* m_favoritesHeader{nullptr};
     QTreeWidgetItem* m_locationsHeader{nullptr};
     QTreeWidgetItem* m_tagsHeader{nullptr};

@@ -35,6 +35,9 @@ static constexpr int IsTagRole = Qt::UserRole + 16;
 static constexpr int TagNameRole = Qt::UserRole + 17;
 static constexpr int TotalBytesRole = Qt::UserRole + 18;
 static constexpr int AvailableBytesRole = Qt::UserRole + 19;
+static constexpr int DeviceRole = Qt::UserRole + 20;
+static constexpr int IsMountedRole = Qt::UserRole + 21;
+static constexpr int IsUsbRole = Qt::UserRole + 22;
 
 SidebarItemDelegate::SidebarItemDelegate(QObject* parent)
     : QStyledItemDelegate(parent)
@@ -110,12 +113,13 @@ void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
     QString text = index.data(Qt::DisplayRole).toString();
     qint64 totalBytes = index.data(TotalBytesRole).toLongLong();
     qint64 availBytes = index.data(AvailableBytesRole).toLongLong();
-    bool hasDiskBar = (totalBytes > 0);
+    bool isMounted = index.data(IsMountedRole).isValid() ? index.data(IsMountedRole).toBool() : true;
+    bool hasDiskBar = isMounted && (totalBytes > 0);
 
     QFont font = option.font;
     font.setPointSize(10);
     painter->setFont(font);
-    painter->setPen(isSelected ? Qt::white : c.text);
+    painter->setPen(isSelected ? Qt::white : (isMounted ? c.text : QColor(c.text.red(), c.text.green(), c.text.blue(), 170)));
 
     int textX = iconX + 22;
     int textW = itemRect.right() - textX - 6;
@@ -176,6 +180,28 @@ Sidebar::Sidebar(QWidget* parent)
     m_springTimer = new QTimer(this);
     m_springTimer->setSingleShot(true);
     connect(m_springTimer, &QTimer::timeout, this, &Sidebar::onSpringTimeout);
+
+    m_volumeWatcher = new QFileSystemWatcher(this);
+    QStringList watchDirs;
+    if (QDir(QStringLiteral("/run/media")).exists()) {
+        watchDirs << QStringLiteral("/run/media");
+        QString userMedia = QStringLiteral("/run/media/") + QString::fromUtf8(qgetenv("USER"));
+        if (QDir(userMedia).exists()) {
+            watchDirs << userMedia;
+        }
+    }
+    if (QDir(QStringLiteral("/media")).exists()) {
+        watchDirs << QStringLiteral("/media");
+    }
+    if (!watchDirs.isEmpty()) {
+        m_volumeWatcher->addPaths(watchDirs);
+        connect(m_volumeWatcher, &QFileSystemWatcher::directoryChanged, this, &Sidebar::refresh);
+    }
+
+    m_volumePollTimer = new QTimer(this);
+    m_volumePollTimer->setInterval(1500);
+    connect(m_volumePollTimer, &QTimer::timeout, this, &Sidebar::checkVolumeChanges);
+    m_volumePollTimer->start();
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
@@ -307,12 +333,16 @@ void Sidebar::populateLocations()
         QIcon icon;
         qint64 totalBytes{0};
         qint64 availableBytes{0};
+        QString device;
+        bool isMounted{true};
+        bool isUsb{false};
     };
     QMap<QString, LocData> map;
     for (const auto& vol : volumes) {
-        map[vol.path] = {vol.name, vol.icon, vol.totalBytes, vol.availableBytes};
+        map[vol.path] = {vol.name, vol.icon, vol.totalBytes, vol.availableBytes, vol.device, vol.isMounted, vol.isUsb};
     }
 
+    QSet<QString> addedPaths;
     const QStringList orderedLocs = AppSettings::instance().locationOrder();
     for (const auto& path : orderedLocs) {
         if (!map.contains(path)) continue;
@@ -322,10 +352,38 @@ void Sidebar::populateLocations()
         auto* item = new QTreeWidgetItem(m_locationsHeader);
         item->setText(0, data.name);
         item->setData(0, PathRole, path);
+        item->setData(0, DeviceRole, data.device);
         item->setData(0, IsLocationRole, true);
+        item->setData(0, IsMountedRole, data.isMounted);
+        item->setData(0, IsUsbRole, data.isUsb);
         item->setData(0, TotalBytesRole, data.totalBytes);
         item->setData(0, AvailableBytesRole, data.availableBytes);
         item->setIcon(0, data.icon);
+        if (!data.isMounted) {
+            item->setToolTip(0, QStringLiteral("%1 (Unmounted — click to open)").arg(data.name));
+        }
+        addedPaths.insert(path);
+    }
+
+    // Add any newly connected or unmounted volumes not yet in orderedLocs
+    for (const auto& vol : volumes) {
+        if (addedPaths.contains(vol.path)) continue;
+        if (AppSettings::instance().isLocationHidden(vol.path)) continue;
+
+        auto* item = new QTreeWidgetItem(m_locationsHeader);
+        item->setText(0, vol.name);
+        item->setData(0, PathRole, vol.path);
+        item->setData(0, DeviceRole, vol.device);
+        item->setData(0, IsLocationRole, true);
+        item->setData(0, IsMountedRole, vol.isMounted);
+        item->setData(0, IsUsbRole, vol.isUsb);
+        item->setData(0, TotalBytesRole, vol.totalBytes);
+        item->setData(0, AvailableBytesRole, vol.availableBytes);
+        item->setIcon(0, vol.icon);
+        if (!vol.isMounted) {
+            item->setToolTip(0, QStringLiteral("%1 (Unmounted — click to open)").arg(vol.name));
+        }
+        addedPaths.insert(vol.path);
     }
 }
 
@@ -362,6 +420,23 @@ void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
         QString tag = item->data(0, TagNameRole).toString();
         emit tagSelected(tag);
         return;
+    }
+    if (item->data(0, IsLocationRole).toBool()) {
+        bool isMounted = item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
+        if (!isMounted) {
+            QString dev = item->data(0, DeviceRole).toString();
+            if (dev.isEmpty()) dev = item->data(0, PathRole).toString();
+            QString err;
+            QString mp = VolumeManager::mountDevice(dev, &err);
+            if (!mp.isEmpty()) {
+                refresh();
+                emit pathSelected(mp);
+            } else {
+                QMessageBox::warning(this, QStringLiteral("Cannot Mount Device"),
+                                     err.isEmpty() ? QStringLiteral("Failed to mount %1").arg(dev) : err);
+            }
+            return;
+        }
     }
     QString path = item->data(0, PathRole).toString();
     if (!path.isEmpty()) {
@@ -546,8 +621,24 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
 
         // Location specific or Favorite specific actions
         if (isLocation) {
+            bool isMounted = item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
             if (isTrash) {
                 menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash"), this, &Sidebar::emptyTrashRequested);
+                menu.addSeparator();
+            } else if (!isMounted) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("media-mount")), QStringLiteral("Mount"), this, [this, item]() {
+                    QString dev = item->data(0, DeviceRole).toString();
+                    if (dev.isEmpty()) dev = item->data(0, PathRole).toString();
+                    QString err;
+                    QString mp = VolumeManager::mountDevice(dev, &err);
+                    if (!mp.isEmpty()) {
+                        refresh();
+                        emit pathSelected(mp);
+                    } else {
+                        QMessageBox::warning(this, QStringLiteral("Cannot Mount Device"),
+                                             err.isEmpty() ? QStringLiteral("Failed to mount %1").arg(dev) : err);
+                    }
+                });
                 menu.addSeparator();
             } else if (path != QStringLiteral("/") && !path.isEmpty()) {
                 // Eject / Unmount
@@ -986,5 +1077,37 @@ void Sidebar::onSpringTimeout()
         resetSpringTimer();
         selectPath(target);
         emit pathSelected(target);
+    }
+}
+
+void Sidebar::checkVolumeChanges()
+{
+    QStringList blockEntries = QDir(QStringLiteral("/sys/class/block")).entryList(QDir::NoDotAndDotDot);
+    std::sort(blockEntries.begin(), blockEntries.end());
+
+    QFileInfo mountsInfo(QStringLiteral("/proc/mounts"));
+    qint64 mountsSize = mountsInfo.size();
+
+    QString userMedia = QStringLiteral("/run/media/") + QString::fromUtf8(qgetenv("USER"));
+    QStringList mediaEntries;
+    if (QDir(userMedia).exists()) {
+        mediaEntries = QDir(userMedia).entryList(QDir::NoDotAndDotDot);
+    }
+
+    QString fp = blockEntries.join(QLatin1Char(',')) + QLatin1Char('|') +
+                 QString::number(mountsSize) + QLatin1Char('|') +
+                 mediaEntries.join(QLatin1Char(','));
+
+    if (m_lastVolumeFingerprint.isEmpty()) {
+        m_lastVolumeFingerprint = fp;
+        return;
+    }
+
+    if (fp != m_lastVolumeFingerprint) {
+        m_lastVolumeFingerprint = fp;
+        if (m_volumeWatcher && QDir(userMedia).exists() && !m_volumeWatcher->directories().contains(userMedia)) {
+            m_volumeWatcher->addPath(userMedia);
+        }
+        refresh();
     }
 }

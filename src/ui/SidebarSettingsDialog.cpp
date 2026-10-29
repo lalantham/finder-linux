@@ -288,8 +288,15 @@ void SidebarSettingsDialog::populateLocationsList()
         trashPath
     };
 
-    for (int i = 0; i < orderedLocs.size(); ++i) {
-        const QString& path = orderedLocs[i];
+    QStringList allLocs = orderedLocs;
+    for (auto it = locMap.constBegin(); it != locMap.constEnd(); ++it) {
+        if (!allLocs.contains(it.key())) {
+            allLocs.append(it.key());
+        }
+    }
+
+    for (int i = 0; i < allLocs.size(); ++i) {
+        const QString& path = allLocs[i];
         if (!locMap.contains(path)) continue;
         const auto& info = locMap[path];
 
@@ -355,7 +362,7 @@ void SidebarSettingsDialog::populateLocationsList()
         auto* downBtn = new QPushButton(QStringLiteral("▼"), rowWidget);
         downBtn->setToolTip(QStringLiteral("Move Down"));
         downBtn->setFixedWidth(28);
-        downBtn->setEnabled(i < orderedLocs.size() - 1);
+        downBtn->setEnabled(i < allLocs.size() - 1);
         connect(downBtn, &QPushButton::clicked, this, [this, path]() {
             AppSettings::instance().moveLocationDown(path);
             populateLocationsList();
