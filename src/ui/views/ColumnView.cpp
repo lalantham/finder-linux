@@ -558,49 +558,30 @@ void ColumnView::navigateToPath(const QString& targetPath)
         }
     }
 
-    // 2. Check if clean is a subfolder of our current root
-    if (clean.startsWith(m_rootPath + QLatin1Char('/')) && !m_columns.isEmpty()) {
-        QString rel = clean.mid(m_rootPath.length() + 1);
-        QStringList segments = rel.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-
-        QString currentWalk = m_rootPath;
-        for (int i = 0; i < segments.size(); ++i) {
-            const QString& seg = segments[i];
-            QString nextStep = currentWalk + QLatin1Char('/') + seg;
-
-            if (i >= m_columns.size() || m_columns[i]->path() != currentWalk) {
-                truncateColumnsAfter(i - 1);
-                addColumn(currentWalk, false);
-            }
-            auto* col = m_columns[i];
-            for (int r = 0; r < col->model()->rowCount(); ++r) {
-                QModelIndex idx = col->model()->index(r, 0);
-                if (idx.data(FileSystemModel::FileNameRole).toString() == seg) {
-                    col->setCurrentIndex(idx);
-                    col->scrollTo(idx);
-                    break;
+    // 2. If clean is a direct child of the last column, select it and add column
+    if (!m_columns.isEmpty()) {
+        auto* lastCol = m_columns.last();
+        if (clean.startsWith(lastCol->path() + QLatin1Char('/'))) {
+            QString subName = clean.mid(lastCol->path().length() + 1);
+            if (!subName.contains(QLatin1Char('/'))) {
+                for (int r = 0; r < lastCol->model()->rowCount(); ++r) {
+                    QModelIndex idx = lastCol->model()->index(r, 0);
+                    if (idx.data(FileSystemModel::FileNameRole).toString() == subName) {
+                        lastCol->setCurrentIndex(idx);
+                        lastCol->scrollTo(idx);
+                        break;
+                    }
                 }
-            }
-            currentWalk = nextStep;
-        }
-
-        if (QFileInfo(clean).isDir()) {
-            truncateColumnsAfter(static_cast<int>(segments.size()) - 1);
-            addColumn(clean, false);
-            if (!m_columns.isEmpty()) {
-                m_columns.last()->clearSelection();
+                m_previewPane->hide();
+                addColumn(clean, true);
+                m_activeColumnIndex = static_cast<int>(m_columns.size()) - 1;
+                m_isRefreshing = oldRefreshing;
+                return;
             }
         }
-        m_previewPane->hide();
-        m_selectedPath.clear();
-        m_selectedPaths.clear();
-        m_activeColumnIndex = static_cast<int>(m_columns.size()) - 1;
-        scrollToRightAnimated();
-        m_isRefreshing = oldRefreshing;
-        return;
     }
 
-    // 3. Otherwise, set clean as new root
+    // 3. Otherwise (e.g. sidebar clicked, or non-adjacent path), reset root to clean
     m_isRefreshing = oldRefreshing;
     setRootPath(clean);
 }
