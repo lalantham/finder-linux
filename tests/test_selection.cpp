@@ -275,6 +275,24 @@ void TestSelection::testNavigationHistory()
     QCOMPARE(page.currentPath(), sub2);
     QVERIFY(page.canGoBack());
     QVERIFY(!page.canGoForward());
+
+    // Test Column View mode with fresh page
+    TabPage colPage(root);
+    colPage.setViewMode(ViewMode::Column);
+    QVERIFY(!colPage.canGoBack());
+
+    colPage.navigateTo(sub1);
+    QCOMPARE(colPage.currentPath(), sub1);
+    QVERIFY(colPage.canGoBack());
+
+    colPage.goBack();
+    QCOMPARE(colPage.currentPath(), root);
+    QVERIFY(!colPage.canGoBack());
+    QVERIFY(colPage.canGoForward());
+
+    colPage.goForward();
+    QCOMPARE(colPage.currentPath(), sub1);
+    QVERIFY(colPage.canGoBack());
 }
 
 QTEST_MAIN(TestSelection)

@@ -99,6 +99,7 @@ public:
     explicit ColumnView(QWidget* parent = nullptr);
 
     void setRootPath(const QString& path);
+    void navigateToPath(const QString& path);
     void refresh(const QString& targetToSelect = QString());
     void setShowHidden(bool show);
     [[nodiscard]] bool showHidden() const noexcept { return m_showHidden; }
@@ -110,6 +111,7 @@ public:
 
 signals:
     void openPathRequested(const QString& path);
+    void activeDirectoryChanged(const QString& path);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);

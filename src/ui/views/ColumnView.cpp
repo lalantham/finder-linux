@@ -535,6 +535,76 @@ void ColumnView::setRootPath(const QString& path)
     addColumn(path, false);
 }
 
+void ColumnView::navigateToPath(const QString& targetPath)
+{
+    QString clean = QDir::cleanPath(targetPath);
+    if (!QDir(clean).exists()) return;
+
+    bool oldRefreshing = m_isRefreshing;
+    m_isRefreshing = true;
+
+    // 1. Check if clean is already one of the open columns
+    for (int i = 0; i < m_columns.size(); ++i) {
+        if (m_columns[i]->path() == clean) {
+            truncateColumnsAfter(i);
+            m_columns[i]->clearSelection();
+            m_previewPane->hide();
+            m_selectedPath.clear();
+            m_selectedPaths.clear();
+            m_activeColumnIndex = i;
+            scrollToRightAnimated();
+            m_isRefreshing = oldRefreshing;
+            return;
+        }
+    }
+
+    // 2. Check if clean is a subfolder of our current root
+    if (clean.startsWith(m_rootPath + QLatin1Char('/')) && !m_columns.isEmpty()) {
+        QString rel = clean.mid(m_rootPath.length() + 1);
+        QStringList segments = rel.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+
+        QString currentWalk = m_rootPath;
+        for (int i = 0; i < segments.size(); ++i) {
+            const QString& seg = segments[i];
+            QString nextStep = currentWalk + QLatin1Char('/') + seg;
+
+            if (i >= m_columns.size() || m_columns[i]->path() != currentWalk) {
+                truncateColumnsAfter(i - 1);
+                addColumn(currentWalk, false);
+            }
+            auto* col = m_columns[i];
+            for (int r = 0; r < col->model()->rowCount(); ++r) {
+                QModelIndex idx = col->model()->index(r, 0);
+                if (idx.data(FileSystemModel::FileNameRole).toString() == seg) {
+                    col->setCurrentIndex(idx);
+                    col->scrollTo(idx);
+                    break;
+                }
+            }
+            currentWalk = nextStep;
+        }
+
+        if (QFileInfo(clean).isDir()) {
+            truncateColumnsAfter(static_cast<int>(segments.size()) - 1);
+            addColumn(clean, false);
+            if (!m_columns.isEmpty()) {
+                m_columns.last()->clearSelection();
+            }
+        }
+        m_previewPane->hide();
+        m_selectedPath.clear();
+        m_selectedPaths.clear();
+        m_activeColumnIndex = static_cast<int>(m_columns.size()) - 1;
+        scrollToRightAnimated();
+        m_isRefreshing = oldRefreshing;
+        return;
+    }
+
+    // 3. Otherwise, set clean as new root
+    m_isRefreshing = oldRefreshing;
+    setRootPath(clean);
+}
+
 QString ColumnView::activeDirectory() const
 {
     if (m_columns.isEmpty()) {
@@ -739,10 +809,13 @@ void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool
     if (isDir) {
         m_previewPane->hide();
         addColumn(path, true);
+        emit activeDirectoryChanged(path);
     } else {
         m_previewPane->setItem(path);
         m_previewPane->show();
         scrollToRightAnimated();
+        QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size()) ? m_columns[columnIndex]->path() : m_rootPath;
+        emit activeDirectoryChanged(colDir);
     }
 }
 
@@ -757,6 +830,9 @@ void ColumnView::onColumnMultipleItemsSelected(int columnIndex, const QStringLis
     m_previewPane->setMultipleItems(paths);
     m_previewPane->show();
     scrollToRightAnimated();
+
+    QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size()) ? m_columns[columnIndex]->path() : m_rootPath;
+    emit activeDirectoryChanged(colDir);
 }
 
 void ColumnView::onColumnSelectionCleared(int columnIndex)
@@ -767,6 +843,9 @@ void ColumnView::onColumnSelectionCleared(int columnIndex)
         m_selectedPaths.clear();
         m_previewPane->hide();
         truncateColumnsAfter(columnIndex);
+
+        QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size()) ? m_columns[columnIndex]->path() : m_rootPath;
+        emit activeDirectoryChanged(colDir);
     }
 }
 

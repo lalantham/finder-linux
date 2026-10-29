@@ -82,6 +82,16 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent)
         emit contextMenuRequested(pos, paths, !colDir.isEmpty() ? colDir : currentPath());
     });
 
+    connect(m_columnView, &ColumnView::activeDirectoryChanged, this, [this](const QString& dir) {
+        if (m_viewMode == ViewMode::Column && !dir.isEmpty() && m_currentPath != dir) {
+            m_backHistory.append(m_currentPath);
+            m_forwardHistory.clear();
+            m_currentPath = dir;
+            emit historyChanged();
+            emit pathChanged(m_currentPath);
+        }
+    });
+
     connect(m_model, &FileSystemModel::directoryLoaded, this, &TabPage::onDirectoryLoaded);
     connect(m_model, &FileSystemModel::fileDropRequested, this, &TabPage::fileDropRequested);
     connect(m_columnView, &ColumnView::fileDropRequested, this, &TabPage::fileDropRequested);
@@ -107,7 +117,11 @@ void TabPage::navigateTo(const QString& path, bool recordHistory)
 
     m_currentPath = cleanPath;
     m_model->setRootPath(m_currentPath);
-    m_columnView->setRootPath(m_currentPath);
+    if (m_viewMode == ViewMode::Column && m_columnView) {
+        m_columnView->navigateToPath(m_currentPath);
+    } else {
+        m_columnView->setRootPath(m_currentPath);
+    }
 
     emit pathChanged(m_currentPath);
 }
@@ -185,6 +199,11 @@ void TabPage::setViewMode(ViewMode mode)
 {
     m_viewMode = mode;
     m_viewStack->setCurrentIndex(static_cast<int>(mode));
+    if (mode == ViewMode::Column && m_columnView) {
+        m_columnView->navigateToPath(m_currentPath);
+    } else if (m_model) {
+        m_model->setRootPath(m_currentPath);
+    }
 }
 
 void TabPage::setShowHidden(bool show)
