@@ -21,6 +21,7 @@ private slots:
     void testColumnViewSelection();
     void testGalleryViewSelection();
     void testTabPageMultiSelection();
+    void testNavigationHistory();
 
 private:
     QTemporaryDir m_tempDir;
@@ -229,6 +230,51 @@ void TestSelection::testTabPageMultiSelection()
     tabPage.setViewMode(ViewMode::Gallery);
     tabPage.selectAll();
     QCOMPARE(tabPage.selectedFilePaths().size(), 5);
+}
+
+void TestSelection::testNavigationHistory()
+{
+    QDir dir(m_tempDir.path());
+    dir.mkdir("sub1");
+    dir.mkdir("sub2");
+
+    QString root = m_tempDir.path();
+    QString sub1 = dir.filePath("sub1");
+    QString sub2 = dir.filePath("sub2");
+
+    TabPage page(root);
+    QVERIFY(!page.canGoBack());
+    QVERIFY(!page.canGoForward());
+
+    page.navigateTo(sub1);
+    QCOMPARE(page.currentPath(), sub1);
+    QVERIFY(page.canGoBack());
+    QVERIFY(!page.canGoForward());
+
+    page.navigateTo(sub2);
+    QCOMPARE(page.currentPath(), sub2);
+    QVERIFY(page.canGoBack());
+    QVERIFY(!page.canGoForward());
+
+    page.goBack();
+    QCOMPARE(page.currentPath(), sub1);
+    QVERIFY(page.canGoBack());
+    QVERIFY(page.canGoForward());
+
+    page.goBack();
+    QCOMPARE(page.currentPath(), root);
+    QVERIFY(!page.canGoBack());
+    QVERIFY(page.canGoForward());
+
+    page.goForward();
+    QCOMPARE(page.currentPath(), sub1);
+    QVERIFY(page.canGoBack());
+    QVERIFY(page.canGoForward());
+
+    page.goForward();
+    QCOMPARE(page.currentPath(), sub2);
+    QVERIFY(page.canGoBack());
+    QVERIFY(!page.canGoForward());
 }
 
 QTEST_MAIN(TestSelection)

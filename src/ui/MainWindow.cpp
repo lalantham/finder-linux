@@ -25,6 +25,7 @@
 #include <QUrl>
 #include <QStorageInfo>
 #include <QWidgetAction>
+#include <QMouseEvent>
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -39,6 +40,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_opEngine, &FileOperationEngine::conflictEncountered, this, &MainWindow::onOperationConflict);
     connect(m_opEngine, &FileOperationEngine::operationFinished, this, &MainWindow::onOperationFinished);
     connect(m_progressDialog, &ProgressDialog::cancelRequested, m_opEngine, &FileOperationEngine::cancel);
+
+    qApp->installEventFilter(this);
 
     setupUi();
     setupMenusAndShortcuts();
@@ -68,6 +71,21 @@ void MainWindow::closeEvent(QCloseEvent* event)
     AppSettings::instance().setWindowState(saveState());
     AppSettings::instance().save();
     QMainWindow::closeEvent(event);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::BackButton) {
+            onNavigateBack();
+            return true;
+        } else if (me->button() == Qt::ForwardButton) {
+            onNavigateForward();
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::setupUi()
@@ -131,6 +149,22 @@ void MainWindow::setupUi()
 
     m_tabManager = new TabManager(m_mainSplitter);
     connect(m_tabManager, &TabManager::activePageChanged, this, &MainWindow::onActivePageChanged);
+    connect(m_tabManager, &TabManager::activePagePathChanged, this, [this](TabPage* page, const QString& p) {
+        if (page == m_tabManager->currentPage()) {
+            m_toolbar->setPath(p);
+            m_sidebar->selectPath(p);
+            updateNavigationState();
+            updateStatusInfo();
+        }
+    });
+    connect(m_tabManager, &TabManager::activePageHistoryChanged, this, [this](TabPage* page) {
+        if (page == m_tabManager->currentPage()) {
+            updateNavigationState();
+        }
+    });
+    connect(m_tabManager, &TabManager::activePageStatusChanged, this, [this](const QString& msg) {
+        m_statusItemCountLabel->setText(msg);
+    });
     connect(m_tabManager, &TabManager::quickLookRequested, this, [this](const QString& p) {
         m_quickLookDialog->showFile(p);
         m_quickLookDialog->show();
@@ -229,8 +263,14 @@ void MainWindow::setupMenusAndShortcuts()
 
     // Go Menu
     auto* goMenu = mBar->addMenu(QStringLiteral("&Go"));
-    goMenu->addAction(QStringLiteral("Back"), QKeySequence(Qt::ALT | Qt::Key_Left), this, &MainWindow::onNavigateBack);
-    goMenu->addAction(QStringLiteral("Forward"), QKeySequence(Qt::ALT | Qt::Key_Right), this, &MainWindow::onNavigateForward);
+    m_backAction = goMenu->addAction(QStringLiteral("Back"), this, &MainWindow::onNavigateBack);
+    m_backAction->setShortcuts({QKeySequence(Qt::ALT | Qt::Key_Left), QKeySequence::Back});
+    m_backAction->setEnabled(false);
+
+    m_fwdAction = goMenu->addAction(QStringLiteral("Forward"), this, &MainWindow::onNavigateForward);
+    m_fwdAction->setShortcuts({QKeySequence(Qt::ALT | Qt::Key_Right), QKeySequence::Forward});
+    m_fwdAction->setEnabled(false);
+
     goMenu->addAction(QStringLiteral("Enclosing Folder"), QKeySequence(Qt::ALT | Qt::Key_Up), this, &MainWindow::onNavigateUp);
     goMenu->addSeparator();
     goMenu->addAction(QStringLiteral("Go to Folder..."), QKeySequence(Qt::CTRL | Qt::Key_L), this, [this]() {
@@ -313,10 +353,6 @@ void MainWindow::onActivePageChanged(TabPage* page)
     m_toolbar->setViewMode(page->viewMode());
     m_sidebar->selectPath(page->currentPath());
 
-    connect(page, &TabPage::statusMessageChanged, this, [this](const QString& msg) {
-        m_statusItemCountLabel->setText(msg);
-    });
-
     updateNavigationState();
     updateStatusInfo();
 }
@@ -324,8 +360,17 @@ void MainWindow::onActivePageChanged(TabPage* page)
 void MainWindow::updateNavigationState()
 {
     if (TabPage* page = m_tabManager->currentPage()) {
-        m_toolbar->setCanGoBack(page->canGoBack());
-        m_toolbar->setCanGoForward(page->canGoForward());
+        bool canBack = page->canGoBack();
+        bool canFwd = page->canGoForward();
+        m_toolbar->setCanGoBack(canBack);
+        m_toolbar->setCanGoForward(canFwd);
+        if (m_backAction) m_backAction->setEnabled(canBack);
+        if (m_fwdAction) m_fwdAction->setEnabled(canFwd);
+    } else {
+        m_toolbar->setCanGoBack(false);
+        m_toolbar->setCanGoForward(false);
+        if (m_backAction) m_backAction->setEnabled(false);
+        if (m_fwdAction) m_fwdAction->setEnabled(false);
     }
 }
 

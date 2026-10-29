@@ -23,6 +23,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
     // Navigation
@@ -91,6 +92,8 @@ private:
     ProgressDialog* m_progressDialog{nullptr};
     QuickLookDialog* m_quickLookDialog{nullptr};
     QAction* m_toggleHiddenAction{nullptr};
+    QAction* m_backAction{nullptr};
+    QAction* m_fwdAction{nullptr};
 
     QStringList m_clipboardPaths;
     bool m_isCutOperation{false};

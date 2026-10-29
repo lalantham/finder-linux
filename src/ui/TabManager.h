@@ -16,6 +16,9 @@ public:
 
 signals:
     void activePageChanged(TabPage* page);
+    void activePagePathChanged(TabPage* page, const QString& path);
+    void activePageHistoryChanged(TabPage* page);
+    void activePageStatusChanged(const QString& message);
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);

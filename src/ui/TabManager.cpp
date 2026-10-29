@@ -22,7 +22,22 @@ TabPage* TabManager::createTab(const QString& path)
     int idx = addTab(page, tabTitle);
     setCurrentIndex(idx);
 
-    connect(page, &TabPage::pathChanged, this, &TabManager::onPagePathChanged);
+    connect(page, &TabPage::pathChanged, this, [this, page](const QString& p) {
+        onPagePathChanged(p);
+        if (page == currentPage()) {
+            emit activePagePathChanged(page, p);
+        }
+    });
+    connect(page, &TabPage::historyChanged, this, [this, page]() {
+        if (page == currentPage()) {
+            emit activePageHistoryChanged(page);
+        }
+    });
+    connect(page, &TabPage::statusMessageChanged, this, [this, page](const QString& msg) {
+        if (page == currentPage()) {
+            emit activePageStatusChanged(msg);
+        }
+    });
     connect(page, &TabPage::quickLookRequested, this, &TabManager::quickLookRequested);
     connect(page, &TabPage::getInfoRequested, this, &TabManager::getInfoRequested);
     connect(page, &TabPage::contextMenuRequested, this, &TabManager::contextMenuRequested);
@@ -70,7 +85,12 @@ void TabManager::onTabCloseRequested(int index)
 
 void TabManager::onCurrentChanged(int /*index*/)
 {
-    emit activePageChanged(currentPage());
+    TabPage* page = currentPage();
+    emit activePageChanged(page);
+    if (page) {
+        emit activePagePathChanged(page, page->currentPath());
+        emit activePageHistoryChanged(page);
+    }
 }
 
 void TabManager::onPagePathChanged(const QString& path)

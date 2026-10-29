@@ -114,22 +114,30 @@ void TabPage::navigateTo(const QString& path, bool recordHistory)
 
 void TabPage::goBack()
 {
-    if (m_backHistory.isEmpty()) return;
-    QString prev = m_backHistory.takeLast();
-    m_forwardHistory.append(m_currentPath);
+    while (!m_backHistory.isEmpty()) {
+        QString prev = m_backHistory.takeLast();
+        if (QDir(prev).exists()) {
+            m_forwardHistory.append(m_currentPath);
+            emit historyChanged();
+            navigateTo(prev, false);
+            return;
+        }
+    }
     emit historyChanged();
-
-    navigateTo(prev, false);
 }
 
 void TabPage::goForward()
 {
-    if (m_forwardHistory.isEmpty()) return;
-    QString next = m_forwardHistory.takeLast();
-    m_backHistory.append(m_currentPath);
+    while (!m_forwardHistory.isEmpty()) {
+        QString next = m_forwardHistory.takeLast();
+        if (QDir(next).exists()) {
+            m_backHistory.append(m_currentPath);
+            emit historyChanged();
+            navigateTo(next, false);
+            return;
+        }
+    }
     emit historyChanged();
-
-    navigateTo(next, false);
 }
 
 void TabPage::goUp()
