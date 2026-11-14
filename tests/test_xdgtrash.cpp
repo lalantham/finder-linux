@@ -208,8 +208,7 @@ void TestXdgTrash::testPurgeOlderThan()
             ? QStringLiteral("DeletionDate=") + oldDate
             : line);
     }
-    info.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate);
-    QVERIFY(info.isOpen());
+    QVERIFY(info.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate));
     info.write(updated.join(QLatin1Char('\n')).toUtf8());
     info.close();
 

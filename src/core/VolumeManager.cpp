@@ -267,9 +267,12 @@ QVector<VolumeEntry> VolumeManager::mountedVolumes()
         if (!storage.isValid() || !storage.isReady()) continue;
         QString path = storage.rootPath();
 
-        // Skip pseudo filesystems (sysfs, proc, devtmpfs, cgroup, overlay, etc.)
+        // Skip pseudo filesystems (sysfs, proc, devtmpfs, cgroup, overlay, etc.).
+        // The root volume is always kept: containers and live systems commonly
+        // expose it as overlay/squashfs, and it must still appear in the sidebar.
         QString fsType = QString::fromLatin1(storage.fileSystemType()).toLower();
-        if (fsType == QStringLiteral("tmpfs") ||
+        const bool isRootPath = (path == QStringLiteral("/"));
+        if (!isRootPath && (fsType == QStringLiteral("tmpfs") ||
             fsType == QStringLiteral("devtmpfs") ||
             fsType == QStringLiteral("proc") ||
             fsType == QStringLiteral("sysfs") ||
@@ -287,7 +290,7 @@ QVector<VolumeEntry> VolumeManager::mountedVolumes()
             fsType == QStringLiteral("configfs") ||
             fsType == QStringLiteral("debugfs") ||
             fsType == QStringLiteral("fusectl") ||
-            fsType == QStringLiteral("mqueue")) {
+            fsType == QStringLiteral("mqueue"))) {
             continue;
         }
 
