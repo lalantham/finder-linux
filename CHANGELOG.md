@@ -19,6 +19,12 @@ All notable changes to File Manager for Linux are documented here.
 - Added an **Index** search toggle that appears when a supported index is available.
 - Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
 
+### Custom tag management
+- Added custom tag creation, color selection, rename, and delete.
+- Added a **Manage Tags** dialog from the sidebar and toolbar tag menu.
+- Custom tags participate in sidebar counts, file tags, Get Info, and tag-based search.
+- Tag changes are written to `user.xdg.tags` and the persistent tag registry.
+
 ### Quick Look previews
 - Added rendered Markdown and HTML previews.
 - Added archive contents listing inside Quick Look.

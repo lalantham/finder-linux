@@ -3,6 +3,7 @@
 #include "DesktopAppsManager.h"
 #include "FileItem.h"
 #include "SidebarSettingsDialog.h"
+#include "TagManagementDialog.h"
 #include "TagManager.h"
 #include "ThemeManager.h"
 #include "XdgTrash.h"
@@ -264,6 +265,7 @@ Sidebar::Sidebar(QWidget* parent) : QTreeWidget(parent) {
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
     connect(this, &QTreeWidget::itemActivated, this, &Sidebar::onItemClicked);
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
+    connect(&TagManager::instance(), &TagManager::tagDefinitionsChanged, this, &Sidebar::refresh);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
             [this]() { viewport()->update(); });
 
@@ -571,7 +573,7 @@ void Sidebar::populateTags() {
     m_tagsHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
     m_tagsHeader->setFlags(Qt::ItemIsEnabled);
 
-    for (const auto& tagInfo : TagManager::standardTags()) {
+    for (const auto& tagInfo : TagManager::allTags()) {
         auto* item = new QTreeWidgetItem(m_tagsHeader);
         int count = TagManager::instance().tagCount(tagInfo.name);
         QString label = tagInfo.name;
@@ -858,6 +860,15 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("folder-new")),
                            QStringLiteral("New Smart Folder..."), this,
                            &Sidebar::newSmartFolderRequested);
+            menu.exec(event->globalPos());
+            return;
+        }
+
+        if (headerType == 3) {
+            menu.addAction(QStringLiteral("Manage Tags..."), this, [this]() {
+                TagManagementDialog dialog(this);
+                dialog.exec();
+            });
             menu.exec(event->globalPos());
             return;
         }

@@ -899,7 +899,7 @@ void GetInfoDialog::setupTagsSection(QVBoxLayout* layout, const QStringList& pat
     tagLayout->setSpacing(8);
     tagLayout->setContentsMargins(12, 10, 12, 10);
 
-    for (const auto& tagInfo : TagManager::standardTags()) {
+    for (const auto& tagInfo : TagManager::allTags()) {
         bool allHaveTag = !paths.isEmpty();
         for (const QString& path : paths) {
             if (!TagManager::instance().hasTag(path, tagInfo.name)) {

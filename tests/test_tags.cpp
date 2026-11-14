@@ -1,8 +1,8 @@
-#include <QTest>
-#include <QTemporaryDir>
-#include <QFile>
-#include "TagManager.h"
 #include "FileItem.h"
+#include "TagManager.h"
+#include <QFile>
+#include <QTemporaryDir>
+#include <QTest>
 
 class TestTags : public QObject {
     Q_OBJECT
@@ -14,24 +14,22 @@ private slots:
     void testAddRemoveToggleTags();
     void testFileItemTags();
     void testTagQueries();
+    void testCustomTagLifecycle();
 
 private:
     std::unique_ptr<QTemporaryDir> m_tempDir;
 };
 
-void TestTags::initTestCase()
-{
+void TestTags::initTestCase() {
     m_tempDir = std::make_unique<QTemporaryDir>();
     QVERIFY(m_tempDir->isValid());
 }
 
-void TestTags::cleanupTestCase()
-{
+void TestTags::cleanupTestCase() {
     m_tempDir.reset();
 }
 
-void TestTags::testStandardTags()
-{
+void TestTags::testStandardTags() {
     const auto& tags = TagManager::standardTags();
     QCOMPARE(tags.size(), 7);
     QCOMPARE(tags.at(0).name, QStringLiteral("Red"));
@@ -46,8 +44,7 @@ void TestTags::testStandardTags()
     QVERIFY(!TagManager::tagDotIcon(QStringLiteral("Blue")).isNull());
 }
 
-void TestTags::testAddRemoveToggleTags()
-{
+void TestTags::testAddRemoveToggleTags() {
     QString filePath = m_tempDir->filePath("tagged_doc.txt");
     QFile file(filePath);
     QVERIFY(file.open(QIODevice::WriteOnly));
@@ -80,8 +77,7 @@ void TestTags::testAddRemoveToggleTags()
     QVERIFY(tm.tagsForFile(filePath).isEmpty());
 }
 
-void TestTags::testFileItemTags()
-{
+void TestTags::testFileItemTags() {
     QString filePath = m_tempDir->filePath("file_item_test.txt");
     QFile file(filePath);
     QVERIFY(file.open(QIODevice::WriteOnly));
@@ -96,8 +92,7 @@ void TestTags::testFileItemTags()
     QVERIFY(item.tags().contains("Purple"));
 }
 
-void TestTags::testTagQueries()
-{
+void TestTags::testTagQueries() {
     QString f1 = m_tempDir->filePath("query_1.txt");
     QString f2 = m_tempDir->filePath("query_2.txt");
     QFile file1(f1);
@@ -114,6 +109,42 @@ void TestTags::testTagQueries()
     QVERIFY(yellowFiles.contains(f1));
     QVERIFY(yellowFiles.contains(f2));
     QVERIFY(TagManager::instance().tagCount("Yellow") >= 2);
+}
+
+void TestTags::testCustomTagLifecycle() {
+    auto& tm = TagManager::instance();
+    const QString tagName = QStringLiteral("TestCustomTag");
+    const QString renamed = QStringLiteral("TestCustomTagRenamed");
+    tm.removeTagDefinition(tagName);
+    tm.removeTagDefinition(renamed);
+
+    QString error;
+    QVERIFY2(tm.addCustomTag(tagName, QColor(QStringLiteral("#12ab34")), &error),
+             qPrintable(error));
+    bool found = false;
+    for (const TagInfo& tag : TagManager::allTags()) {
+        if (tag.name == tagName) {
+            found = true;
+            QCOMPARE(tag.color, QColor(QStringLiteral("#12ab34")));
+            break;
+        }
+    }
+    QVERIFY(found);
+
+    const QString filePath = m_tempDir->filePath(QStringLiteral("custom_tag.txt"));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+    QVERIFY(tm.addTag(filePath, tagName));
+    QVERIFY(tm.hasTag(filePath, tagName));
+
+    QVERIFY2(tm.renameTag(tagName, renamed, &error), qPrintable(error));
+    QVERIFY(!tm.hasTag(filePath, tagName));
+    QVERIFY(tm.hasTag(filePath, renamed));
+
+    QVERIFY2(tm.removeTagDefinition(renamed, &error), qPrintable(error));
+    QVERIFY(!tm.hasTag(filePath, renamed));
 }
 
 QTEST_MAIN(TestTags)

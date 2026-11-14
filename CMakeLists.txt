@@ -103,6 +103,8 @@ set(FINDER_UI_SOURCES
     src/ui/PreviewPane.h
     src/ui/SmartFolderDialog.cpp
     src/ui/SmartFolderDialog.h
+    src/ui/TagManagementDialog.cpp
+    src/ui/TagManagementDialog.h
     src/ui/TabPage.cpp
     src/ui/TabPage.h
     src/ui/TabManager.cpp

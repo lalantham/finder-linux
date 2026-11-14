@@ -15,6 +15,7 @@
 #include "RecentFilesManager.h"
 #include "ServiceMenuManager.h"
 #include "SmartFolderDialog.h"
+#include "TagManagementDialog.h"
 #include "TagManager.h"
 #include "TerminalPanel.h"
 #include "ThemeManager.h"
@@ -504,11 +505,15 @@ void MainWindow::setupUi() {
                 page->refresh();
         }
     });
+    connect(m_toolbar, &Toolbar::manageTagsRequested, this, [this]() {
+        TagManagementDialog dialog(this);
+        dialog.exec();
+    });
     connect(m_toolbar, &Toolbar::clearTagsRequested, this, [this]() {
         if (TabPage* page = m_tabManager->currentPage()) {
             const QStringList paths = page->selectedFilePaths();
             for (const QString& path : paths) {
-                for (const auto& tag : TagManager::standardTags()) {
+                for (const auto& tag : TagManager::allTags()) {
                     TagManager::instance().removeTag(path, tag.name);
                 }
             }
@@ -3147,7 +3152,7 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
         tagLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
         tagRow->addWidget(tagLabel);
 
-        for (const auto& t : TagManager::standardTags()) {
+        for (const auto& t : TagManager::allTags()) {
             auto* dotBtn = new QToolButton(tagContainer);
             dotBtn->setFixedSize(18, 18);
             dotBtn->setCursor(Qt::PointingHandCursor);
@@ -3212,7 +3217,7 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
         // Tags submenu for keyboard accessibility
         auto* tagsMenu =
             menu.addMenu(QIcon::fromTheme(QStringLiteral("tag")), QStringLiteral("Tags"));
-        for (const auto& t : TagManager::standardTags()) {
+        for (const auto& t : TagManager::allTags()) {
             bool hasTag = false;
             for (const auto& sp : selectedPaths) {
                 if (TagManager::instance().hasTag(sp, t.name)) {

@@ -8,6 +8,8 @@
 #include <QToolBar>
 #include <QToolButton>
 
+class QMenu;
+
 class Toolbar : public QToolBar {
     Q_OBJECT
 
@@ -50,6 +52,7 @@ signals:
     void viewOptionsRequested();
     void tagRequested(const QString& tag);
     void clearTagsRequested();
+    void manageTagsRequested();
     void searchTextChanged(const QString& query);
 
 private slots:
@@ -57,6 +60,7 @@ private slots:
     void toggleSearch();
     void openSearch();
     void closeSearch();
+    void rebuildTagMenu();
 
 private:
     void setupNavigationControls();
@@ -81,6 +85,7 @@ private:
     // Action buttons
     QToolButton* m_viewOptionsBtn{nullptr};
     QToolButton* m_tagBtn{nullptr};
+    QMenu* m_tagMenu{nullptr};
     QToolButton* m_moreBtn{nullptr};
     QAction* m_hiddenAction{nullptr};
 

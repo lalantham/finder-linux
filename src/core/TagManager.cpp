@@ -2,69 +2,101 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QStandardPaths>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
+#include <QJsonValue>
 #include <QPainter>
 #include <QPixmap>
-#include <sys/xattr.h>
+#include <QStandardPaths>
 #include <cstring>
+#include <sys/xattr.h>
 
-static const QList<TagInfo> s_standardTags = {
-    {QStringLiteral("Red"),    QColor(0xff, 0x3b, 0x30)},
-    {QStringLiteral("Orange"), QColor(0xff, 0x95, 0x00)},
-    {QStringLiteral("Yellow"), QColor(0xff, 0xcc, 0x00)},
-    {QStringLiteral("Green"),  QColor(0x34, 0xc7, 0x59)},
-    {QStringLiteral("Blue"),   QColor(0x00, 0x7a, 0xff)},
-    {QStringLiteral("Purple"), QColor(0xaf, 0x52, 0xde)},
-    {QStringLiteral("Gray"),   QColor(0x8e, 0x8e, 0x93)}
-};
+static const QString s_definitionsKey = QStringLiteral("__tag_definitions__");
 
-TagManager& TagManager::instance()
-{
+static const QList<TagInfo> s_standardTags = {{QStringLiteral("Red"), QColor(0xff, 0x3b, 0x30)},
+                                              {QStringLiteral("Orange"), QColor(0xff, 0x95, 0x00)},
+                                              {QStringLiteral("Yellow"), QColor(0xff, 0xcc, 0x00)},
+                                              {QStringLiteral("Green"), QColor(0x34, 0xc7, 0x59)},
+                                              {QStringLiteral("Blue"), QColor(0x00, 0x7a, 0xff)},
+                                              {QStringLiteral("Purple"), QColor(0xaf, 0x52, 0xde)},
+                                              {QStringLiteral("Gray"), QColor(0x8e, 0x8e, 0x93)}};
+
+TagManager& TagManager::instance() {
     static TagManager inst;
     return inst;
 }
 
-TagManager::TagManager()
-{
-    QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) + QStringLiteral("/FinderLinux");
+TagManager::TagManager() {
+    QString configDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) +
+                        QStringLiteral("/FinderLinux");
     QDir().mkpath(configDir);
     m_registryPath = configDir + QStringLiteral("/tags.json");
 
     loadRegistry();
 }
 
-TagManager::~TagManager()
-{
+TagManager::~TagManager() {
     saveRegistry();
 }
 
-const QList<TagInfo>& TagManager::standardTags()
-{
+const QList<TagInfo>& TagManager::standardTags() {
     return s_standardTags;
 }
 
-QColor TagManager::colorForTag(const QString& tag)
-{
+QList<TagInfo> TagManager::allTags() {
+    TagManager& manager = instance();
+    QMutexLocker locker(&manager.m_mutex);
+    QList<TagInfo> result = s_standardTags;
+    QSet<QString> seen;
+    for (const TagInfo& tag : s_standardTags) {
+        seen.insert(tag.name.toCaseFolded());
+    }
+    for (const TagInfo& tag : manager.m_customTags) {
+        if (!seen.contains(tag.name.toCaseFolded())) {
+            result.append(tag);
+            seen.insert(tag.name.toCaseFolded());
+        }
+    }
+    for (auto it = manager.m_tagFiles.cbegin(); it != manager.m_tagFiles.cend(); ++it) {
+        if (it.value().isEmpty())
+            continue;
+        if (!seen.contains(it.key().toCaseFolded())) {
+            int hue = static_cast<int>(qHash(it.key()) % 360);
+            result.append({it.key(), QColor::fromHsv(hue, 180, 230)});
+            seen.insert(it.key().toCaseFolded());
+        }
+    }
+    return result;
+}
+
+QColor TagManager::colorForTag(const QString& tag) {
+    TagManager& manager = instance();
+    QMutexLocker locker(&manager.m_mutex);
     for (const auto& t : s_standardTags) {
         if (t.name.compare(tag, Qt::CaseInsensitive) == 0) {
             return t.color;
         }
     }
-    // Fallback based on name hash if custom tag
+    for (const auto& t : manager.m_customTags) {
+        if (t.name.compare(tag, Qt::CaseInsensitive) == 0) {
+            return t.color;
+        }
+    }
     int hue = static_cast<int>(qHash(tag) % 360);
     return QColor::fromHsv(hue, 180, 230);
 }
 
-QIcon TagManager::tagDotIcon(const QString& tag, int size)
-{
+QList<TagInfo> TagManager::customTags() const {
+    QMutexLocker locker(&m_mutex);
+    return m_customTags;
+}
+
+QIcon TagManager::tagDotIcon(const QString& tag, int size) {
     return tagDotIcon(colorForTag(tag), size);
 }
 
-QIcon TagManager::tagDotIcon(const QColor& color, int size)
-{
+QIcon TagManager::tagDotIcon(const QColor& color, int size) {
     QPixmap pix(size, size);
     pix.fill(Qt::transparent);
 
@@ -79,18 +111,21 @@ QIcon TagManager::tagDotIcon(const QColor& color, int size)
     return QIcon(pix);
 }
 
-QStringList TagManager::readXattr(const QString& path)
-{
+QStringList TagManager::readXattr(const QString& path) {
     QByteArray localPath = QFile::encodeName(path);
     ssize_t size = getxattr(localPath.constData(), "user.xdg.tags", nullptr, 0);
-    if (size <= 0) return {};
+    if (size <= 0)
+        return {};
 
     QByteArray buf(static_cast<int>(size), '\0');
-    ssize_t readBytes = getxattr(localPath.constData(), "user.xdg.tags", buf.data(), static_cast<size_t>(size));
-    if (readBytes <= 0) return {};
+    ssize_t readBytes =
+        getxattr(localPath.constData(), "user.xdg.tags", buf.data(), static_cast<size_t>(size));
+    if (readBytes <= 0)
+        return {};
 
     QString raw = QString::fromUtf8(buf.constData(), static_cast<int>(readBytes)).trimmed();
-    if (raw.isEmpty()) return {};
+    if (raw.isEmpty())
+        return {};
 
     QStringList list;
     if (raw.contains(QLatin1Char('\n'))) {
@@ -109,8 +144,7 @@ QStringList TagManager::readXattr(const QString& path)
     return cleanList;
 }
 
-bool TagManager::writeXattr(const QString& path, const QStringList& tags)
-{
+bool TagManager::writeXattr(const QString& path, const QStringList& tags) {
     QByteArray localPath = QFile::encodeName(path);
     if (tags.isEmpty()) {
         removexattr(localPath.constData(), "user.xdg.tags");
@@ -118,21 +152,32 @@ bool TagManager::writeXattr(const QString& path, const QStringList& tags)
     }
 
     QByteArray tagData = tags.join(QLatin1Char(',')).toUtf8();
-    int ret = setxattr(localPath.constData(), "user.xdg.tags", tagData.constData(), static_cast<size_t>(tagData.size()), 0);
+    int ret = setxattr(localPath.constData(), "user.xdg.tags", tagData.constData(),
+                       static_cast<size_t>(tagData.size()), 0);
     return (ret == 0);
 }
 
-void TagManager::loadRegistry()
-{
+void TagManager::loadRegistry() {
     QFile f(m_registryPath);
-    if (!f.open(QIODevice::ReadOnly)) return;
+    if (!f.open(QIODevice::ReadOnly))
+        return;
 
     QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-    if (!doc.isObject()) return;
+    if (!doc.isObject())
+        return;
 
     QJsonObject root = doc.object();
+    const QJsonObject definitions = root.value(s_definitionsKey).toObject();
+    for (auto it = definitions.begin(); it != definitions.end(); ++it) {
+        const QColor color(it.value().toString());
+        if (color.isValid()) {
+            m_customTags.append({it.key(), color});
+        }
+    }
     for (auto it = root.begin(); it != root.end(); ++it) {
         QString path = it.key();
+        if (path == s_definitionsKey)
+            continue;
         QJsonArray arr = it.value().toArray();
         QStringList tags;
         for (const auto& v : arr) {
@@ -147,8 +192,7 @@ void TagManager::loadRegistry()
     }
 }
 
-void TagManager::saveRegistry()
-{
+void TagManager::saveRegistry() {
     QJsonObject root;
     for (auto it = m_fileTags.begin(); it != m_fileTags.end(); ++it) {
         if (QFileInfo::exists(it.key()) && !it.value().isEmpty()) {
@@ -159,6 +203,11 @@ void TagManager::saveRegistry()
             root.insert(it.key(), arr);
         }
     }
+    QJsonObject definitions;
+    for (const TagInfo& tag : m_customTags) {
+        definitions.insert(tag.name, tag.color.name());
+    }
+    root.insert(s_definitionsKey, definitions);
 
     QFile f(m_registryPath);
     if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -166,8 +215,7 @@ void TagManager::saveRegistry()
     }
 }
 
-QStringList TagManager::tagsForFile(const QString& path)
-{
+QStringList TagManager::tagsForFile(const QString& path) {
     QString clean = QDir::cleanPath(path);
     QMutexLocker locker(&m_mutex);
 
@@ -186,15 +234,14 @@ QStringList TagManager::tagsForFile(const QString& path)
     return m_fileTags.value(clean);
 }
 
-bool TagManager::hasTag(const QString& path, const QString& tag)
-{
+bool TagManager::hasTag(const QString& path, const QString& tag) {
     return tagsForFile(path).contains(tag, Qt::CaseInsensitive);
 }
 
-bool TagManager::setTagsForFile(const QString& path, const QStringList& tags)
-{
+bool TagManager::setTagsForFile(const QString& path, const QStringList& tags) {
     QString clean = QDir::cleanPath(path);
-    if (!QFileInfo::exists(clean)) return false;
+    if (!QFileInfo::exists(clean))
+        return false;
 
     {
         QMutexLocker locker(&m_mutex);
@@ -223,18 +270,17 @@ bool TagManager::setTagsForFile(const QString& path, const QStringList& tags)
     return true;
 }
 
-bool TagManager::addTag(const QString& path, const QString& tag)
-{
+bool TagManager::addTag(const QString& path, const QString& tag) {
     QStringList curr = tagsForFile(path);
     for (const auto& t : curr) {
-        if (t.compare(tag, Qt::CaseInsensitive) == 0) return true; // Already has it
+        if (t.compare(tag, Qt::CaseInsensitive) == 0)
+            return true; // Already has it
     }
     curr.append(tag);
     return setTagsForFile(path, curr);
 }
 
-bool TagManager::removeTag(const QString& path, const QString& tag)
-{
+bool TagManager::removeTag(const QString& path, const QString& tag) {
     QStringList curr = tagsForFile(path);
     QStringList updated;
     for (const auto& t : curr) {
@@ -245,8 +291,7 @@ bool TagManager::removeTag(const QString& path, const QString& tag)
     return setTagsForFile(path, updated);
 }
 
-bool TagManager::toggleTag(const QString& path, const QString& tag)
-{
+bool TagManager::toggleTag(const QString& path, const QString& tag) {
     if (hasTag(path, tag)) {
         return removeTag(path, tag);
     } else {
@@ -254,13 +299,157 @@ bool TagManager::toggleTag(const QString& path, const QString& tag)
     }
 }
 
-bool TagManager::clearTags(const QString& path)
-{
+bool TagManager::clearTags(const QString& path) {
     return setTagsForFile(path, {});
 }
 
-QStringList TagManager::filesForTag(const QString& tag)
-{
+bool TagManager::addCustomTag(const QString& name, const QColor& color, QString* error) {
+    const QString clean = name.trimmed();
+    if (clean.isEmpty() || clean.contains(QLatin1Char(',')) || clean.contains(QLatin1Char('\n'))) {
+        if (error)
+            *error = QStringLiteral("Enter a valid tag name without commas or newlines.");
+        return false;
+    }
+    if (!color.isValid()) {
+        if (error)
+            *error = QStringLiteral("Choose a valid tag color.");
+        return false;
+    }
+
+    {
+        QMutexLocker locker(&m_mutex);
+        for (const TagInfo& tag : s_standardTags) {
+            if (tag.name.compare(clean, Qt::CaseInsensitive) == 0) {
+                if (error)
+                    *error = QStringLiteral("That tag already exists.");
+                return false;
+            }
+        }
+        for (const TagInfo& tag : m_customTags) {
+            if (tag.name.compare(clean, Qt::CaseInsensitive) == 0) {
+                if (error)
+                    *error = QStringLiteral("That tag already exists.");
+                return false;
+            }
+        }
+        m_customTags.append({clean, color});
+        saveRegistry();
+    }
+    emit tagDefinitionsChanged();
+    return true;
+}
+
+bool TagManager::renameTag(const QString& oldName, const QString& newName, QString* error) {
+    const QString clean = newName.trimmed();
+    if (clean.isEmpty() || clean.contains(QLatin1Char(',')) || clean.contains(QLatin1Char('\n'))) {
+        if (error)
+            *error = QStringLiteral("Enter a valid tag name.");
+        return false;
+    }
+
+    QStringList changedPaths;
+    {
+        QMutexLocker locker(&m_mutex);
+        int index = -1;
+        for (int i = 0; i < m_customTags.size(); ++i) {
+            if (m_customTags.at(i).name.compare(oldName, Qt::CaseInsensitive) == 0) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            if (error)
+                *error = QStringLiteral("Only custom tags can be renamed.");
+            return false;
+        }
+        for (const TagInfo& tag : s_standardTags) {
+            if (tag.name.compare(clean, Qt::CaseInsensitive) == 0) {
+                if (error)
+                    *error = QStringLiteral("That tag name is already in use.");
+                return false;
+            }
+        }
+        for (const TagInfo& tag : m_customTags) {
+            if (tag.name.compare(clean, Qt::CaseInsensitive) == 0 &&
+                tag.name.compare(oldName, Qt::CaseInsensitive) != 0) {
+                if (error)
+                    *error = QStringLiteral("That tag name is already in use.");
+                return false;
+            }
+        }
+        m_customTags[index].name = clean;
+
+        m_tagFiles.clear();
+        for (auto it = m_fileTags.begin(); it != m_fileTags.end(); ++it) {
+            QStringList tags = it.value();
+            bool changed = false;
+            for (QString& tag : tags) {
+                if (tag.compare(oldName, Qt::CaseInsensitive) == 0) {
+                    tag = clean;
+                    changed = true;
+                }
+            }
+            if (changed) {
+                it.value() = tags;
+                writeXattr(it.key(), tags);
+                changedPaths.append(it.key());
+            }
+            for (const QString& tag : tags)
+                m_tagFiles[tag].insert(it.key());
+        }
+        saveRegistry();
+    }
+
+    for (const QString& path : changedPaths) {
+        emit tagsChanged(path, tagsForFile(path));
+    }
+    emit tagDefinitionsChanged();
+    return true;
+}
+
+bool TagManager::removeTagDefinition(const QString& name, QString* error) {
+    QStringList changedPaths;
+    {
+        QMutexLocker locker(&m_mutex);
+        int index = -1;
+        for (int i = 0; i < m_customTags.size(); ++i) {
+            if (m_customTags.at(i).name.compare(name, Qt::CaseInsensitive) == 0) {
+                index = i;
+                break;
+            }
+        }
+        if (index < 0) {
+            if (error)
+                *error = QStringLiteral("Only custom tags can be deleted.");
+            return false;
+        }
+        m_customTags.removeAt(index);
+
+        m_tagFiles.clear();
+        for (auto it = m_fileTags.begin(); it != m_fileTags.end(); ++it) {
+            QStringList tags = it.value();
+            const qsizetype removed = tags.removeIf([&name](const QString& tag) {
+                return tag.compare(name, Qt::CaseInsensitive) == 0;
+            });
+            if (removed > 0) {
+                it.value() = tags;
+                writeXattr(it.key(), tags);
+                changedPaths.append(it.key());
+            }
+            for (const QString& tag : tags)
+                m_tagFiles[tag].insert(it.key());
+        }
+        saveRegistry();
+    }
+
+    for (const QString& path : changedPaths) {
+        emit tagsChanged(path, tagsForFile(path));
+    }
+    emit tagDefinitionsChanged();
+    return true;
+}
+
+QStringList TagManager::filesForTag(const QString& tag) {
     QMutexLocker locker(&m_mutex);
     QStringList result;
     for (const auto& path : m_tagFiles.value(tag)) {
@@ -271,8 +460,7 @@ QStringList TagManager::filesForTag(const QString& tag)
     return result;
 }
 
-int TagManager::tagCount(const QString& tag)
-{
+int TagManager::tagCount(const QString& tag) {
     QMutexLocker locker(&m_mutex);
     return static_cast<int>(m_tagFiles.value(tag).size());
 }

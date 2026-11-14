@@ -184,16 +184,10 @@ void Toolbar::setupActionButtons() {
     m_tagBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle());
     m_tagBtn->setPopupMode(QToolButton::InstantPopup);
     m_tagBtn->setToolTip(QStringLiteral("Tags"));
-    auto* tagMenu = new QMenu(m_tagBtn);
-    for (const auto& tagInfo : TagManager::standardTags()) {
-        auto* action = tagMenu->addAction(TagManager::tagDotIcon(tagInfo.color, 14), tagInfo.name);
-        connect(action, &QAction::triggered, this,
-                [this, name = tagInfo.name]() { emit tagRequested(name); });
-    }
-    tagMenu->addSeparator();
-    auto* clearTags = tagMenu->addAction(QStringLiteral("Clear Tags"));
-    connect(clearTags, &QAction::triggered, this, &Toolbar::clearTagsRequested);
-    m_tagBtn->setMenu(tagMenu);
+    m_tagMenu = new QMenu(m_tagBtn);
+    connect(m_tagMenu, &QMenu::aboutToShow, this, &Toolbar::rebuildTagMenu);
+    m_tagBtn->setMenu(m_tagMenu);
+    rebuildTagMenu();
     addWidget(m_tagBtn);
 
     m_moreBtn = new QToolButton(this);
@@ -229,6 +223,23 @@ void Toolbar::setupActionButtons() {
     connect(actTerminal, &QAction::triggered, this, &Toolbar::openTerminalRequested);
     m_moreBtn->setMenu(moreMenu);
     addWidget(m_moreBtn);
+}
+
+void Toolbar::rebuildTagMenu() {
+    if (!m_tagMenu)
+        return;
+    m_tagMenu->clear();
+    for (const TagInfo& tag : TagManager::allTags()) {
+        auto* action = m_tagMenu->addAction(TagManager::tagDotIcon(tag.color, 14), tag.name);
+        connect(action, &QAction::triggered, this,
+                [this, name = tag.name]() { emit tagRequested(name); });
+    }
+    m_tagMenu->addSeparator();
+    auto* clearTags = m_tagMenu->addAction(QStringLiteral("Clear Tags"));
+    connect(clearTags, &QAction::triggered, this, &Toolbar::clearTagsRequested);
+    m_tagMenu->addSeparator();
+    auto* manageTags = m_tagMenu->addAction(QStringLiteral("Manage Tags..."));
+    connect(manageTags, &QAction::triggered, this, &Toolbar::manageTagsRequested);
 }
 
 void Toolbar::setupSearch() {
