@@ -76,7 +76,12 @@ Designed as a native desktop application with genuine filesystem operations, res
 * Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, and related formats) are converted on demand through LibreOffice and rendered from a cached PDF. The first preview can take a few seconds; later previews are fast.
 * Video playback and audio playback with play/pause, seek slider, and elapsed/total time (Qt Multimedia, when available).
 * Previous (`◀`) and Next (`▶`) navigation arrows to flip through selected items.
-* PDF/Office page navigation with page count.
+* PDF/Office page navigation with page count and in-document text search.
+* Rendered Markdown and HTML previews.
+* Archive contents listing for ZIP/TAR and other supported formats.
+* Font specimen previews.
+* RAW/HEIC previews when ImageMagick is installed.
+* Open With directly from Quick Look.
 * Images open fitted to the preview window; zoom (`+` / `-`), fit/reset (`0`), rotate (`R`), and Ctrl+wheel zoom are available when needed.
 * Slideshow toggle (`S`) for multi-item previews.
 * Full-screen mode (`F11`).

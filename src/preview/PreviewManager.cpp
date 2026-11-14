@@ -219,6 +219,18 @@ bool PreviewManager::isOffice(const QString& path) const {
            name.startsWith(QStringLiteral("application/vnd.ms-"));
 }
 
+bool PreviewManager::isFont(const QString& path) const {
+    static const QSet<QString> fontExts = {QStringLiteral("ttf"), QStringLiteral("otf"),
+                                           QStringLiteral("ttc"), QStringLiteral("woff"),
+                                           QStringLiteral("woff2")};
+    if (fontExts.contains(QFileInfo(path).suffix().toLower()))
+        return true;
+    QMimeDatabase db;
+    return db.mimeTypeForFile(path, QMimeDatabase::MatchExtension)
+        .name()
+        .startsWith(QStringLiteral("font/"));
+}
+
 bool PreviewManager::isAudio(const QString& path) const {
     static const QSet<QString> audioExts = {
         QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("wav"), QStringLiteral("ogg"),
@@ -494,7 +506,31 @@ QImage PreviewManager::generateThumbnailImage(const QString& path, int bucket) {
     if (imageSize.isValid()) {
         reader.setScaledSize(imageSize.scaled(QSize(bucket, bucket), Qt::KeepAspectRatio));
     }
-    return reader.read();
+    const QImage image = reader.read();
+    if (!image.isNull())
+        return image;
+
+    // ImageMagick covers RAW, HEIC, and other formats not exposed by Qt plugins.
+    QString converter = QStandardPaths::findExecutable(QStringLiteral("magick"));
+    if (converter.isEmpty())
+        converter = QStandardPaths::findExecutable(QStringLiteral("convert"));
+    if (!converter.isEmpty()) {
+        QTemporaryFile tempFile(QDir::tempPath() + QStringLiteral("/finder_img_XXXXXX.png"));
+        tempFile.setAutoRemove(true);
+        if (tempFile.open()) {
+            const QString tempPath = tempFile.fileName();
+            tempFile.close();
+            QProcess process;
+            process.start(converter, {path, QStringLiteral("-thumbnail"),
+                                      QStringLiteral("%1x%1").arg(bucket), tempPath});
+            if (process.waitForFinished(6000) && process.exitCode() == 0) {
+                QImage converted(tempPath);
+                if (!converted.isNull())
+                    return converted;
+            }
+        }
+    }
+    return {};
 }
 
 QPixmap PreviewManager::getThumbnail(const QString& path, const QSize& targetSize) {
@@ -621,6 +657,27 @@ QPixmap PreviewManager::getPdfPreview(const QString& path, const QSize& targetSi
     Q_UNUSED(targetSize)
     Q_UNUSED(page)
     return {};
+#endif
+}
+
+int PreviewManager::findPdfPage(const QString& path, const QString& text) const {
+#ifdef HAVE_POPPLER
+    if (text.trimmed().isEmpty())
+        return -1;
+    std::unique_ptr<Poppler::Document> doc(Poppler::Document::load(path));
+    if (!doc || doc->isLocked())
+        return -1;
+    for (int page = 0; page < doc->numPages(); ++page) {
+        std::unique_ptr<Poppler::Page> documentPage(doc->page(page));
+        if (documentPage && documentPage->text(QRectF()).contains(text, Qt::CaseInsensitive)) {
+            return page;
+        }
+    }
+    return -1;
+#else
+    Q_UNUSED(path)
+    Q_UNUSED(text)
+    return -1;
 #endif
 }
 

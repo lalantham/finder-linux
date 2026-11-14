@@ -23,6 +23,7 @@ public:
     QPixmap getPdfPreview(const QString& path, const QSize& targetSize = QSize(600, 800),
                           int page = 0);
     [[nodiscard]] int pdfPageCount(const QString& path) const;
+    [[nodiscard]] int findPdfPage(const QString& path, const QString& text) const;
     // Convert an Office document to a cached PDF on demand. Blocking; use
     // requestOfficePreview() from UI code to keep the event loop responsive.
     QString officePdfPath(const QString& path, QString* error = nullptr);
@@ -34,6 +35,7 @@ public:
     [[nodiscard]] bool isVideo(const QString& path) const;
     [[nodiscard]] bool isAudio(const QString& path) const;
     [[nodiscard]] bool isOffice(const QString& path) const;
+    [[nodiscard]] bool isFont(const QString& path) const;
 
 signals:
     void thumbnailReady(const QString& path);

@@ -1,13 +1,13 @@
-#include <QTest>
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QFile>
-#include <QDir>
-#include <sys/stat.h>
 #include "ArchiveService.h"
 #include "FileOperationEngine.h"
+#include <QDir>
+#include <QFile>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTest>
 #include <archive.h>
 #include <archive_entry.h>
+#include <sys/stat.h>
 
 class TestArchives : public QObject {
     Q_OBJECT
@@ -26,8 +26,7 @@ private slots:
     void testCompressFailureKeepsExistingArchive();
 };
 
-void TestArchives::testIsArchive()
-{
+void TestArchives::testIsArchive() {
     QVERIFY(ArchiveService::isArchive(QStringLiteral("/path/to/archive.zip")));
     QVERIFY(ArchiveService::isArchive(QStringLiteral("/path/to/archive.tar.gz")));
     QVERIFY(ArchiveService::isArchive(QStringLiteral("/path/to/archive.tar.xz")));
@@ -38,8 +37,7 @@ void TestArchives::testIsArchive()
     QVERIFY(!ArchiveService::isArchive(QStringLiteral("/path/to/folder")));
 }
 
-void TestArchives::testNamingHelpers()
-{
+void TestArchives::testNamingHelpers() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -52,15 +50,16 @@ void TestArchives::testNamingHelpers()
     QString singleSuggested = ArchiveService::suggestedArchiveName({file1}, QStringLiteral("zip"));
     QCOMPARE(QFileInfo(singleSuggested).fileName(), QStringLiteral("my_doc.txt.zip"));
 
-    QString multiSuggested = ArchiveService::suggestedArchiveName({file1, temp.path()}, QStringLiteral("tar.gz"));
+    QString multiSuggested =
+        ArchiveService::suggestedArchiveName({file1, temp.path()}, QStringLiteral("tar.gz"));
     QCOMPARE(QFileInfo(multiSuggested).fileName(), QStringLiteral("Archive.tar.gz"));
 
-    QString extractDir = ArchiveService::suggestedExtractDir(temp.filePath(QStringLiteral("Photos.zip")));
+    QString extractDir =
+        ArchiveService::suggestedExtractDir(temp.filePath(QStringLiteral("Photos.zip")));
     QCOMPARE(QFileInfo(extractDir).fileName(), QStringLiteral("Photos"));
 }
 
-void TestArchives::testZipCompressAndExtract()
-{
+void TestArchives::testZipCompressAndExtract() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -88,6 +87,19 @@ void TestArchives::testZipCompressAndExtract()
     QVERIFY(QFile::exists(zipPath));
     QVERIFY(QFileInfo(zipPath).size() > 0);
 
+    QVector<ArchiveEntryInfo> entries;
+    QVERIFY2(ArchiveService::listEntries(zipPath, &entries), qPrintable(error));
+    bool foundA = false;
+    bool foundB = false;
+    for (const ArchiveEntryInfo& entry : entries) {
+        if (entry.path.endsWith(QStringLiteral("/a.txt")))
+            foundA = true;
+        if (entry.path.endsWith(QStringLiteral("/b.txt")))
+            foundB = true;
+    }
+    QVERIFY(foundA);
+    QVERIFY(foundB);
+
     // Extract
     QString extractDest = temp.filePath(QStringLiteral("extracted_folder"));
     bool extOk = ArchiveService::extract(zipPath, extractDest, nullptr, nullptr, &error);
@@ -101,8 +113,7 @@ void TestArchives::testZipCompressAndExtract()
     QCOMPARE(readA.readAll(), QByteArray("Sample content for file A"));
 }
 
-void TestArchives::testTarGzCompressAndExtract()
-{
+void TestArchives::testTarGzCompressAndExtract() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -129,8 +140,7 @@ void TestArchives::testTarGzCompressAndExtract()
     QCOMPARE(readBack.readAll(), QByteArray("Testing tar gzip compression"));
 }
 
-void TestArchives::testZipPasswordEncryption()
-{
+void TestArchives::testZipPasswordEncryption() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -142,22 +152,21 @@ void TestArchives::testZipPasswordEncryption()
 
     const QString archivePath = temp.filePath(QStringLiteral("secret.zip"));
     QString error;
-    QVERIFY2(ArchiveService::compress({source}, archivePath, nullptr, nullptr,
-                                     &error, 9, QStringLiteral("hunter2")),
+    QVERIFY2(ArchiveService::compress({source}, archivePath, nullptr, nullptr, &error, 9,
+                                      QStringLiteral("hunter2")),
              qPrintable(error));
     QVERIFY(QFile::exists(archivePath));
 
     // Encrypted data must not extract without the passphrase.
     QString noPasswordError;
-    QVERIFY(!ArchiveService::extract(archivePath,
-                                     temp.filePath(QStringLiteral("no_password")),
+    QVERIFY(!ArchiveService::extract(archivePath, temp.filePath(QStringLiteral("no_password")),
                                      nullptr, nullptr, &noPasswordError));
     QVERIFY(!noPasswordError.isEmpty());
 
     const QString destination = temp.filePath(QStringLiteral("with_password"));
     QString extractError;
-    QVERIFY2(ArchiveService::extract(archivePath, destination, nullptr, nullptr,
-                                     &extractError, nullptr, QStringLiteral("hunter2")),
+    QVERIFY2(ArchiveService::extract(archivePath, destination, nullptr, nullptr, &extractError,
+                                     nullptr, QStringLiteral("hunter2")),
              qPrintable(extractError));
 
     QFile extracted(destination + QStringLiteral("/secret.txt"));
@@ -165,25 +174,23 @@ void TestArchives::testZipPasswordEncryption()
     QCOMPARE(extracted.readAll(), QByteArray("top secret"));
 }
 
-void TestArchives::testExtractAppImage()
-{
+void TestArchives::testExtractAppImage() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
     const QString fakeAppImage = temp.filePath(QStringLiteral("sample.AppImage"));
     QFile script(fakeAppImage);
     QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::Text));
-    script.write(
-        "#!/bin/sh\n"
-        "if [ \"$1\" = \"--appimage-extract\" ]; then\n"
-        "  mkdir squashfs-root\n"
-        "  printf extracted > squashfs-root/content.txt\n"
-        "  exit 0\n"
-        "fi\n"
-        "exit 1\n");
+    script.write("#!/bin/sh\n"
+                 "if [ \"$1\" = \"--appimage-extract\" ]; then\n"
+                 "  mkdir squashfs-root\n"
+                 "  printf extracted > squashfs-root/content.txt\n"
+                 "  exit 0\n"
+                 "fi\n"
+                 "exit 1\n");
     script.close();
-    QVERIFY(QFile::setPermissions(fakeAppImage,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    QVERIFY(QFile::setPermissions(fakeAppImage, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                                    QFileDevice::ExeOwner));
     if (!QFileInfo(fakeAppImage).isExecutable()) {
         QSKIP("Temporary filesystem is mounted noexec");
     }
@@ -199,8 +206,7 @@ void TestArchives::testExtractAppImage()
     QCOMPARE(content.readAll(), QByteArray("extracted"));
 }
 
-void TestArchives::testAsyncEngineCompressAndExtract()
-{
+void TestArchives::testAsyncEngineCompressAndExtract() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -233,8 +239,7 @@ void TestArchives::testAsyncEngineCompressAndExtract()
     QVERIFY(QFile::exists(extractDest + QStringLiteral("/data.bin")));
 }
 
-void TestArchives::testPathTraversalExtractionSecurity()
-{
+void TestArchives::testPathTraversalExtractionSecurity() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -266,8 +271,7 @@ void TestArchives::testPathTraversalExtractionSecurity()
     QVERIFY(!QFile::exists(temp.path() + QStringLiteral("/../outside_file.txt")));
 }
 
-void TestArchives::testExtractDoesNotOverwriteExisting()
-{
+void TestArchives::testExtractDoesNotOverwriteExisting() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -279,7 +283,8 @@ void TestArchives::testExtractDoesNotOverwriteExisting()
 
     const QString zipPath = temp.filePath(QStringLiteral("data.zip"));
     QString error;
-    QVERIFY2(ArchiveService::compress({srcFile}, zipPath, nullptr, nullptr, &error), qPrintable(error));
+    QVERIFY2(ArchiveService::compress({srcFile}, zipPath, nullptr, nullptr, &error),
+             qPrintable(error));
 
     const QString dest = temp.filePath(QStringLiteral("dest"));
     QVERIFY(QDir().mkpath(dest));
@@ -290,7 +295,8 @@ void TestArchives::testExtractDoesNotOverwriteExisting()
     old.close();
 
     QString warning;
-    QVERIFY2(ArchiveService::extract(zipPath, dest, nullptr, nullptr, &error, &warning), qPrintable(error));
+    QVERIFY2(ArchiveService::extract(zipPath, dest, nullptr, nullptr, &error, &warning),
+             qPrintable(error));
     QVERIFY2(!warning.isEmpty(), "existing files must be reported as skipped");
 
     QFile check(existing);
@@ -298,8 +304,7 @@ void TestArchives::testExtractDoesNotOverwriteExisting()
     QCOMPARE(check.readAll(), QByteArray("old content"));
 }
 
-void TestArchives::testExtractCorruptArchiveFails()
-{
+void TestArchives::testExtractCorruptArchiveFails() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -316,8 +321,7 @@ void TestArchives::testExtractCorruptArchiveFails()
     QVERIFY(!error.isEmpty());
 }
 
-void TestArchives::testCompressFailureKeepsExistingArchive()
-{
+void TestArchives::testCompressFailureKeepsExistingArchive() {
     QTemporaryDir temp;
     QVERIFY(temp.isValid());
 
@@ -343,7 +347,9 @@ void TestArchives::testCompressFailureKeepsExistingArchive()
     QVERIFY(check.open(QIODevice::ReadOnly));
     QCOMPARE(check.readAll(), QByteArray("ORIGINAL ARCHIVE DATA"));
 
-    const auto leftovers = QDir(temp.path()).entryList({QStringLiteral("existing.zip.part-*")}, QDir::Files | QDir::Hidden);
+    const auto leftovers =
+        QDir(temp.path())
+            .entryList({QStringLiteral("existing.zip.part-*")}, QDir::Files | QDir::Hidden);
     QVERIFY(leftovers.isEmpty());
 }
 

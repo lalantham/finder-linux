@@ -19,6 +19,14 @@ All notable changes to File Manager for Linux are documented here.
 - Added an **Index** search toggle that appears when a supported index is available.
 - Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
 
+### Quick Look previews
+- Added rendered Markdown and HTML previews.
+- Added archive contents listing inside Quick Look.
+- Added font specimen previews.
+- Added PDF/Office in-document text search.
+- Added RAW/HEIC previews through an ImageMagick fallback.
+- Added Open With from Quick Look.
+
 ### File metadata
 - Added persistent **Date Added** and **Date Last Opened** tracking.
 - Added a **Metadata** tab to Get Info with version and comments editing.

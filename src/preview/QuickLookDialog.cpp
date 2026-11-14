@@ -1,10 +1,17 @@
 #include "QuickLookDialog.h"
+#include "AppChooserDialog.h"
+#include "ArchiveService.h"
+#include "DesktopAppsManager.h"
 #include "PreviewManager.h"
 #include "TagManager.h"
+#include <QApplication>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QLineEdit>
+#include <QMimeDatabase>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QTimer>
@@ -86,8 +93,27 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
     headerLayout->addWidget(m_prevPageBtn);
     headerLayout->addWidget(m_pageLabel);
     headerLayout->addWidget(m_nextPageBtn);
+
+    m_openWithBtn = new QPushButton(QStringLiteral("Open With..."), this);
+    m_openWithBtn->setFocusPolicy(Qt::NoFocus);
+    connect(m_openWithBtn, &QPushButton::clicked, this, &QuickLookDialog::onOpenWith);
+    headerLayout->addWidget(m_openWithBtn);
     headerLayout->addWidget(closeBtn);
     mainLayout->addLayout(headerLayout);
+
+    m_pdfSearchBar = new QWidget(this);
+    auto* pdfSearchLayout = new QHBoxLayout(m_pdfSearchBar);
+    pdfSearchLayout->setContentsMargins(0, 0, 0, 0);
+    pdfSearchLayout->setSpacing(6);
+    m_pdfSearchEdit = new QLineEdit(m_pdfSearchBar);
+    m_pdfSearchEdit->setPlaceholderText(QStringLiteral("Find in document"));
+    auto* pdfFindBtn = new QPushButton(QStringLiteral("Find"), m_pdfSearchBar);
+    pdfSearchLayout->addWidget(m_pdfSearchEdit, 1);
+    pdfSearchLayout->addWidget(pdfFindBtn);
+    m_pdfSearchBar->hide();
+    mainLayout->addWidget(m_pdfSearchBar);
+    connect(pdfFindBtn, &QPushButton::clicked, this, &QuickLookDialog::findPdfMatch);
+    connect(m_pdfSearchEdit, &QLineEdit::returnPressed, this, &QuickLookDialog::findPdfMatch);
 
     // Image view
     m_imageScrollArea = new QScrollArea(this);
@@ -342,6 +368,8 @@ void QuickLookDialog::displayPdfPage() {
     m_pageLabel->setVisible(multipage);
     m_prevPageBtn->setVisible(multipage);
     m_nextPageBtn->setVisible(multipage);
+    if (m_pdfSearchBar)
+        m_pdfSearchBar->show();
     m_prevPageBtn->setEnabled(m_pdfPage > 0);
     m_nextPageBtn->setEnabled(m_pdfPage + 1 < m_pdfPageCount);
 }
@@ -552,7 +580,68 @@ void QuickLookDialog::updateContent() {
             m_imageScrollArea->hide();
             m_textViewer->hide();
         }
+    } else if (pm.isFont(currentPath)) {
+        const int fontId = QFontDatabase::addApplicationFont(currentPath);
+        const QStringList families =
+            fontId >= 0 ? QFontDatabase::applicationFontFamilies(fontId) : QStringList();
+        if (!families.isEmpty()) {
+            m_textViewer->setFont(QFont(families.first(), 22));
+            m_textViewer->setPlainText(QStringLiteral(
+                "AaBbCcDdEeFfGg\n0123456789\nThe quick brown fox jumps over the lazy dog."));
+            m_textViewer->show();
+        } else {
+            setTextViewerMode(false);
+            m_textViewer->setPlainText(QStringLiteral("Font preview unavailable."));
+            m_textViewer->show();
+        }
+        m_imageScrollArea->hide();
+        m_fallbackWidget->hide();
+    } else if (QFileInfo(currentPath).suffix().compare(QStringLiteral("md"), Qt::CaseInsensitive) ==
+                   0 ||
+               QFileInfo(currentPath)
+                       .suffix()
+                       .compare(QStringLiteral("markdown"), Qt::CaseInsensitive) == 0) {
+        setTextViewerMode(true);
+        m_textViewer->setMarkdown(pm.getTextPreview(currentPath, 256 * 1024));
+        m_textViewer->show();
+        m_imageScrollArea->hide();
+        m_fallbackWidget->hide();
+    } else if (QFileInfo(currentPath)
+                       .suffix()
+                       .compare(QStringLiteral("html"), Qt::CaseInsensitive) == 0 ||
+               QFileInfo(currentPath)
+                       .suffix()
+                       .compare(QStringLiteral("htm"), Qt::CaseInsensitive) == 0) {
+        setTextViewerMode(true);
+        m_textViewer->setHtml(pm.getTextPreview(currentPath, 256 * 1024));
+        m_textViewer->show();
+        m_imageScrollArea->hide();
+        m_fallbackWidget->hide();
+    } else if (ArchiveService::isArchive(currentPath)) {
+        QVector<ArchiveEntryInfo> entries;
+        QString error;
+        setTextViewerMode(false);
+        if (ArchiveService::listEntries(currentPath, &entries, 500, &error)) {
+            QStringList lines;
+            lines.append(
+                QStringLiteral("%1 (%2 entries)").arg(item.fileName()).arg(entries.size()));
+            lines.append(QString());
+            for (const ArchiveEntryInfo& entry : entries) {
+                lines.append(QStringLiteral("%1 %2  %3")
+                                 .arg(entry.isDir ? QStringLiteral("[dir]")
+                                                  : FileItem::formatSize(entry.size),
+                                      QStringLiteral(" "), entry.path));
+            }
+            m_textViewer->setPlainText(lines.join(QLatin1Char('\n')));
+        } else {
+            m_textViewer->setPlainText(
+                QStringLiteral("Archive preview unavailable: %1").arg(error));
+        }
+        m_textViewer->show();
+        m_imageScrollArea->hide();
+        m_fallbackWidget->hide();
     } else if (pm.isText(currentPath)) {
+        setTextViewerMode(false);
         m_textViewer->setPlainText(pm.getTextPreview(currentPath));
         m_textViewer->show();
         m_imageScrollArea->hide();
@@ -600,6 +689,48 @@ void QuickLookDialog::resizeEvent(QResizeEvent* event) {
     if (m_fitImage && !m_imageBase.isNull()) {
         QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
     }
+}
+
+void QuickLookDialog::findPdfMatch() {
+    if (!m_pdfSearchEdit || m_pdfPath.isEmpty())
+        return;
+    const int page = PreviewManager::instance().findPdfPage(m_pdfPath, m_pdfSearchEdit->text());
+    if (page >= 0) {
+        m_pdfPage = page;
+        displayPdfPage();
+    } else {
+        m_pdfSearchEdit->setStyleSheet(QStringLiteral("QLineEdit { color: #ff7777; }"));
+        QTimer::singleShot(1000, this, [this]() {
+            if (m_pdfSearchEdit)
+                m_pdfSearchEdit->setStyleSheet(QString());
+        });
+    }
+}
+
+void QuickLookDialog::onOpenWith() {
+    if (m_files.isEmpty() || m_currentIndex < 0 || m_currentIndex >= m_files.size())
+        return;
+    const QString path = m_files.at(m_currentIndex);
+    QMimeDatabase db;
+    const QString mime = db.mimeTypeForFile(path, QMimeDatabase::MatchDefault).name();
+    AppChooserDialog dialog(mime, QFileInfo(path).fileName(), this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    if (!dialog.customCommand().isEmpty()) {
+        DesktopAppsManager::launchCustomCommand(dialog.customCommand(), path);
+    } else if (!dialog.selectedAppId().isEmpty()) {
+        DesktopAppsManager::launchApp(dialog.selectedAppId(), path);
+    }
+    accept();
+}
+
+void QuickLookDialog::setTextViewerMode(bool rendered) {
+    if (!m_textViewer)
+        return;
+    QFont font = rendered ? QApplication::font() : QFont(QStringLiteral("monospace"), 10);
+    if (!rendered)
+        font.setStyleHint(QFont::Monospace);
+    m_textViewer->setFont(font);
 }
 
 void QuickLookDialog::keyPressEvent(QKeyEvent* event) {

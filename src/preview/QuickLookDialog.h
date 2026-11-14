@@ -13,6 +13,7 @@
 class QSlider;
 class QTimer;
 class QWheelEvent;
+class QLineEdit;
 #ifdef HAVE_QT_MULTIMEDIA
 class QMediaPlayer;
 class QAudioOutput;
@@ -39,6 +40,8 @@ private slots:
     void showNextPage();
     void showPreviousPage();
     void toggleSlideshow();
+    void findPdfMatch();
+    void onOpenWith();
     void onOfficePreviewReady(const QString& sourcePath, const QString& pdfPath,
                               const QString& error);
 
@@ -50,6 +53,7 @@ private:
     void applyImageTransform();
     void fitImageToView();
     void resetPdfState();
+    void setTextViewerMode(bool rendered);
 
     QStringList m_files;
     int m_currentIndex{0};
@@ -59,6 +63,9 @@ private:
     QLabel* m_pageLabel{nullptr};
     QPushButton* m_prevPageBtn{nullptr};
     QPushButton* m_nextPageBtn{nullptr};
+    QWidget* m_pdfSearchBar{nullptr};
+    QLineEdit* m_pdfSearchEdit{nullptr};
+    QPushButton* m_openWithBtn{nullptr};
     QTimer* m_slideshowTimer{nullptr};
     bool m_slideshow{false};
 
