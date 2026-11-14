@@ -9,6 +9,8 @@ class TestFavorites : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
+    void cleanupTestCase();
     void init();
     void cleanup();
     void testDefaultFavorites();
@@ -22,7 +24,24 @@ private slots:
     void testMoveLocationUpAndDown();
     void testReorderLocation();
     void testSpringLoadedSettings();
+    void testPerFolderViewMode();
+
+private:
+    std::unique_ptr<QTemporaryDir> m_testSettingsDir;
 };
+
+void TestFavorites::initTestCase()
+{
+    m_testSettingsDir = std::make_unique<QTemporaryDir>();
+    QVERIFY(m_testSettingsDir->isValid());
+    AppSettings::setSettingsFilePath(m_testSettingsDir->filePath(QStringLiteral("test_config.ini")));
+}
+
+void TestFavorites::cleanupTestCase()
+{
+    AppSettings::setSettingsFilePath(QString());
+    m_testSettingsDir.reset();
+}
 
 void TestFavorites::init()
 {
@@ -180,6 +199,41 @@ void TestFavorites::testSpringLoadedSettings()
     // Restore
     AppSettings::instance().setSpringLoadedFoldersEnabled(true);
     AppSettings::instance().setSpringLoadDelayMs(750);
+}
+
+void TestFavorites::testPerFolderViewMode()
+{
+    auto& settings = AppSettings::instance();
+    settings.setRememberFolderViewModes(false);
+    QVERIFY(!settings.rememberFolderViewModes());
+
+    QString testDir1 = QStringLiteral("/tmp/test_dir1");
+    QString testDir2 = QStringLiteral("/tmp/test_dir2");
+
+    // When disabled, folderViewMode returns nullopt
+    settings.setFolderViewMode(testDir1, ViewMode::List);
+    QVERIFY(!settings.folderViewMode(testDir1).has_value());
+
+    // When enabled, retrieves stored modes accurately
+    settings.setRememberFolderViewModes(true);
+    QVERIFY(settings.rememberFolderViewModes());
+
+    settings.setFolderViewMode(testDir1, ViewMode::List);
+    settings.setFolderViewMode(testDir2, ViewMode::Gallery);
+
+    auto m1 = settings.folderViewMode(testDir1);
+    QVERIFY(m1.has_value());
+    QCOMPARE(m1.value(), ViewMode::List);
+
+    auto m2 = settings.folderViewMode(testDir2);
+    QVERIFY(m2.has_value());
+    QCOMPARE(m2.value(), ViewMode::Gallery);
+
+    // Non-configured folder returns nullopt
+    QVERIFY(!settings.folderViewMode(QStringLiteral("/tmp/other")).has_value());
+
+    // Clean up
+    settings.setRememberFolderViewModes(false);
 }
 
 QTEST_MAIN(TestFavorites)

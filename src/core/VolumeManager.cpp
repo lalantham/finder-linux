@@ -2,12 +2,208 @@
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QProcess>
+#include <QDBusConnection>
+#include <QDBusError>
+#include <QDBusMessage>
+#include <QDBusObjectPath>
+#include <QDBusVariant>
 #include <QSet>
+#include <QStorageInfo>
+#include <QUuid>
 #include <QRegularExpression>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+
+namespace {
+QVector<VolumeEntry> s_cachedVolumes;
+QElapsedTimer s_cacheTimestamp;
+constexpr qint64 CacheLifetimeMs = 2000;
+
+QString deviceForTarget(const QString& target)
+{
+    if (target.startsWith(QStringLiteral("/dev/"))) {
+        return target;
+    }
+
+    // QStorageInfo avoids spawning findmnt for the common case.
+    const QStorageInfo storage(target);
+    if (storage.isValid() && storage.isReady()) {
+        const QString dev = QString::fromUtf8(storage.device()).trimmed();
+        if (dev.startsWith(QStringLiteral("/dev/"))) {
+            return dev;
+        }
+    }
+
+    QProcess findmntProc;
+    findmntProc.start(QStringLiteral("findmnt"), {QStringLiteral("-n"), QStringLiteral("-o"), QStringLiteral("SOURCE"), target});
+    if (!findmntProc.waitForFinished(1000) || findmntProc.exitCode() != 0) {
+        return {};
+    }
+
+    QString dev = QString::fromUtf8(findmntProc.readAllStandardOutput()).trimmed();
+    const qsizetype bracket = dev.indexOf(QLatin1Char('['));
+    if (bracket != -1) {
+        dev = dev.left(bracket).trimmed();
+    }
+    return dev.startsWith(QStringLiteral("/dev/")) ? dev : QString();
+}
+
+QString udisksObjectPathForDevice(const QString& device)
+{
+    if (!device.startsWith(QStringLiteral("/dev/"))) {
+        return {};
+    }
+
+    QString resolved = QFileInfo(device).canonicalFilePath();
+    if (resolved.isEmpty()) {
+        resolved = device;
+    }
+    const QString name = QFileInfo(resolved).fileName();
+    if (name.isEmpty()) {
+        return {};
+    }
+    return QStringLiteral("/org/freedesktop/UDisks2/block_devices/") + name;
+}
+
+QDBusMessage callUdisks(const QString& objectPath, const QString& interface,
+                        const QString& method, const QVariantList& arguments,
+                        int timeoutMs)
+{
+    // Use a private connection: VolumeManager methods run on QtConcurrent
+    // worker threads while the main thread owns the shared system-bus
+    // connection for UDisks2 signals.
+    const QString connectionName = QStringLiteral("finder-udisks-%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    QDBusConnection bus = QDBusConnection::connectToBus(QDBusConnection::SystemBus, connectionName);
+    if (!bus.isConnected()) {
+        return QDBusMessage::createError(
+            QDBusError::Disconnected, QStringLiteral("System D-Bus is unavailable"));
+    }
+
+    QDBusMessage message = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.UDisks2"), objectPath, interface, method);
+    message.setArguments(arguments);
+    const QDBusMessage reply = bus.call(message, QDBus::Block, timeoutMs);
+    QDBusConnection::disconnectFromBus(connectionName);
+    return reply;
+}
+
+bool udisksMount(const QString& device, QString* mountPoint, QString* errorOut)
+{
+    const QString objectPath = udisksObjectPathForDevice(device);
+    if (objectPath.isEmpty()) {
+        return false;
+    }
+
+    const QDBusMessage reply = callUdisks(
+        objectPath, QStringLiteral("org.freedesktop.UDisks2.Filesystem"),
+        QStringLiteral("Mount"), {QVariantMap()}, 15000);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        if (errorOut) *errorOut = reply.errorMessage();
+        return false;
+    }
+
+    const QString result = reply.arguments().value(0).toString();
+    if (result.isEmpty() || !QDir(result).exists()) {
+        if (errorOut) *errorOut = QStringLiteral("UDisks2 did not return a valid mount point.");
+        return false;
+    }
+
+    if (mountPoint) *mountPoint = result;
+    return true;
+}
+
+bool udisksUnmount(const QString& device, QString* errorOut)
+{
+    const QString objectPath = udisksObjectPathForDevice(device);
+    if (objectPath.isEmpty()) {
+        return false;
+    }
+
+    const QDBusMessage reply = callUdisks(
+        objectPath, QStringLiteral("org.freedesktop.UDisks2.Filesystem"),
+        QStringLiteral("Unmount"), {QVariantMap()}, 10000);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        if (errorOut) *errorOut = reply.errorMessage();
+        return false;
+    }
+    return true;
+}
+
+QString udisksDrivePath(const QString& device)
+{
+    const QString objectPath = udisksObjectPathForDevice(device);
+    if (objectPath.isEmpty()) {
+        return {};
+    }
+
+    const QDBusMessage reply = callUdisks(
+        objectPath, QStringLiteral("org.freedesktop.DBus.Properties"),
+        QStringLiteral("Get"),
+        {QStringLiteral("org.freedesktop.UDisks2.Block"), QStringLiteral("Drive")},
+        5000);
+    if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
+        return {};
+    }
+
+    QVariant value = reply.arguments().first();
+    if (value.canConvert<QDBusVariant>()) {
+        value = value.value<QDBusVariant>().variant();
+    }
+    if (value.canConvert<QDBusObjectPath>()) {
+        return value.value<QDBusObjectPath>().path();
+    }
+    return value.toString();
+}
+
+bool udisksDriveCall(const QString& drivePath, const QString& method, QString* errorOut)
+{
+    if (drivePath.isEmpty() || drivePath == QStringLiteral("/")) {
+        return false;
+    }
+
+    const QDBusMessage reply = callUdisks(
+        drivePath, QStringLiteral("org.freedesktop.UDisks2.Drive"), method,
+        {QVariantMap()}, 15000);
+    if (reply.type() == QDBusMessage::ErrorMessage) {
+        if (errorOut) *errorOut = reply.errorMessage();
+        return false;
+    }
+    return true;
+}
+
+bool udisksEject(const QString& device, QString* errorOut)
+{
+    const QString drivePath = udisksDrivePath(device);
+    if (drivePath.isEmpty() || drivePath == QStringLiteral("/")) {
+        return false;
+    }
+
+    QString ejectError;
+    if (udisksDriveCall(drivePath, QStringLiteral("Eject"), &ejectError)) {
+        return true;
+    }
+
+    QString powerOffError;
+    if (udisksDriveCall(drivePath, QStringLiteral("PowerOff"), &powerOffError)) {
+        return true;
+    }
+
+    if (errorOut) {
+        *errorOut = powerOffError.isEmpty() ? ejectError : powerOffError;
+    }
+    return false;
+}
+}
+
+void VolumeManager::invalidateCache()
+{
+    s_cachedVolumes.clear();
+    s_cacheTimestamp.invalidate();
+}
 
 bool VolumeManager::isUsbDevice(const QString& devPathOrName)
 {
@@ -55,6 +251,12 @@ bool VolumeManager::isUsbDevice(const QString& devPathOrName)
 
 QVector<VolumeEntry> VolumeManager::mountedVolumes()
 {
+    // lsblk spawns a process and probing every mount is expensive; the sidebar
+    // asks for this several times per refresh, so collapse those calls.
+    if (s_cacheTimestamp.isValid() && s_cacheTimestamp.elapsed() < CacheLifetimeMs) {
+        return s_cachedVolumes;
+    }
+
     QVector<VolumeEntry> list;
     QList<QStorageInfo> storageList = QStorageInfo::mountedVolumes();
     QFileIconProvider iconProvider;
@@ -97,7 +299,7 @@ QVector<VolumeEntry> VolumeManager::mountedVolumes()
             path.startsWith(QStringLiteral("/proc")) ||
             path.startsWith(QStringLiteral("/sys")) ||
             path.startsWith(QStringLiteral("/tmp")) ||
-            (path.startsWith(QStringLiteral("/run")) && !path.startsWith(QStringLiteral("/run/media")) && !path.contains(QStringLiteral("/gvfs"))) ||
+            (path.startsWith(QStringLiteral("/run")) && !path.startsWith(QStringLiteral("/run/media")) && !path.contains(QStringLiteral("/gvfs")) && !path.contains(QStringLiteral("/kio-fuse"))) ||
             path == QStringLiteral("/root") ||
             path == QStringLiteral("/srv") ||
             path == QStringLiteral("/home")) {
@@ -277,6 +479,8 @@ QVector<VolumeEntry> VolumeManager::mountedVolumes()
         }
     }
 
+    s_cachedVolumes = list;
+    s_cacheTimestamp.start();
     return list;
 }
 
@@ -315,21 +519,31 @@ bool VolumeManager::isMountPoint(const QString& path)
 
 QString VolumeManager::mountDevice(const QString& device, QString* errorOut)
 {
+    invalidateCache();
     QString dev = device.trimmed();
     if (dev.isEmpty()) {
         if (errorOut) *errorOut = QStringLiteral("Device path is empty.");
         return QString();
     }
 
-    // 1. Try udisksctl mount -b <dev> --no-user-interaction
+    // 1. Prefer the UDisks2 D-Bus API. This gives a structured reply and does
+    //    not depend on parsing localized udisksctl output.
+    QString udisksError;
+    QString mountPoint;
+    if (udisksMount(dev, &mountPoint, &udisksError)) {
+        invalidateCache();
+        return mountPoint;
+    }
+
+    // 2. Try udisksctl mount -b <dev>. Without --no-user-interaction, polkit
+    //    can prompt through the desktop's authentication agent when needed.
     QProcess udisksProc;
     udisksProc.start(QStringLiteral("udisksctl"), {
         QStringLiteral("mount"),
         QStringLiteral("-b"),
-        dev,
-        QStringLiteral("--no-user-interaction")
+        dev
     });
-    if (udisksProc.waitForFinished(6000) && udisksProc.exitCode() == 0) {
+    if (udisksProc.waitForFinished(15000) && udisksProc.exitCode() == 0) {
         QString out = QString::fromUtf8(udisksProc.readAllStandardOutput()).trimmed();
         // Standard output: "Mounted /dev/sdX1 at /run/media/... ."
         static const QRegularExpression rx(QStringLiteral("at\\s+(.+?)\\.?$"));
@@ -338,6 +552,7 @@ QString VolumeManager::mountDevice(const QString& device, QString* errorOut)
             QString mp = match.captured(1).trimmed();
             if (mp.endsWith(QLatin1Char('.'))) mp.chop(1);
             if (!mp.isEmpty() && QDir(mp).exists()) {
+                invalidateCache();
                 return mp;
             }
         }
@@ -346,12 +561,15 @@ QString VolumeManager::mountDevice(const QString& device, QString* errorOut)
     // 2. Try gio mount -d <dev>
     QProcess gioProc;
     gioProc.start(QStringLiteral("gio"), {QStringLiteral("mount"), QStringLiteral("-d"), dev});
-    if (gioProc.waitForFinished(6000) && gioProc.exitCode() == 0) {
+    if (gioProc.waitForFinished(15000) && gioProc.exitCode() == 0) {
         QProcess findmntProc;
         findmntProc.start(QStringLiteral("findmnt"), {QStringLiteral("-n"), QStringLiteral("-o"), QStringLiteral("TARGET"), dev});
         if (findmntProc.waitForFinished(2000) && findmntProc.exitCode() == 0) {
             QString mp = QString::fromUtf8(findmntProc.readAllStandardOutput()).trimmed();
-            if (!mp.isEmpty() && QDir(mp).exists()) return mp;
+            if (!mp.isEmpty() && QDir(mp).exists()) {
+                invalidateCache();
+                return mp;
+            }
         }
     }
 
@@ -364,7 +582,8 @@ QString VolumeManager::mountDevice(const QString& device, QString* errorOut)
     }
 
     if (errorOut) {
-        QString err = QString::fromUtf8(udisksProc.readAllStandardError()).trimmed();
+        QString err = udisksError;
+        if (err.isEmpty()) err = QString::fromUtf8(udisksProc.readAllStandardError()).trimmed();
         if (err.isEmpty()) err = QString::fromUtf8(gioProc.readAllStandardError()).trimmed();
         if (err.isEmpty()) err = QStringLiteral("Failed to mount %1").arg(dev);
         *errorOut = err;
@@ -374,6 +593,7 @@ QString VolumeManager::mountDevice(const QString& device, QString* errorOut)
 
 bool VolumeManager::unmountVolume(const QString& target, QString* errorOut)
 {
+    invalidateCache();
     QString clean = QDir::cleanPath(target);
     if (clean == QStringLiteral("/") || clean.isEmpty()) {
         if (errorOut) *errorOut = QStringLiteral("Cannot unmount the root filesystem.");
@@ -384,24 +604,20 @@ bool VolumeManager::unmountVolume(const QString& target, QString* errorOut)
     if (clean.startsWith(QStringLiteral("/dev/"))) {
         dev = clean;
     } else {
-        // 1. Try udisksctl unmount with device from findmnt
-        QProcess findmntProc;
-        findmntProc.start(QStringLiteral("findmnt"), {QStringLiteral("-n"), QStringLiteral("-o"), QStringLiteral("SOURCE"), clean});
-        if (findmntProc.waitForFinished(1000) && findmntProc.exitCode() == 0) {
-            dev = QString::fromUtf8(findmntProc.readAllStandardOutput()).trimmed();
-            if (!dev.isEmpty()) {
-                qsizetype bracket = dev.indexOf(QLatin1Char('['));
-                if (bracket != -1) {
-                    dev = dev.left(bracket).trimmed();
-                }
-            }
-        }
+        dev = deviceForTarget(clean);
     }
 
+    QString udisksError;
     if (!dev.isEmpty() && dev.startsWith(QStringLiteral("/dev/"))) {
+        if (udisksUnmount(dev, &udisksError)) {
+            invalidateCache();
+            return true;
+        }
+
         QProcess udisksProc;
-        udisksProc.start(QStringLiteral("udisksctl"), {QStringLiteral("unmount"), QStringLiteral("-b"), dev, QStringLiteral("--no-user-interaction")});
-        if (udisksProc.waitForFinished(4000) && udisksProc.exitCode() == 0) {
+        udisksProc.start(QStringLiteral("udisksctl"), {QStringLiteral("unmount"), QStringLiteral("-b"), dev});
+        if (udisksProc.waitForFinished(10000) && udisksProc.exitCode() == 0) {
+            invalidateCache();
             return true;
         }
     }
@@ -409,7 +625,8 @@ bool VolumeManager::unmountVolume(const QString& target, QString* errorOut)
     // 2. Try gio mount -u <clean>
     QProcess gioProc;
     gioProc.start(QStringLiteral("gio"), {QStringLiteral("mount"), QStringLiteral("-u"), clean});
-    if (gioProc.waitForFinished(3000) && gioProc.exitCode() == 0) {
+    if (gioProc.waitForFinished(8000) && gioProc.exitCode() == 0) {
+        invalidateCache();
         return true;
     }
 
@@ -417,14 +634,57 @@ bool VolumeManager::unmountVolume(const QString& target, QString* errorOut)
     QProcess umountProc;
     umountProc.start(QStringLiteral("umount"), {clean});
     if (umountProc.waitForFinished(3000) && umountProc.exitCode() == 0) {
+        invalidateCache();
         return true;
     }
 
     if (errorOut) {
-        QString err = QString::fromUtf8(gioProc.readAllStandardError()).trimmed();
+        QString err = udisksError;
+        if (err.isEmpty()) err = QString::fromUtf8(gioProc.readAllStandardError()).trimmed();
         if (err.isEmpty()) err = QString::fromUtf8(umountProc.readAllStandardError()).trimmed();
         if (err.isEmpty()) err = QStringLiteral("Failed to unmount device. It might be busy or require privileges.");
         *errorOut = err;
     }
     return false;
+}
+
+bool VolumeManager::ejectVolume(const QString& target, QString* errorOut)
+{
+    // Resolve the device before unmounting; afterwards findmnt has no entry.
+    const QString clean = QDir::cleanPath(target);
+    const QString dev = deviceForTarget(clean);
+
+    bool unmounted = false;
+    QString udisksError;
+    if (!dev.isEmpty() && dev.startsWith(QStringLiteral("/dev/"))) {
+        unmounted = udisksUnmount(dev, &udisksError);
+    }
+    if (!unmounted) {
+        if (!unmountVolume(target, errorOut)) {
+            return false;
+        }
+    }
+
+    // Try UDisks2 eject, then power-off for USB sticks and other drives.
+    if (!dev.isEmpty() && dev.startsWith(QStringLiteral("/dev/"))) {
+        QString ejectError;
+        if (udisksEject(dev, &ejectError)) {
+            invalidateCache();
+            return true;
+        }
+
+        // Fallback: power off removable media via udisksctl.
+        QProcess powerProc;
+        powerProc.start(QStringLiteral("udisksctl"),
+                        {QStringLiteral("power-off"), QStringLiteral("-b"), dev});
+        if (powerProc.waitForFinished(4000) && powerProc.exitCode() != 0 && errorOut) {
+            QString err = QString::fromUtf8(powerProc.readAllStandardError()).trimmed();
+            if (err.isEmpty()) err = ejectError;
+            if (err.isEmpty()) err = QStringLiteral("Failed to power off device.");
+            *errorOut = err;
+        }
+    }
+
+    invalidateCache();
+    return true;
 }

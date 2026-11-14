@@ -1,0 +1,12 @@
+#compdef finder-linux
+
+_finder-linux() {
+    _arguments -s \
+        '(-s --select)'{-s,--select}'[select a file or folder in its parent]:target:_files' \
+        '(-n --new-window)'{-n,--new-window}'[open a new window]' \
+        '--help[show help]' \
+        '--version[show version]' \
+        '*:path:_files'
+}
+
+_finder-linux "$@"

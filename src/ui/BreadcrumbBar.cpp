@@ -2,17 +2,25 @@
 #include "StyleHelper.h"
 #include "ThemeManager.h"
 #include "AppSettings.h"
+#include "TagManager.h"
 #include <QPushButton>
 #include <QLabel>
+#include <QAbstractItemView>
 #include <QDir>
 #include <QFileInfo>
 #include <QMouseEvent>
+#include <QContextMenuEvent>
+#include <QApplication>
+#include <QClipboard>
+#include <QMenu>
 #include <QTimer>
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QKeyEvent>
+#include <QUrl>
 
 BreadcrumbBar::BreadcrumbBar(QWidget* parent)
     : QWidget(parent)
@@ -21,13 +29,27 @@ BreadcrumbBar::BreadcrumbBar(QWidget* parent)
     m_stackLayout->setContentsMargins(0, 0, 0, 0);
 
     m_breadcrumbContainer = new QWidget(this);
+    m_breadcrumbContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_breadcrumbContainer->installEventFilter(this);
     m_breadcrumbLayout = new QHBoxLayout(m_breadcrumbContainer);
     m_breadcrumbLayout->setContentsMargins(0, 0, 0, 0);
     m_breadcrumbLayout->setSpacing(2);
 
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    setToolTip(QStringLiteral("Click the empty area to edit the path, right-click to copy it"));
+
     m_pathEdit = new QLineEdit(this);
     m_pathEdit->setStyleSheet(StyleHelper::searchBarStyle(ThemeManager::instance().isDark()));
     connect(m_pathEdit, &QLineEdit::returnPressed, this, &BreadcrumbBar::onPathEditFinished);
+
+    m_completerModel = new QFileSystemModel(this);
+    m_completerModel->setRootPath(QStringLiteral("/"));
+    m_completerModel->setFilter(QDir::AllDirs | QDir::NoDotAndDotDot | QDir::Hidden);
+
+    m_completer = new QCompleter(m_completerModel, this);
+    m_completer->setCaseSensitivity(Qt::CaseInsensitive);
+    m_pathEdit->setCompleter(m_completer);
+    m_pathEdit->installEventFilter(this);
 
     m_springTimer = new QTimer(this);
     m_springTimer->setSingleShot(true);
@@ -47,7 +69,11 @@ void BreadcrumbBar::updateThemeStyles(bool isDark)
 
 void BreadcrumbBar::setPath(const QString& path)
 {
-    m_currentPath = QDir::cleanPath(path);
+    if (path.startsWith(QStringLiteral("tag://"))) {
+        m_currentPath = path;
+    } else {
+        m_currentPath = QDir::cleanPath(path);
+    }
     m_pathEdit->setText(m_currentPath);
     rebuildBreadcrumbs();
     m_stackLayout->setCurrentWidget(m_breadcrumbContainer);
@@ -68,9 +94,30 @@ void BreadcrumbBar::rebuildBreadcrumbs()
         return;
     }
 
-    QStringList segments = m_currentPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
-
     bool isDark = ThemeManager::instance().isDark();
+
+    if (m_currentPath.startsWith(QStringLiteral("tag://"))) {
+        QString tagName = m_currentPath.mid(6);
+        auto* tagsLabel = new QLabel(QStringLiteral("Tags"), m_breadcrumbContainer);
+        tagsLabel->setStyleSheet(isDark ? QStringLiteral("color: #8e8e93; font-weight: bold; padding: 2px 6px;")
+                                        : QStringLiteral("color: #636366; font-weight: bold; padding: 2px 6px;"));
+        m_breadcrumbLayout->addWidget(tagsLabel);
+
+        auto* separator = new QLabel(QStringLiteral("›"), m_breadcrumbContainer);
+        separator->setStyleSheet(isDark ? QStringLiteral("color: #636366; font-size: 11px;")
+                                        : QStringLiteral("color: #8e8e93; font-size: 11px;"));
+        m_breadcrumbLayout->addWidget(separator);
+
+        auto* tagBtn = new QPushButton(m_breadcrumbContainer);
+        tagBtn->setText(QStringLiteral(" ") + tagName);
+        tagBtn->setIcon(TagManager::tagDotIcon(tagName, 14));
+        tagBtn->setStyleSheet(StyleHelper::breadcrumbButtonStyle(isDark));
+        m_breadcrumbLayout->addWidget(tagBtn);
+        m_breadcrumbLayout->addStretch();
+        return;
+    }
+
+    QStringList segments = m_currentPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
 
     // Root button
     auto* rootBtn = new QPushButton(QStringLiteral("/"), m_breadcrumbContainer);
@@ -78,9 +125,14 @@ void BreadcrumbBar::rebuildBreadcrumbs()
     rootBtn->setAcceptDrops(true);
     rootBtn->setProperty("crumbPath", QStringLiteral("/"));
     rootBtn->installEventFilter(this);
-    connect(rootBtn, &QPushButton::clicked, this, [this]() {
-        onSegmentClicked(QStringLiteral("/"));
-    });
+    if (segments.isEmpty()) {
+        rootBtn->setToolTip(QStringLiteral("Click to edit the path"));
+        connect(rootBtn, &QPushButton::clicked, this, [this]() { showPathEditor(); });
+    } else {
+        connect(rootBtn, &QPushButton::clicked, this, [this]() {
+            onSegmentClicked(QStringLiteral("/"));
+        });
+    }
     m_breadcrumbLayout->addWidget(rootBtn);
 
     QString accumPath = QStringLiteral("");
@@ -98,9 +150,16 @@ void BreadcrumbBar::rebuildBreadcrumbs()
         QString target = accumPath;
         btn->setProperty("crumbPath", target);
         btn->installEventFilter(this);
-        connect(btn, &QPushButton::clicked, this, [this, target]() {
-            onSegmentClicked(target);
-        });
+        if (i == segments.size() - 1) {
+            // Clicking the current folder opens the path editor instead of
+            // navigating to where we already are.
+            btn->setToolTip(QStringLiteral("Click to edit the path"));
+            connect(btn, &QPushButton::clicked, this, [this]() { showPathEditor(); });
+        } else {
+            connect(btn, &QPushButton::clicked, this, [this, target]() {
+                onSegmentClicked(target);
+            });
+        }
         m_breadcrumbLayout->addWidget(btn);
     }
 
@@ -109,11 +168,71 @@ void BreadcrumbBar::rebuildBreadcrumbs()
 
 bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
 {
-    if (!AppSettings::instance().springLoadedFoldersEnabled()) {
+    // Escape cancels path editing.
+    if (watched == m_pathEdit && event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Escape) {
+            m_pathEdit->setText(m_currentPath);
+            m_stackLayout->setCurrentWidget(m_breadcrumbContainer);
+            return true;
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+    // Clicking anywhere outside the editor (a file, a folder, the sidebar,
+    // the toolbar...) folds it back into breadcrumbs. Defer one event-loop
+    // turn so clicking an autocomplete entry does not close the editor.
+    if (watched == m_pathEdit && event->type() == QEvent::FocusOut) {
+        QTimer::singleShot(0, this, [this]() {
+            if (m_stackLayout->currentWidget() != m_pathEdit) {
+                return;
+            }
+            QWidget* focus = QApplication::focusWidget();
+            QWidget* popup = m_completer ? m_completer->popup() : nullptr;
+            if (focus == m_pathEdit) {
+                return;
+            }
+            if (popup && (popup->isVisible()
+                          || (focus && (focus == popup || popup->isAncestorOf(focus))))) {
+                return;
+            }
+            m_pathEdit->setText(m_currentPath);
+            m_stackLayout->setCurrentWidget(m_breadcrumbContainer);
+        });
+        return false;
+    }
+
+    // Clicking the empty part of the bar opens the editor with the path
+    // selected, ready to edit or copy. Right-click offers the same.
+    if (watched == m_breadcrumbContainer) {
+        if (event->type() == QEvent::MouseButtonRelease) {
+            auto* mouseEvent = static_cast<QMouseEvent*>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                QWidget* child = m_breadcrumbContainer->childAt(mouseEvent->position().toPoint());
+                if (!qobject_cast<QPushButton*>(child)) {
+                    showPathEditor();
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::ContextMenu) {
+            auto* contextEvent = static_cast<QContextMenuEvent*>(event);
+            showContextMenu(contextEvent->globalPos());
+            return true;
+        }
         return QWidget::eventFilter(watched, event);
     }
 
     auto* btn = qobject_cast<QPushButton*>(watched);
+    if (btn && btn->property("crumbPath").isValid() && event->type() == QEvent::ContextMenu) {
+        auto* contextEvent = static_cast<QContextMenuEvent*>(event);
+        showContextMenu(contextEvent->globalPos());
+        return true;
+    }
+
+    if (!AppSettings::instance().springLoadedFoldersEnabled()) {
+        return QWidget::eventFilter(watched, event);
+    }
+
     if (!btn || !btn->property("crumbPath").isValid()) {
         return QWidget::eventFilter(watched, event);
     }
@@ -164,6 +283,18 @@ bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
+void BreadcrumbBar::showContextMenu(const QPoint& globalPos)
+{
+    QMenu menu(this);
+    menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")),
+                   QStringLiteral("Edit Path"), this, [this]() { showPathEditor(); });
+    menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
+                   QStringLiteral("Copy Path"), this, [this]() {
+                       QApplication::clipboard()->setText(m_currentPath);
+                   });
+    menu.exec(globalPos);
+}
+
 void BreadcrumbBar::resetSpringTimer()
 {
     if (m_springTimer && m_springTimer->isActive()) {
@@ -195,9 +326,21 @@ void BreadcrumbBar::onSegmentClicked(const QString& path)
 void BreadcrumbBar::onPathEditFinished()
 {
     QString entered = m_pathEdit->text().trimmed();
-    if (QDir(entered).exists()) {
-        setPath(entered);
-        emit pathSelected(entered);
+    if (entered.startsWith(QStringLiteral("file://"))) {
+        entered = QUrl(entered).toLocalFile();
+    }
+    if (entered == QLatin1Char('~')) {
+        entered = QDir::homePath();
+    } else if (entered.startsWith(QStringLiteral("~/"))) {
+        entered = QDir::homePath() + entered.mid(1);
+    }
+    entered = QDir::cleanPath(entered);
+
+    QFileInfo fi(entered);
+    if (fi.exists()) {
+        QString dirPath = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
+        setPath(dirPath);
+        emit pathSelected(dirPath);
     }
     m_stackLayout->setCurrentWidget(m_breadcrumbContainer);
 }

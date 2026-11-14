@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QThread>
 #include <QVector>
+#include <QMimeDatabase>
 #include <atomic>
 
 struct SearchFilter {
@@ -28,7 +29,7 @@ public slots:
     void run();
 
 signals:
-    void itemFound(const FileItem& item);
+    void itemsFound(const QVector<FileItem>& items);
     void finished(int totalFound);
     void progress(const QString& currentDir);
 
@@ -39,6 +40,7 @@ private:
     SearchFilter m_filter;
     std::atomic<bool> m_cancelled{false};
     int m_count{0};
+    mutable QMimeDatabase m_mimeDb;
 };
 
 class SearchEngine : public QObject {
@@ -53,7 +55,7 @@ public:
     [[nodiscard]] bool isRunning() const;
 
 signals:
-    void itemFound(const FileItem& item);
+    void itemsFound(const QVector<FileItem>& items);
     void searchFinished(int totalFound);
     void searchProgress(const QString& currentDir);
 

@@ -10,6 +10,13 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Match the installer: when started with sudo, clean up the invoking user's
+# per-user FileManager1 activation file rather than /root's.
+USER_HOME="${HOME}"
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  RESOLVED_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+  [[ -n "${RESOLVED_HOME}" ]] && USER_HOME="${RESOLVED_HOME}"
+fi
 BUILD_DIR="${ROOT_DIR}/build"
 
 PREFIX="/usr/local"
@@ -39,7 +46,31 @@ ${SUDO} rm -f "${PREFIX}/bin/finder-linux"
 
 # Remove desktop entry
 echo -e "${BLUE}==>${NC} Removing desktop launcher..."
+${SUDO} rm -f "${PREFIX}/share/applications/org.finderlinux.Finder.desktop"
 ${SUDO} rm -f "${PREFIX}/share/applications/finder-linux.desktop"
+# Also remove the user-scoped copies / migration stubs.
+rm -f "${USER_HOME}/.local/share/applications/org.finderlinux.Finder.desktop" 2>/dev/null || true
+rm -f "${USER_HOME}/.local/share/applications/finder-linux.desktop" 2>/dev/null || true
+
+# Remove the FileManager1 and org.freedesktop.Application activation files
+echo -e "${BLUE}==>${NC} Removing D-Bus activation registrations..."
+${SUDO} rm -f "${PREFIX}/share/dbus-1/services/org.freedesktop.FileManager1.service"
+${SUDO} rm -f "${PREFIX}/share/dbus-1/services/org.finderlinux.Finder.service"
+${SUDO} rm -f "${PREFIX}/share/dbus-1/services/finder-linux.service"
+rm -f "${USER_HOME}/.local/share/dbus-1/services/org.freedesktop.FileManager1.service" 2>/dev/null || true
+rm -f "${USER_HOME}/.local/share/dbus-1/services/org.finderlinux.Finder.service" 2>/dev/null || true
+rm -f "${USER_HOME}/.local/share/dbus-1/services/finder-linux.service" 2>/dev/null || true
+dbus-send --session --type=method_call --dest=org.freedesktop.DBus \
+  /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+
+# Remove documentation, completions, and metadata
+echo -e "${BLUE}==>${NC} Removing documentation and shell completions..."
+${SUDO} rm -f "${PREFIX}/share/man/man1/finder-linux.1"
+${SUDO} rm -f "${PREFIX}/share/metainfo/org.finderlinux.Finder.metainfo.xml"
+${SUDO} rm -f "${PREFIX}/share/bash-completion/completions/finder-linux"
+${SUDO} rm -f "${PREFIX}/share/zsh/site-functions/_finder-linux"
+${SUDO} rm -f "${PREFIX}/share/fish/vendor_completions.d/finder-linux.fish"
+${SUDO} rm -rf "${PREFIX}/share/licenses/finder-linux"
 
 # Remove icons
 echo -e "${BLUE}==>${NC} Removing application icons..."

@@ -69,6 +69,13 @@ GalleryView::GalleryView(QWidget* parent)
     mainLayout->addWidget(splitter);
 
     connect(m_filmstrip, &QListView::doubleClicked, this, &GalleryView::onItemDoubleClicked);
+
+    // Decoding a 600x380 preview per key-repeat makes arrow navigation lag;
+    // only decode once the selection has settled.
+    m_previewTimer = new QTimer(this);
+    m_previewTimer->setSingleShot(true);
+    m_previewTimer->setInterval(120);
+    connect(m_previewTimer, &QTimer::timeout, this, &GalleryView::updatePendingPreview);
 }
 
 void GalleryView::setFileSystemModel(FileSystemModel* model)
@@ -91,11 +98,25 @@ void GalleryView::onSelectionChanged()
     if (!idx.isValid()) {
         m_heroImageLabel->clear();
         m_heroInfoLabel->clear();
+        m_pendingPreviewPath.clear();
+        if (m_previewTimer) m_previewTimer->stop();
         return;
     }
 
     m_selectedPath = idx.data(FileSystemModel::FilePathRole).toString();
-    updateHeroPreview(m_selectedPath);
+    m_pendingPreviewPath = m_selectedPath;
+    if (m_previewTimer) {
+        m_previewTimer->start();
+    } else {
+        updateHeroPreview(m_selectedPath);
+    }
+}
+
+void GalleryView::updatePendingPreview()
+{
+    if (!m_pendingPreviewPath.isEmpty()) {
+        updateHeroPreview(m_pendingPreviewPath);
+    }
 }
 
 void GalleryView::updateHeroPreview(const QString& path)

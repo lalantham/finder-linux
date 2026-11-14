@@ -4,6 +4,9 @@
 #include <QStringList>
 #include <QByteArray>
 #include <QSettings>
+#include <QVariantMap>
+#include <Qt>
+#include <optional>
 
 enum class ViewMode {
     Icon = 0,
@@ -21,6 +24,7 @@ enum class AppTheme {
 class AppSettings {
 public:
     static AppSettings& instance();
+    static void setSettingsFilePath(const QString& path);
 
     void load();
     void save();
@@ -28,14 +32,37 @@ public:
     [[nodiscard]] ViewMode viewMode() const noexcept { return m_viewMode; }
     void setViewMode(ViewMode mode) { m_viewMode = mode; }
 
+    [[nodiscard]] bool rememberFolderViewModes() const noexcept { return m_rememberFolderViewModes; }
+    void setRememberFolderViewModes(bool enable) { m_rememberFolderViewModes = enable; }
+    [[nodiscard]] std::optional<ViewMode> folderViewMode(const QString& path) const;
+    void setFolderViewMode(const QString& path, ViewMode mode);
+
+    [[nodiscard]] int columnViewWidth(const QString& path) const;
+    void setColumnViewWidth(const QString& path, int width);
+    void removeColumnViewWidth(const QString& path);
+
+    [[nodiscard]] int trashAutoPurgeDays() const noexcept { return m_trashAutoPurgeDays; }
+    void setTrashAutoPurgeDays(int days) { m_trashAutoPurgeDays = qMax(0, days); }
+
     [[nodiscard]] bool showHiddenFiles() const noexcept { return m_showHiddenFiles; }
     void setShowHiddenFiles(bool show) {
         m_showHiddenFiles = show;
         save();
     }
 
+    [[nodiscard]] bool calculateFolderSizes() const noexcept { return m_calculateFolderSizes; }
+    void setCalculateFolderSizes(bool calc) {
+        m_calculateFolderSizes = calc;
+        save();
+    }
+
     [[nodiscard]] bool directoriesFirst() const noexcept { return m_directoriesFirst; }
     void setDirectoriesFirst(bool dirsFirst) { m_directoriesFirst = dirsFirst; }
+
+    [[nodiscard]] int sortColumn() const noexcept { return m_sortColumn; }
+    void setSortColumn(int column) { m_sortColumn = column; }
+    [[nodiscard]] Qt::SortOrder sortOrder() const noexcept { return m_sortOrder; }
+    void setSortOrder(Qt::SortOrder order) { m_sortOrder = order; }
 
     [[nodiscard]] int iconSize() const noexcept { return m_iconSize; }
     void setIconSize(int size) { m_iconSize = size; }
@@ -95,12 +122,21 @@ public:
     [[nodiscard]] QByteArray windowState() const noexcept { return m_windowState; }
     void setWindowState(const QByteArray& state) { m_windowState = state; }
 
+    [[nodiscard]] bool restoreTabsOnStartup() const noexcept { return m_restoreTabsOnStartup; }
+    void setRestoreTabsOnStartup(bool enable) { m_restoreTabsOnStartup = enable; }
+
+    [[nodiscard]] QStringList savedTabs() const noexcept { return m_savedTabs; }
+    void setSavedTabs(const QStringList& tabs) { m_savedTabs = tabs; }
+
 private:
     AppSettings();
 
     ViewMode m_viewMode{ViewMode::Icon};
     bool m_showHiddenFiles{false};
+    bool m_calculateFolderSizes{false};
     bool m_directoriesFirst{true};
+    int m_sortColumn{0};
+    Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
     int m_iconSize{64};
     AppTheme m_theme{AppTheme::System};
     QString m_defaultPath;
@@ -113,4 +149,10 @@ private:
     QByteArray m_windowState;
     bool m_springLoadedFolders{true};
     int m_springLoadDelayMs{750};
+    bool m_restoreTabsOnStartup{true};
+    QStringList m_savedTabs;
+    bool m_rememberFolderViewModes{false};
+    QVariantMap m_folderViewModes;
+    QVariantMap m_columnViewWidths;
+    int m_trashAutoPurgeDays{0};
 };

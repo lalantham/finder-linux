@@ -1,6 +1,7 @@
 #include "IconView.h"
 #include "DesktopAppsManager.h"
 #include "AppSettings.h"
+#include "PreviewManager.h"
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QContextMenuEvent>
@@ -29,6 +30,7 @@ IconView::IconView(QWidget* parent)
     setDropIndicatorShown(true);
     setDefaultDropAction(Qt::MoveAction);
     setSpacing(12);
+    setEditTriggers(QAbstractItemView::EditKeyPressed | QAbstractItemView::SelectedClicked);
 
     m_delegate = new FileItemDelegate(this);
     setItemDelegate(m_delegate);
@@ -36,6 +38,10 @@ IconView::IconView(QWidget* parent)
     m_springTimer = new QTimer(this);
     m_springTimer->setSingleShot(true);
     connect(m_springTimer, &QTimer::timeout, this, &IconView::onSpringTimeout);
+
+    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this, [this](const QString&) {
+        viewport()->update();
+    });
 
     connect(this, &QListView::activated, this, &IconView::onItemActivated);
 }
@@ -83,6 +89,13 @@ void IconView::keyPressEvent(QKeyEvent* event)
         QModelIndex idx = currentIndex();
         if (idx.isValid()) {
             emit quickLookRequested(idx.data(FileSystemModel::FilePathRole).toString());
+        }
+        return;
+    }
+    if (event->key() == Qt::Key_F2) {
+        QModelIndex idx = currentIndex();
+        if (idx.isValid()) {
+            edit(idx);
         }
         return;
     }

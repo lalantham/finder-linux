@@ -10,6 +10,13 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# When started with sudo, target the invoking user's home for per-user
+# desktop/D-Bus integration instead of /root.
+USER_HOME="${HOME}"
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  RESOLVED_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+  [[ -n "${RESOLVED_HOME}" ]] && USER_HOME="${RESOLVED_HOME}"
+fi
 BUILD_DIR="${ROOT_DIR}/build"
 
 echo -e "${BLUE}${BOLD}==> Updating macOS Finder for Linux...${NC}\n"
@@ -105,7 +112,7 @@ else
 fi
 
 # Ensure user desktop file specifies absolute binary path
-DESKTOP_FILE="${PREFIX}/share/applications/finder-linux.desktop"
+DESKTOP_FILE="${PREFIX}/share/applications/org.finderlinux.Finder.desktop"
 if [ -f "${DESKTOP_FILE}" ]; then
   if [[ -n "${SUDO}" ]]; then
     ${SUDO} sed -i "s|^Exec=finder-linux|Exec=${PREFIX}/bin/finder-linux|" "${DESKTOP_FILE}"
@@ -114,10 +121,30 @@ if [ -f "${DESKTOP_FILE}" ]; then
   fi
 fi
 
-# Also update user desktop file if installing as system or vice versa
-USER_DESKTOP="${HOME}/.local/share/applications/finder-linux.desktop"
-if [ -f "${USER_DESKTOP}" ]; then
-  sed -i "s|^Exec=.*finder-linux|Exec=${PREFIX}/bin/finder-linux|" "${USER_DESKTOP}" 2>/dev/null || true
+# Migrate from the old finder-linux.desktop ID (DBusActivatable requires a
+# reverse-DNS desktop ID). Hide the old launcher and rewrite old associations.
+OLD_DESKTOP_ID="finder-linux"
+NEW_DESKTOP_ID="org.finderlinux.Finder"
+USER_APPS_DIR="${USER_HOME}/.local/share/applications"
+mkdir -p "${USER_APPS_DIR}"
+cat > "${USER_APPS_DIR}/${OLD_DESKTOP_ID}.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Finder
+Exec=finder-linux %U
+Hidden=true
+EOF
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  chown "${SUDO_USER}:" "${USER_APPS_DIR}/${OLD_DESKTOP_ID}.desktop" 2>/dev/null || true
+fi
+
+MIMEAPPS_FILE="${USER_HOME}/.config/mimeapps.list"
+if [[ -f "${MIMEAPPS_FILE}" ]]; then
+  if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -u "${SUDO_USER}" sed -i "s/${OLD_DESKTOP_ID}\\.desktop/${NEW_DESKTOP_ID}.desktop/g" "${MIMEAPPS_FILE}" 2>/dev/null || true
+  else
+    sed -i "s/${OLD_DESKTOP_ID}\\.desktop/${NEW_DESKTOP_ID}.desktop/g" "${MIMEAPPS_FILE}" 2>/dev/null || true
+  fi
 fi
 
 # Check if an older /usr/bin/finder-linux binary exists that might shadow this installation
@@ -152,6 +179,44 @@ fi
 
 if command -v kbuildsycoca6 >/dev/null 2>&1; then
   kbuildsycoca6 --noincremental 2>/dev/null || true
+fi
+
+# Keep the FileManager1 and org.freedesktop.Application D-Bus activation
+# overrides in sync with the installed binary path.
+FINDER_BIN="${PREFIX}/bin/finder-linux"
+if [[ -x "${FINDER_BIN}" ]]; then
+  DBUS_SERVICE_DIR="${USER_HOME}/.local/share/dbus-1/services"
+  mkdir -p "${DBUS_SERVICE_DIR}"
+
+  install_dbus_activation() {
+    local service_name="$1"
+    cat > "${DBUS_SERVICE_DIR}/${service_name}.service" <<EOF
+[D-BUS Service]
+Name=${service_name}
+Exec="${FINDER_BIN}"
+EOF
+    if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+      chown "${SUDO_USER}:" "${DBUS_SERVICE_DIR}/${service_name}.service" 2>/dev/null || true
+    fi
+  }
+
+  install_dbus_activation org.freedesktop.FileManager1
+  install_dbus_activation org.finderlinux.Finder
+  rm -f "${DBUS_SERVICE_DIR}/finder-linux.service" 2>/dev/null || true
+  dbus-send --session --type=method_call --dest=org.freedesktop.DBus \
+    /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+  echo -e "${GREEN}✓${NC} Updated FileManager1/Application D-Bus registration."
+fi
+
+# Preserve the user's default file-manager choice across the desktop-ID rename.
+if command -v xdg-mime >/dev/null 2>&1; then
+  CURRENT_DEFAULT=$(xdg-mime query default inode/directory 2>/dev/null || true)
+  if [[ "${CURRENT_DEFAULT}" == "finder-linux.desktop" ]]; then
+    xdg-mime default org.finderlinux.Finder.desktop inode/directory 2>/dev/null || true
+    if command -v gio >/dev/null 2>&1; then
+      gio mime inode/directory org.finderlinux.Finder.desktop 2>/dev/null || true
+    fi
+  fi
 fi
 
 # Check if Finder is currently running

@@ -1,12 +1,42 @@
 #include "FileSystemModel.h"
+#include "FileOperationEngine.h"
 #include "TagManager.h"
+#include "AppSettings.h"
+#include <QDirIterator>
 #include <QFileInfo>
+#include <QFutureWatcher>
+#include <QHash>
+#include <QSet>
+#include <QStorageInfo>
+#include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+
+bool FileSystemModel::s_asyncLoading = false;
+
+void FileSystemModel::setAsyncLoadingEnabled(bool enabled)
+{
+    s_asyncLoading = enabled;
+}
+
+bool FileSystemModel::asyncLoadingEnabled()
+{
+    return s_asyncLoading;
+}
 
 FileSystemModel::FileSystemModel(QObject* parent)
     : QAbstractItemModel(parent)
 {
+    m_calculateFolderSizes = AppSettings::instance().calculateFolderSizes();
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &FileSystemModel::onDirectoryChanged);
+
+    // Coalesce bursts of filesystem events (unpacking an archive, downloads)
+    // into a single directory rescan.
+    m_refreshTimer = new QTimer(this);
+    m_refreshTimer->setSingleShot(true);
+    m_refreshTimer->setInterval(300);
+    connect(m_refreshTimer, &QTimer::timeout, this, &FileSystemModel::populate);
+
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, [this](const QString& path, const QStringList& /*tags*/) {
         for (int i = 0; i < m_items.size(); ++i) {
             if (m_items[i].path() == path) {
@@ -17,6 +47,14 @@ FileSystemModel::FileSystemModel(QObject* parent)
             }
         }
     });
+}
+
+FileSystemModel::~FileSystemModel()
+{
+    ++m_generation;
+    if (m_cancelFlag) {
+        m_cancelFlag->store(true, std::memory_order_relaxed);
+    }
 }
 
 void FileSystemModel::setRootPath(const QString& path)
@@ -33,7 +71,7 @@ void FileSystemModel::setRootPath(const QString& path)
     }
 
     m_rootPath = cleanPath;
-    if (!m_rootPath.isEmpty() && QDir(m_rootPath).exists()) {
+    if (!m_rootPath.isEmpty() && QDir(m_rootPath).exists() && isLocalFileSystem(m_rootPath)) {
         m_watcher.addPath(m_rootPath);
     }
 
@@ -69,6 +107,17 @@ void FileSystemModel::setDirectoriesFirst(bool dirsFirst)
     sort(m_sortColumn, m_sortOrder);
 }
 
+void FileSystemModel::setCalculateFolderSizes(bool enabled)
+{
+    if (m_calculateFolderSizes == enabled) return;
+    m_calculateFolderSizes = enabled;
+    if (m_calculateFolderSizes) {
+        scheduleFolderSizeCalculations();
+    } else {
+        refresh();
+    }
+}
+
 void FileSystemModel::refresh()
 {
     populate();
@@ -76,13 +125,65 @@ void FileSystemModel::refresh()
 
 void FileSystemModel::onDirectoryChanged(const QString& path)
 {
-    if (path == m_rootPath) {
-        populate();
+    if (path == m_rootPath && m_refreshTimer) {
+        m_refreshTimer->start();
     }
+}
+
+bool FileSystemModel::isLocalFileSystem(const QString& path)
+{
+    if (path.startsWith(QStringLiteral("tag://"))) {
+        return false;
+    }
+    if (path.contains(QStringLiteral("/gvfs/")) || path.contains(QStringLiteral("/kio-fuse/"))) {
+        return false;
+    }
+
+    QStorageInfo storage(path);
+    if (!storage.isValid()) {
+        return false;
+    }
+
+    static const QSet<QString> remoteTypes = {
+        QStringLiteral("nfs"), QStringLiteral("nfs4"), QStringLiteral("cifs"),
+        QStringLiteral("smb3"), QStringLiteral("smbfs"), QStringLiteral("afs"),
+        QStringLiteral("ceph"), QStringLiteral("9p"), QStringLiteral("davfs"),
+        QStringLiteral("fuse.sshfs"), QStringLiteral("fuse.rclone"),
+        QStringLiteral("fuse.gvfsd-fuse"), QStringLiteral("fuse.kio-fuse"),
+        QStringLiteral("fuse.smbnetfs")
+    };
+    const QString fsType = QString::fromLatin1(storage.fileSystemType()).toLower();
+    return !remoteTypes.contains(fsType);
 }
 
 void FileSystemModel::populate()
 {
+    // Tag collections are small and read the TagManager registry, which is not
+    // worth touching from a worker during shutdown.
+    if (s_asyncLoading && m_activeTag.isEmpty()) {
+        populateAsync();
+    } else {
+        populateSync();
+    }
+}
+
+void FileSystemModel::cancelPendingLoad()
+{
+    ++m_generation;
+    if (m_cancelFlag) {
+        m_cancelFlag->store(true, std::memory_order_relaxed);
+        m_cancelFlag.reset();
+    }
+}
+
+void FileSystemModel::populateSync()
+{
+    ++m_generation;
+    if (m_cancelFlag) {
+        m_cancelFlag->store(true, std::memory_order_relaxed);
+        m_cancelFlag.reset();
+    }
+
     beginResetModel();
     m_items.clear();
     m_allFolderItems.clear();
@@ -114,6 +215,73 @@ void FileSystemModel::populate()
 
     endResetModel();
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
+}
+
+void FileSystemModel::populateAsync()
+{
+    const quint64 generation = ++m_generation;
+    if (m_cancelFlag) {
+        m_cancelFlag->store(true, std::memory_order_relaxed);
+    }
+    auto cancel = std::make_shared<std::atomic<bool>>(false);
+    m_cancelFlag = cancel;
+
+    const bool tagView = !m_activeTag.isEmpty();
+    const QString tag = m_activeTag;
+    const QString root = m_rootPath;
+    const bool showHidden = m_showHidden;
+
+    emit directoryLoading(root);
+
+    // The watcher is owned by the model, so destroying the model cancels the
+    // callback; the scan itself keeps no pointer to the model.
+    auto* watcher = new QFutureWatcher<QVector<FileItem>>(this);
+    connect(watcher, &QFutureWatcher<QVector<FileItem>>::finished, this, [this, watcher, generation]() {
+        const QVector<FileItem> items = watcher->result();
+        watcher->deleteLater();
+
+        if (generation != m_generation) {
+            return; // a newer scan superseded this one
+        }
+
+        beginResetModel();
+        m_allFolderItems = items;
+        applyFilterInternal();
+        endResetModel();
+        emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
+    });
+
+    watcher->setFuture(QtConcurrent::run([tagView, tag, root, showHidden, cancel]() {
+        QVector<FileItem> items;
+        if (cancel->load(std::memory_order_relaxed)) {
+            return items;
+        }
+
+        if (tagView) {
+            const QStringList paths = TagManager::instance().filesForTag(tag);
+            items.reserve(paths.size());
+            for (const auto& path : paths) {
+                if (cancel->load(std::memory_order_relaxed)) break;
+                if (QFileInfo::exists(path)) {
+                    items.emplace_back(path);
+                }
+            }
+        } else if (!root.isEmpty()) {
+            QDir::Filters filters = QDir::NoDotAndDotDot | QDir::AllEntries | QDir::System;
+            if (showHidden) {
+                filters |= QDir::Hidden;
+            }
+
+            QDirIterator iterator(root, filters);
+            while (iterator.hasNext()) {
+                if (cancel->load(std::memory_order_relaxed)) break;
+                iterator.next();
+                items.emplace_back(iterator.fileInfo());
+            }
+        }
+
+        return items;
+    }));
 }
 
 bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& query, const QString& kind)
@@ -208,6 +376,67 @@ void FileSystemModel::applyFilterInternal()
         }
     }
     sortInternal();
+
+    m_longestFileName.clear();
+    for (const auto& item : m_items) {
+        if (item.fileName().size() > m_longestFileName.size()) {
+            m_longestFileName = item.fileName();
+        }
+    }
+
+    scheduleFolderSizeCalculations();
+}
+
+void FileSystemModel::scheduleFolderSizeCalculations()
+{
+    if (!m_calculateFolderSizes || m_items.isEmpty() || m_isSearchResultsView) {
+        return;
+    }
+
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (!m_items[i].isDir()) continue;
+        const QString dirPath = m_items[i].path();
+        if (m_folderSizeCache.contains(dirPath)) {
+            const auto& p = m_folderSizeCache.value(dirPath);
+            m_items[i].setCalculatedFolderSize(p.first, p.second);
+            emit dataChanged(index(i, ColSize), index(i, ColSize));
+            continue;
+        }
+
+        quint64 gen = m_generation;
+        auto* watcher = new QFutureWatcher<QPair<qint64, int>>(this);
+        connect(watcher, &QFutureWatcher<QPair<qint64, int>>::finished, this, [this, watcher, dirPath, gen]() {
+            QPair<qint64, int> res = watcher->result();
+            watcher->deleteLater();
+            if (gen != m_generation) return;
+            m_folderSizeCache[dirPath] = res;
+            for (int r = 0; r < m_items.size(); ++r) {
+                if (m_items[r].path() == dirPath) {
+                    m_items[r].setCalculatedFolderSize(res.first, res.second);
+                    emit dataChanged(index(r, ColSize), index(r, ColSize));
+                    break;
+                }
+            }
+        });
+
+        auto cancel = m_cancelFlag;
+        watcher->setFuture(QtConcurrent::run([dirPath, cancel]() -> QPair<qint64, int> {
+            qint64 total = 0;
+            int count = 0;
+            QDirIterator it(dirPath, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                if (cancel && cancel->load(std::memory_order_relaxed)) break;
+                it.next();
+                QFileInfo fi = it.fileInfo();
+                if (!fi.isDir()) {
+                    total += fi.size();
+                }
+                count++;
+                if (count > 50000) break;
+            }
+            return {total, count};
+        }));
+    }
 }
 
 void FileSystemModel::setFilterQuery(const QString& query, const QString& kind)
@@ -223,6 +452,7 @@ void FileSystemModel::setFilterQuery(const QString& query, const QString& kind)
 
 void FileSystemModel::setSearchResults(const QVector<FileItem>& items)
 {
+    cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
     m_items = items;
@@ -243,6 +473,7 @@ void FileSystemModel::appendSearchResults(const QVector<FileItem>& items)
 
 void FileSystemModel::clearSearchResults()
 {
+    cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
     m_items.clear();
@@ -253,6 +484,7 @@ void FileSystemModel::clearSearchResults()
 void FileSystemModel::exitSearchResults()
 {
     if (!m_isSearchResultsView) return;
+    cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = false;
     m_filterQuery.clear();
@@ -265,36 +497,75 @@ void FileSystemModel::exitSearchResults()
 
 void FileSystemModel::sortInternal()
 {
-    auto comparator = [this](const FileItem& a, const FileItem& b) -> bool {
-        if (m_directoriesFirst) {
-            if (a.isDir() != b.isDir()) {
-                return a.isDir(); // Directories always first
-            }
-        }
+    if (m_items.size() < 2) return;
 
-        bool less = false;
-        switch (m_sortColumn) {
-        case ColName:
-            less = QString::compare(a.fileName(), b.fileName(), Qt::CaseInsensitive) < 0;
-            break;
-        case ColDateModified:
-            less = a.modified() < b.modified();
-            break;
-        case ColSize:
-            less = a.size() < b.size();
-            break;
-        case ColKind:
-            less = QString::compare(a.kind(), b.kind(), Qt::CaseInsensitive) < 0;
-            break;
-        default:
-            less = QString::compare(a.fileName(), b.fileName(), Qt::CaseInsensitive) < 0;
-            break;
-        }
-
-        return (m_sortOrder == Qt::AscendingOrder) ? less : !less;
+    struct SortEntry {
+        int index{0};
+        bool isDir{false};
+        QString text;
+        qint64 number{0};
+        QDateTime date;
     };
 
-    std::sort(m_items.begin(), m_items.end(), comparator);
+    // Fold strings once instead of on every comparison.
+    QVector<SortEntry> entries;
+    entries.reserve(m_items.size());
+    for (int i = 0; i < m_items.size(); ++i) {
+        const FileItem& item = m_items.at(i);
+        SortEntry entry;
+        entry.index = i;
+        entry.isDir = item.isDir();
+        switch (m_sortColumn) {
+        case ColDateModified:
+            entry.date = item.modified();
+            break;
+        case ColSize:
+            entry.number = item.size();
+            break;
+        case ColKind:
+            entry.text = item.kind().toCaseFolded();
+            break;
+        case ColName:
+        default:
+            entry.text = item.fileName().toCaseFolded();
+            break;
+        }
+        entries.append(std::move(entry));
+    }
+
+    const bool ascending = (m_sortOrder == Qt::AscendingOrder);
+    const bool dirsFirst = m_directoriesFirst;
+    const int sortColumn = m_sortColumn;
+
+    std::stable_sort(entries.begin(), entries.end(), [dirsFirst, ascending, sortColumn](const SortEntry& a, const SortEntry& b) {
+        // Folders stay on top regardless of ascending/descending order.
+        if (dirsFirst && a.isDir != b.isDir) {
+            return a.isDir;
+        }
+
+        int comparison = 0;
+        switch (sortColumn) {
+        case ColDateModified:
+            comparison = (a.date == b.date) ? 0 : (a.date < b.date ? -1 : 1);
+            break;
+        case ColSize:
+            comparison = (a.number == b.number) ? 0 : (a.number < b.number ? -1 : 1);
+            break;
+        case ColKind:
+        case ColName:
+        default:
+            comparison = QString::compare(a.text, b.text, Qt::CaseSensitive);
+            break;
+        }
+        return ascending ? comparison < 0 : comparison > 0;
+    });
+
+    QVector<FileItem> sorted;
+    sorted.reserve(entries.size());
+    for (const auto& entry : entries) {
+        sorted.append(m_items.at(entry.index));
+    }
+    m_items = std::move(sorted);
 }
 
 void FileSystemModel::sort(int column, Qt::SortOrder order)
@@ -303,9 +574,38 @@ void FileSystemModel::sort(int column, Qt::SortOrder order)
     m_sortColumn = column;
     m_sortOrder = order;
 
-    beginResetModel();
+    // Preserve selection/current item across a sort instead of resetting the model.
+    const QModelIndexList oldPersistent = persistentIndexList();
+    QVector<QPair<QModelIndex, QString>> oldPaths;
+    oldPaths.reserve(oldPersistent.size());
+    for (const auto& idx : oldPersistent) {
+        if (idx.row() >= 0 && idx.row() < m_items.size()) {
+            oldPaths.append({idx, m_items.at(idx.row()).path()});
+        }
+    }
+
+    emit layoutAboutToBeChanged({}, QAbstractItemModel::VerticalSortHint);
     sortInternal();
-    endResetModel();
+
+    QHash<QString, int> rowByPath;
+    rowByPath.reserve(m_items.size());
+    for (int i = 0; i < m_items.size(); ++i) {
+        rowByPath.insert(m_items.at(i).path(), i);
+    }
+
+    QModelIndexList from;
+    QModelIndexList to;
+    from.reserve(oldPaths.size());
+    to.reserve(oldPaths.size());
+    for (const auto& entry : oldPaths) {
+        from.append(entry.first);
+        const auto row = rowByPath.constFind(entry.second);
+        to.append(row != rowByPath.cend() ? index(row.value(), 0) : QModelIndex());
+    }
+    changePersistentIndexList(from, to);
+
+    emit layoutChanged({}, QAbstractItemModel::VerticalSortHint);
+    emit sortChanged(m_sortColumn, m_sortOrder);
 }
 
 QModelIndex FileSystemModel::index(int row, int column, const QModelIndex& parent) const
@@ -431,7 +731,43 @@ Qt::ItemFlags FileSystemModel::flags(const QModelIndex& index) const
     if (item && item->isDir()) {
         f |= Qt::ItemIsDropEnabled;
     }
+    if (index.column() == ColName && item && !m_isSearchResultsView &&
+        !item->path().isEmpty() &&
+        !item->path().startsWith(QStringLiteral("trash://")) &&
+        !item->path().startsWith(QStringLiteral("tag://"))) {
+        f |= Qt::ItemIsEditable;
+    }
     return f;
+}
+
+bool FileSystemModel::setData(const QModelIndex& index, const QVariant& value, int role)
+{
+    if (!index.isValid() || role != Qt::EditRole) {
+        return false;
+    }
+    if (index.column() != ColName) {
+        return false;
+    }
+    const FileItem* item = itemForIndex(index);
+    if (!item) return false;
+
+    QString newName = value.toString().trimmed();
+    if (newName.isEmpty() || newName == item->fileName()) {
+        return false;
+    }
+    if (newName.contains(QLatin1Char('/')) || newName.contains(QLatin1Char('\\'))) {
+        return false;
+    }
+
+    QString oldPath = item->path();
+    FileOperationEngine engine;
+    QString renamedPath, error;
+    if (engine.renameItem(oldPath, newName, &renamedPath, &error)) {
+        emit itemRenamed(oldPath, renamedPath);
+        refresh();
+        return true;
+    }
+    return false;
 }
 
 Qt::DropActions FileSystemModel::supportedDropActions() const

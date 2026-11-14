@@ -44,8 +44,7 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const
                 QStringLiteral("bmp"), QStringLiteral("ico"), QStringLiteral("tiff"), QStringLiteral("tif")
             };
             if (!imgExts.contains(ext)) {
-                QMimeDatabase db;
-                QMimeType mime = db.mimeTypeForFile(fi);
+                QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
                 if (!mime.name().startsWith(QStringLiteral("image/"))) return false;
             }
         } else if (k == QStringLiteral("documents") || k == QStringLiteral("document")) {
@@ -56,8 +55,7 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const
                 QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")
             };
             if (!docExts.contains(ext)) {
-                QMimeDatabase db;
-                QMimeType mime = db.mimeTypeForFile(fi);
+                QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
                 if (!mime.name().startsWith(QStringLiteral("text/")) &&
                     mime.name() != QStringLiteral("application/pdf")) return false;
             }
@@ -68,8 +66,7 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const
                 QStringLiteral("flv"), QStringLiteral("m4v")
             };
             if (!vidExts.contains(ext)) {
-                QMimeDatabase db;
-                QMimeType mime = db.mimeTypeForFile(fi);
+                QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
                 if (!mime.name().startsWith(QStringLiteral("video/"))) return false;
             }
         } else if (k == QStringLiteral("audio")) {
@@ -79,8 +76,7 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const
                 QStringLiteral("wma"), QStringLiteral("opus")
             };
             if (!audExts.contains(ext)) {
-                QMimeDatabase db;
-                QMimeType mime = db.mimeTypeForFile(fi);
+                QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
                 if (!mime.name().startsWith(QStringLiteral("audio/"))) return false;
             }
         } else if (k == QStringLiteral("archives") || k == QStringLiteral("archive")) {
@@ -91,8 +87,7 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const
             };
             if (!arcExts.contains(ext)) return false;
         } else {
-            QMimeDatabase db;
-            QMimeType mime = db.mimeTypeForFile(fi);
+            QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
             if (!mime.name().contains(k, Qt::CaseInsensitive) &&
                 !mime.comment().contains(k, Qt::CaseInsensitive)) {
                 return false;
@@ -112,12 +107,19 @@ void SearchWorker::searchDirectory(const QString& dirPath)
 
     QDirIterator::IteratorFlags flags = QDirIterator::NoIteratorFlags;
     if (m_filter.recursive) {
-        flags = QDirIterator::Subdirectories | QDirIterator::FollowSymlinks;
+        // Do not follow symlinks recursively to avoid infinite recursion and filesystem loops
+        flags = QDirIterator::Subdirectories;
     }
 
     QDirIterator it(dirPath, filters, flags);
-    QSet<QString> visitedDirs;
     int checkCounter = 0;
+
+    // Deliver results in batches to keep the event queue cheap, and cap the
+    // result set so an overly broad search cannot exhaust memory.
+    constexpr int BatchSize = 200;
+    constexpr int MaxResults = 20000;
+    QVector<FileItem> batch;
+    batch.reserve(BatchSize);
 
     while (it.hasNext()) {
         if (m_cancelled.load(std::memory_order_relaxed)) {
@@ -127,24 +129,26 @@ void SearchWorker::searchDirectory(const QString& dirPath)
         it.next();
         QFileInfo fi = it.fileInfo();
 
-        // Symlink loop prevention
-        if (fi.isDir() && fi.isSymLink()) {
-            QString canonical = fi.canonicalFilePath();
-            if (visitedDirs.contains(canonical)) {
-                continue;
-            }
-            visitedDirs.insert(canonical);
-        }
-
         if (++checkCounter % 100 == 0) {
             emit progress(fi.dir().path());
         }
 
         if (matchesFilter(fi)) {
-            FileItem item(fi);
-            emit itemFound(item);
+            batch.append(FileItem(fi));
             m_count++;
+
+            if (batch.size() >= BatchSize) {
+                emit itemsFound(batch);
+                batch.clear();
+            }
+            if (m_count >= MaxResults) {
+                break;
+            }
         }
+    }
+
+    if (!batch.isEmpty()) {
+        emit itemsFound(batch);
     }
 }
 
@@ -174,7 +178,7 @@ void SearchEngine::startSearch(const SearchFilter& filter)
     m_worker->moveToThread(m_workerThread);
 
     connect(m_workerThread, &QThread::started, m_worker, &SearchWorker::run);
-    connect(m_worker, &SearchWorker::itemFound, this, &SearchEngine::itemFound);
+    connect(m_worker, &SearchWorker::itemsFound, this, &SearchEngine::itemsFound);
     connect(m_worker, &SearchWorker::progress, this, &SearchEngine::searchProgress);
     connect(m_worker, &SearchWorker::finished, this, [this](int total) {
         emit searchFinished(total);
@@ -186,20 +190,34 @@ void SearchEngine::startSearch(const SearchFilter& filter)
 
 void SearchEngine::stopSearch()
 {
+    if (!m_workerThread) {
+        m_worker = nullptr;
+        return;
+    }
+
     if (m_worker) {
         m_worker->cancel();
+        // Detach first so a slow worker can never deliver stale results.
+        disconnect(m_worker, nullptr, this, nullptr);
     }
-    if (m_workerThread) {
-        m_workerThread->quit();
-        m_workerThread->wait(300);
-        if (m_workerThread->isRunning()) {
-            m_workerThread->terminate();
-            m_workerThread->wait();
-        }
-        delete m_worker;
-        delete m_workerThread;
-        m_worker = nullptr;
-        m_workerThread = nullptr;
+    disconnect(m_workerThread, nullptr, this, nullptr);
+
+    QThread* thread = m_workerThread;
+    SearchWorker* worker = m_worker;
+    m_workerThread = nullptr;
+    m_worker = nullptr;
+
+    if (worker) {
+        connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+    }
+    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+
+    thread->quit();
+    if (!thread->wait(1500)) {
+        // Still stuck in a slow syscall (hung mount, huge directory). Do not
+        // terminate() it: let it notice the cancel flag and clean itself up in
+        // the background so the UI stays responsive.
+        thread->setParent(nullptr);
     }
 }
 

@@ -5,7 +5,11 @@
 #include <QTreeWidgetItem>
 #include <QStyledItemDelegate>
 #include <QFileSystemWatcher>
+#include <QDBusObjectPath>
+#include <QStringList>
+#include <QVariantMap>
 #include <QTimer>
+#include <QElapsedTimer>
 
 class SidebarItemDelegate : public QStyledItemDelegate {
     Q_OBJECT
@@ -45,6 +49,7 @@ public slots:
     void openManageSidebarDialog();
 
 protected:
+    bool viewportEvent(QEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void startDrag(Qt::DropActions supportedActions) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
@@ -56,20 +61,29 @@ private slots:
     void onItemClicked(QTreeWidgetItem* item, int column);
     void onSpringTimeout();
     void checkVolumeChanges();
+    void onUdisksInterfacesAdded(const QDBusObjectPath& path, const QVariantMap& interfaces);
+    void onUdisksInterfacesRemoved(const QDBusObjectPath& path, const QStringList& interfaces);
 
 private:
     void resetSpringTimer();
+    void mountDeviceAsync(const QString& device);
+    void ejectVolumeAsync(const QString& path);
 
     void populateFavorites();
     void populateLocations();
     void populateTags();
+    void requestVolumeScan(bool force = false);
 
     SidebarItemDelegate* m_delegate{nullptr};
     QTimer* m_springTimer{nullptr};
     QString m_springHoverPath;
     QFileSystemWatcher* m_volumeWatcher{nullptr};
     QTimer* m_volumePollTimer{nullptr};
+    QTimer* m_volumeDebounceTimer{nullptr};
     QString m_lastVolumeFingerprint;
+    QVector<VolumeEntry> m_lastVolumes;
+    bool m_volumeScanRunning{false};
+    QElapsedTimer m_volumeScanTimestamp;
     QTreeWidgetItem* m_favoritesHeader{nullptr};
     QTreeWidgetItem* m_locationsHeader{nullptr};
     QTreeWidgetItem* m_tagsHeader{nullptr};

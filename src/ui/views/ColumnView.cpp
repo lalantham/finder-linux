@@ -5,8 +5,12 @@
 #include "PreviewManager.h"
 #include "FileItem.h"
 #include "ThemeManager.h"
+#include "WrappingLabel.h"
 #include <QScrollBar>
 #include <QKeyEvent>
+#include <QMouseEvent>
+#include <QSignalBlocker>
+#include <QFontMetrics>
 #include <QVBoxLayout>
 #include <QDesktopServices>
 #include <QUrl>
@@ -22,6 +26,13 @@
 #include <QDragLeaveEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QLineEdit>
+
+namespace {
+constexpr int kColumnResizeMargin = 6;
+constexpr int kMinColumnWidth = 200;
+constexpr int kMaxColumnWidth = 1600;
+}
 
 // ColumnItemDelegate
 ColumnItemDelegate::ColumnItemDelegate(QObject* parent)
@@ -121,6 +132,49 @@ QSize ColumnItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QMo
     return QSize(option.rect.width(), 26);
 }
 
+QWidget* ColumnItemDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    Q_UNUSED(option);
+    Q_UNUSED(index);
+    auto* editor = new QLineEdit(parent);
+    editor->setFrame(true);
+    editor->setStyleSheet(QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 4px; padding: 2px 4px; }")
+        .arg(ThemeManager::instance().isDark() ? QStringLiteral("#2d2d2d") : QStringLiteral("#ffffff"))
+        .arg(ThemeManager::instance().isDark() ? QStringLiteral("#ffffff") : QStringLiteral("#000000"))
+        .arg(ThemeManager::instance().accentColor().name()));
+    return editor;
+}
+
+void ColumnItemDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const
+{
+    auto* lineEdit = qobject_cast<QLineEdit*>(editor);
+    if (!lineEdit) {
+        QStyledItemDelegate::setEditorData(editor, index);
+        return;
+    }
+    QString name = index.data(Qt::DisplayRole).toString();
+    lineEdit->setText(name);
+    const bool isDirectory = index.data(FileSystemModel::FileIsDirRole).toBool();
+    const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+    const int selectionLen = (!isDirectory && dot > 0)
+        ? static_cast<int>(dot)
+        : static_cast<int>(name.size());
+    lineEdit->setSelection(0, selectionLen);
+    // QAbstractItemView selects the whole editor text after setEditorData().
+    // Re-apply the stem selection once the view has finished opening the editor.
+    QTimer::singleShot(0, lineEdit, [lineEdit, selectionLen]() {
+        lineEdit->setSelection(0, selectionLen);
+    });
+}
+
+void ColumnItemDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& /*index*/) const
+{
+    int textLeft = option.rect.left() + 34;
+    QRect textRect(textLeft, option.rect.top() + (option.rect.height() - 24) / 2,
+                   option.rect.width() - 40, 24);
+    editor->setGeometry(textRect);
+}
+
 // ColumnBrowserList
 ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     : QListView(parent)
@@ -131,9 +185,17 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     m_model->setRootPath(path);
     setModel(m_model);
 
-    setFixedWidth(240);
+    const int savedWidth = AppSettings::instance().columnViewWidth(path);
+    if (savedWidth > 0) {
+        m_preferredWidth = qBound(kMinColumnWidth, savedWidth, kMaxColumnWidth);
+        m_userResized = true;
+        setFixedWidth(m_preferredWidth);
+    } else {
+        setFixedWidth(240);
+    }
     setUniformItemSizes(true);
-    setEditTriggers(QAbstractItemView::NoEditTriggers);
+    viewport()->setMouseTracking(true);
+    setEditTriggers(QAbstractItemView::EditKeyPressed | QAbstractItemView::SelectedClicked);
     setSelectionMode(QAbstractItemView::ExtendedSelection);
     setMovement(QListView::Static);
     m_delegate = new ColumnItemDelegate(this);
@@ -159,6 +221,10 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     ));
 
     connect(m_model, &FileSystemModel::fileDropRequested, this, &ColumnBrowserList::fileDropRequested);
+    connect(m_model, &FileSystemModel::directoryLoaded, this, [this]() {
+        applyPendingSelection(true);
+        updateColumnWidth();
+    });
     connect(selectionModel(), &QItemSelectionModel::currentChanged, this, &ColumnBrowserList::onSelectionChanged);
     connect(selectionModel(), &QItemSelectionModel::selectionChanged, this, &ColumnBrowserList::onSelectionChanged);
     connect(this, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
@@ -182,9 +248,96 @@ QStringList ColumnBrowserList::selectedPaths() const
     return paths;
 }
 
+void ColumnBrowserList::updateColumnWidth()
+{
+    if (!m_model || m_userResized) return;
+
+    QFont measurementFont = font();
+    measurementFont.setPointSize(10);
+    const QFontMetrics metrics(measurementFont);
+
+    // Icon area (10 left + 18 icon + 24 text gap), chevron area, tag dots
+    // allowance and a little padding.
+    const int textWidth = metrics.horizontalAdvance(m_model->longestFileName());
+    m_preferredWidth = qBound(240, textWidth + 120, 640);
+
+    if (!m_widthAnimating) {
+        setFixedWidth(m_preferredWidth);
+        emit preferredWidthChanged();
+    }
+}
+
+void ColumnBrowserList::setWidthAnimating(bool animating)
+{
+    m_widthAnimating = animating;
+    if (!m_widthAnimating) {
+        setFixedWidth(m_preferredWidth);
+        emit preferredWidthChanged();
+    }
+}
+
+void ColumnBrowserList::selectPathWhenLoaded(const QString& path, bool notifyPassive, bool applyNow)
+{
+    m_pendingSelectPath = path;
+    m_pendingNotifyPassive = notifyPassive;
+    if (applyNow) {
+        applyPendingSelection(false);
+    }
+}
+
+void ColumnBrowserList::applyPendingSelection(bool afterLoad)
+{
+    if (m_pendingSelectPath.isEmpty()) {
+        return;
+    }
+
+    QModelIndex match;
+    for (int row = 0; row < m_model->rowCount(); ++row) {
+        const QModelIndex idx = m_model->index(row, 0);
+        if (idx.data(FileSystemModel::FilePathRole).toString() == m_pendingSelectPath) {
+            match = idx;
+            break;
+        }
+    }
+
+    if (!match.isValid()) {
+        if (afterLoad) {
+            m_pendingSelectPath.clear();
+            m_pendingNotifyPassive = false;
+        }
+        return;
+    }
+
+    const QString selectedPath = m_pendingSelectPath;
+    const bool notify = m_pendingNotifyPassive;
+    m_pendingSelectPath.clear();
+    m_pendingNotifyPassive = false;
+
+    {
+        // Passive selection (selection restored after a refresh/load) must not
+        // create another column via onSelectionChanged.
+        const QSignalBlocker blocker(selectionModel());
+        setCurrentIndex(match);
+        scrollTo(match);
+    }
+
+    if (notify) {
+        emit passivePathSelected(selectedPath);
+    }
+}
+
 void ColumnBrowserList::onSelectionChanged()
 {
     QStringList paths = selectedPaths();
+
+    // currentChanged and selectionChanged both fire for the same user action;
+    // without this guard the next column is created twice per click.
+    const QString signature = paths.join(QLatin1Char('\n'));
+    if (signature == m_lastSelectionSignature) {
+        return;
+    }
+    m_lastSelectionSignature = signature;
+
     if (paths.isEmpty()) {
         emit selectionCleared();
         return;
@@ -202,6 +355,83 @@ void ColumnBrowserList::onSelectionChanged()
     } else {
         emit multipleItemsSelected(paths);
     }
+}
+
+namespace {
+bool isOnColumnEdge(const QWidget* widget, const QPoint& pos)
+{
+    return pos.x() >= widget->width() - kColumnResizeMargin;
+}
+}
+
+void ColumnBrowserList::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && isOnColumnEdge(viewport(), event->position().toPoint())) {
+        m_resizing = true;
+        m_resizeStartWidth = width();
+        m_resizeStartGlobalX = event->globalPosition().toPoint().x();
+        viewport()->setCursor(Qt::SizeHorCursor);
+        event->accept();
+        return;
+    }
+    QListView::mousePressEvent(event);
+}
+
+void ColumnBrowserList::mouseMoveEvent(QMouseEvent* event)
+{
+    if (m_resizing) {
+        const int delta = event->globalPosition().toPoint().x() - m_resizeStartGlobalX;
+        if (delta != 0) {
+            m_userResized = true;
+        }
+        m_preferredWidth = qBound(kMinColumnWidth, m_resizeStartWidth + delta, kMaxColumnWidth);
+        setFixedWidth(m_preferredWidth);
+        event->accept();
+        return;
+    }
+
+    if (isOnColumnEdge(viewport(), event->position().toPoint())) {
+        viewport()->setCursor(Qt::SizeHorCursor);
+    } else {
+        viewport()->unsetCursor();
+    }
+    QListView::mouseMoveEvent(event);
+}
+
+void ColumnBrowserList::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (m_resizing) {
+        m_resizing = false;
+        if (!isOnColumnEdge(viewport(), event->position().toPoint())) {
+            viewport()->unsetCursor();
+        }
+        AppSettings::instance().setColumnViewWidth(m_path, m_preferredWidth);
+        emit preferredWidthChanged();
+        event->accept();
+        return;
+    }
+    QListView::mouseReleaseEvent(event);
+}
+
+void ColumnBrowserList::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && isOnColumnEdge(viewport(), event->position().toPoint())) {
+        AppSettings::instance().removeColumnViewWidth(m_path);
+        m_userResized = false;
+        updateColumnWidth();
+        emit preferredWidthChanged();
+        event->accept();
+        return;
+    }
+    QListView::mouseDoubleClickEvent(event);
+}
+
+bool ColumnBrowserList::viewportEvent(QEvent* event)
+{
+    if (event->type() == QEvent::Leave) {
+        viewport()->unsetCursor();
+    }
+    return QListView::viewportEvent(event);
 }
 
 void ColumnBrowserList::dragEnterEvent(QDragEnterEvent* event)
@@ -294,6 +524,13 @@ void ColumnBrowserList::onSpringTimeout()
 
 void ColumnBrowserList::keyPressEvent(QKeyEvent* event)
 {
+    if (event->key() == Qt::Key_F2) {
+        QModelIndex idx = currentIndex();
+        if (idx.isValid()) {
+            edit(idx);
+        }
+        return;
+    }
     if (event->key() == Qt::Key_Space) {
         QModelIndex idx = currentIndex();
         if (idx.isValid()) {
@@ -355,13 +592,11 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
     m_iconLabel->setFixedHeight(140);
     layout->addWidget(m_iconLabel);
 
-    m_nameLabel = new QLabel(this);
-    m_nameLabel->setAlignment(Qt::AlignCenter);
+    m_nameLabel = new WrapAnywhereLabel(QString(), this);
     QFont nf = m_nameLabel->font();
     nf.setBold(true);
     nf.setPointSize(11);
     m_nameLabel->setFont(nf);
-    m_nameLabel->setWordWrap(true);
     layout->addWidget(m_nameLabel);
 
     auto* line = new QFrame(this);
@@ -501,6 +736,8 @@ ColumnView::ColumnView(QWidget* parent)
     : QScrollArea(parent)
     , m_showHidden(AppSettings::instance().showHiddenFiles())
 {
+    m_sortColumn = AppSettings::instance().sortColumn();
+    m_sortOrder = AppSettings::instance().sortOrder();
     setWidgetResizable(true);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -564,14 +801,8 @@ void ColumnView::navigateToPath(const QString& targetPath)
         if (clean.startsWith(lastCol->path() + QLatin1Char('/'))) {
             QString subName = clean.mid(lastCol->path().length() + 1);
             if (!subName.contains(QLatin1Char('/'))) {
-                for (int r = 0; r < lastCol->model()->rowCount(); ++r) {
-                    QModelIndex idx = lastCol->model()->index(r, 0);
-                    if (idx.data(FileSystemModel::FileNameRole).toString() == subName) {
-                        lastCol->setCurrentIndex(idx);
-                        lastCol->scrollTo(idx);
-                        break;
-                    }
-                }
+                // The parent column may still be scanning; select once loaded.
+                lastCol->selectPathWhenLoaded(clean, false);
                 m_previewPane->hide();
                 addColumn(clean, true);
                 m_activeColumnIndex = static_cast<int>(m_columns.size()) - 1;
@@ -592,6 +823,14 @@ QString ColumnView::activeDirectory() const
         return m_rootPath;
     }
     return m_columns.last()->path();
+}
+
+int ColumnView::activeColumnRowCount() const
+{
+    if (m_columns.isEmpty() || !m_columns.last()->model()) {
+        return 0;
+    }
+    return m_columns.last()->model()->rowCount();
 }
 
 void ColumnView::refresh(const QString& targetToSelect)
@@ -630,33 +869,10 @@ void ColumnView::refresh(const QString& targetToSelect)
             col->selectionModel()->blockSignals(true);
         }
 
+        // Arm the selection before the (possibly asynchronous) reload; it is
+        // applied when directoryLoaded arrives.
+        col->selectPathWhenLoaded(colSelectedPath, i == m_columns.size() - 1, false);
         col->model()->refresh();
-
-        // Restore selection if it still exists
-        if (!colSelectedPath.isEmpty()) {
-            bool found = false;
-            for (int r = 0; r < col->model()->rowCount(); ++r) {
-                QModelIndex idx = col->model()->index(r, 0);
-                if (idx.data(FileSystemModel::FilePathRole).toString() == colSelectedPath) {
-                    col->setCurrentIndex(idx);
-                    col->scrollTo(idx);
-                    found = true;
-                    break;
-                }
-            }
-            if (i == m_columns.size() - 1) {
-                if (found) {
-                    m_selectedPath = colSelectedPath;
-                    if (m_previewPane->isVisible() && !QFileInfo(colSelectedPath).isDir()) {
-                        m_previewPane->setItem(colSelectedPath);
-                    }
-                } else if (!selected.isEmpty() && !QFileInfo::exists(selected)) {
-                    // The selected item in the last column was deleted
-                    m_selectedPath.clear();
-                    m_previewPane->hide();
-                }
-            }
-        }
 
         if (col->selectionModel()) {
             col->selectionModel()->blockSignals(false);
@@ -664,13 +880,10 @@ void ColumnView::refresh(const QString& targetToSelect)
         col->blockSignals(false);
     }
 
-    if (!m_selectedPath.isEmpty()) {
-        if (!QFileInfo::exists(m_selectedPath)) {
-            m_selectedPath.clear();
-            m_previewPane->hide();
-        } else if (m_previewPane->isVisible()) {
-            m_previewPane->setItem(m_selectedPath);
-        }
+    if (!m_selectedPath.isEmpty() && !QFileInfo::exists(m_selectedPath)) {
+        // The selected item in the last column was deleted.
+        m_selectedPath.clear();
+        m_previewPane->hide();
     }
 
     m_isRefreshing = false;
@@ -685,14 +898,47 @@ void ColumnView::setShowHidden(bool show)
     }
 }
 
+void ColumnView::applySort(int column, Qt::SortOrder order)
+{
+    m_sortColumn = column;
+    m_sortOrder = order;
+    for (auto* col : m_columns) {
+        col->model()->sort(column, order);
+    }
+}
+
 void ColumnView::addColumn(const QString& path, bool animate)
 {
     int colIndex = static_cast<int>(m_columns.size());
     auto* col = new ColumnBrowserList(path, m_container);
     col->model()->setShowHidden(m_showHidden);
+    col->model()->setDirectoriesFirst(AppSettings::instance().directoriesFirst());
+    col->model()->sort(m_sortColumn, m_sortOrder);
 
     m_layout->insertWidget(colIndex, col);
     m_columns.append(col);
+    col->updateColumnWidth();
+
+    connect(col, &ColumnBrowserList::preferredWidthChanged, this, [this, col]() {
+        if (!m_columns.isEmpty() && m_columns.last() == col) {
+            scrollToRightAnimated();
+        }
+    });
+
+    connect(col->model(), &FileSystemModel::directoryLoaded, this, [this, col](const QString&, int) {
+        if (!m_columns.isEmpty() && m_columns.last() == col) {
+            emit contentLoaded();
+        }
+    });
+    connect(col->model(), &FileSystemModel::itemRenamed, this, &ColumnView::itemRenamed);
+    connect(col, &ColumnBrowserList::passivePathSelected, this, [this, col](const QString& path) {
+        if (!m_columns.isEmpty() && m_columns.last() == col) {
+            m_selectedPath = path;
+            if (m_previewPane->isVisible() && !QFileInfo(path).isDir()) {
+                m_previewPane->setItem(path);
+            }
+        }
+    });
 
     connect(col, &ColumnBrowserList::itemSelected, this, [this, col](const QString& itemPath, bool isDir) {
         if (m_isRefreshing) return;
@@ -754,15 +1000,16 @@ void ColumnView::addColumn(const QString& path, bool animate)
 
     // Animate column slide-in width if traversing
     if (animate) {
+        col->setWidthAnimating(true);
         col->setMaximumWidth(0);
         auto* anim = new QPropertyAnimation(col, "maximumWidth", this);
         anim->setDuration(200);
         anim->setStartValue(0);
-        anim->setEndValue(240);
+        anim->setEndValue(col->preferredWidth());
         anim->setEasingCurve(QEasingCurve::OutCubic);
         connect(anim, &QPropertyAnimation::finished, this, [col]() {
             col->setMaximumWidth(QWIDGETSIZE_MAX);
-            col->setFixedWidth(240);
+            col->setWidthAnimating(false);
         });
         anim->start(QAbstractAnimation::DeleteWhenStopped);
     }
@@ -844,6 +1091,14 @@ QStringList ColumnView::selectedPaths() const
     return m_selectedPaths.isEmpty() ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{}) : m_selectedPaths;
 }
 
+QListView* ColumnView::activeView() const
+{
+    if (m_activeColumnIndex >= 0 && m_activeColumnIndex < m_columns.size()) {
+        return m_columns.at(m_activeColumnIndex);
+    }
+    return nullptr;
+}
+
 void ColumnView::selectAll()
 {
     int numCols = static_cast<int>(m_columns.size());
@@ -853,6 +1108,23 @@ void ColumnView::selectAll()
     if (colIdx >= 0 && colIdx < numCols) {
         m_columns[colIdx]->selectAll();
     }
+}
+
+bool ColumnView::triggerRename()
+{
+    int numCols = static_cast<int>(m_columns.size());
+    int colIdx = (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols)
+                 ? m_activeColumnIndex
+                 : (numCols - 1);
+    if (colIdx >= 0 && colIdx < numCols) {
+        auto* col = m_columns[colIdx];
+        QModelIndex idx = col->currentIndex();
+        if (idx.isValid()) {
+            col->edit(idx);
+            return true;
+        }
+    }
+    return false;
 }
 
 void ColumnView::scrollToRightAnimated()

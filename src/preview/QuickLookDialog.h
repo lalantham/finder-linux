@@ -9,6 +9,13 @@
 #include <QKeyEvent>
 #include <QStringList>
 
+class QSlider;
+#ifdef HAVE_QT_MULTIMEDIA
+class QMediaPlayer;
+class QAudioOutput;
+class QVideoWidget;
+#endif
+
 class QuickLookDialog : public QDialog {
     Q_OBJECT
 
@@ -27,6 +34,7 @@ private slots:
 
 private:
     void updateContent();
+    void stopMediaPlayback();
 
     QStringList m_files;
     int m_currentIndex{0};
@@ -39,6 +47,20 @@ private:
     QWidget* m_fallbackWidget{nullptr};
     QLabel* m_fallbackIconLabel{nullptr};
     QLabel* m_fallbackTextLabel{nullptr};
+
+    QWidget* m_mediaWidget{nullptr};
+    QPushButton* m_playPauseBtn{nullptr};
+    QSlider* m_positionSlider{nullptr};
+    QLabel* m_positionLabel{nullptr};
+    QLabel* m_durationLabel{nullptr};
+    QLabel* m_audioIconLabel{nullptr};
+    bool m_seekDragging{false};
+
+#ifdef HAVE_QT_MULTIMEDIA
+    QMediaPlayer* m_player{nullptr};
+    QAudioOutput* m_audioOutput{nullptr};
+    QVideoWidget* m_videoWidget{nullptr};
+#endif
 
     QPushButton* m_prevBtn{nullptr};
     QPushButton* m_nextBtn{nullptr};

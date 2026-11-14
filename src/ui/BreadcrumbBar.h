@@ -4,6 +4,8 @@
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QStackedLayout>
+#include <QCompleter>
+#include <QFileSystemModel>
 
 class BreadcrumbBar : public QWidget {
     Q_OBJECT
@@ -30,11 +32,14 @@ private slots:
 private:
     void resetSpringTimer();
     void rebuildBreadcrumbs();
+    void showContextMenu(const QPoint& globalPos);
 
     QString m_currentPath;
     QHBoxLayout* m_breadcrumbLayout{nullptr};
     QWidget* m_breadcrumbContainer{nullptr};
     QLineEdit* m_pathEdit{nullptr};
+    QCompleter* m_completer{nullptr};
+    QFileSystemModel* m_completerModel{nullptr};
     QStackedLayout* m_stackLayout{nullptr};
     QTimer* m_springTimer{nullptr};
     QString m_springHoverPath;

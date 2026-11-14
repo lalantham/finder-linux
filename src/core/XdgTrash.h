@@ -22,13 +22,14 @@ public:
     static QString trashFilesDirectory();
     static QString trashInfoDirectory();
 
-    static bool moveToTrash(const QString& sourcePath, QString* errorMessage = nullptr);
-    static bool restoreItem(const QString& trashFilePath, QString* errorMessage = nullptr);
+    static bool moveToTrash(const QString& sourcePath, QString* errorMessage = nullptr, QString* trashedFilePath = nullptr);
+    static bool restoreItem(const QString& trashFilePath, QString* errorMessage = nullptr,
+                            QString* restoredPath = nullptr, bool keepBothOnConflict = true);
     static bool emptyTrash(QString* errorMessage = nullptr);
+    static int purgeOlderThan(const QDateTime& cutoff, QString* errorMessage = nullptr);
     static QVector<TrashItem> listTrashItems();
     static qint64 totalTrashSize();
 
 private:
     static bool ensureTrashDirs();
-    static QString generateUniqueTrashBaseName(const QString& originalFileName);
 };

@@ -29,7 +29,6 @@ protected:
 
 private slots:
     void onItemActivated(const QModelIndex& index);
-    void onHeaderClicked(int logicalIndex);
     void onSpringTimeout();
 
 private:

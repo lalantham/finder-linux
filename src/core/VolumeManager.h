@@ -23,10 +23,12 @@ struct VolumeEntry {
 class VolumeManager {
 public:
     static QVector<VolumeEntry> mountedVolumes();
+    static void invalidateCache();
     static VolumeEntry rootVolume();
     static bool isLocationMounted(const QString& path);
     static bool isMountPoint(const QString& path);
     static bool isUsbDevice(const QString& devPathOrName);
     static QString mountDevice(const QString& device, QString* errorOut = nullptr);
     static bool unmountVolume(const QString& mountPointOrDevice, QString* errorOut = nullptr);
+    static bool ejectVolume(const QString& mountPointOrDevice, QString* errorOut = nullptr);
 };

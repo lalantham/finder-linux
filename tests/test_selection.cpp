@@ -4,24 +4,41 @@
 #include <QFile>
 #include <QDir>
 #include <QApplication>
+#include <QLineEdit>
 #include "IconView.h"
 #include "ListView.h"
 #include "ColumnView.h"
 #include "GalleryView.h"
 #include "TabPage.h"
+#include "TabManager.h"
+#include "AppSettings.h"
 #include "FileSystemModel.h"
+#include "TagManager.h"
+#include "AppChooserDialog.h"
+#include "TearOffTabBar.h"
 
 class TestSelection : public QObject {
     Q_OBJECT
 
 private slots:
     void initTestCase();
+    void cleanup();
     void testIconViewSelection();
     void testListViewSelection();
     void testColumnViewSelection();
     void testGalleryViewSelection();
     void testTabPageMultiSelection();
     void testNavigationHistory();
+    void testSplitTabManager();
+    void testSplitViewSync();
+    void testTaggedFilesView();
+    void testInlineRenamingModel();
+    void testSelectByPatternAndInvert();
+    void testRenameEditorSelectsStem();
+    void testTabManagerCloseAndReopen();
+    void testTabTearOffSignal();
+    void testColumnWidthPersistence();
+    void testAppChooserDialog();
 
 private:
     QTemporaryDir m_tempDir;
@@ -40,6 +57,34 @@ void TestSelection::initTestCase()
         f.close();
         m_createdFiles.append(dir.filePath(fileName));
     }
+}
+
+void TestSelection::cleanup()
+{
+    AppSettings::setSettingsFilePath(QString());
+}
+
+void TestSelection::testColumnWidthPersistence()
+{
+    QTemporaryDir directory;
+    QTemporaryDir settingsDirectory;
+    QVERIFY(directory.isValid());
+    QVERIFY(settingsDirectory.isValid());
+
+    AppSettings::setSettingsFilePath(
+        settingsDirectory.path() + QStringLiteral("/settings.ini"));
+
+    const QString folderPath = directory.path();
+    AppSettings::instance().setColumnViewWidth(folderPath, 321);
+
+    ColumnBrowserList savedWidthList(folderPath);
+    QCOMPARE(savedWidthList.preferredWidth(), 321);
+    QCOMPARE(savedWidthList.width(), 321);
+
+    AppSettings::instance().removeColumnViewWidth(folderPath);
+    ColumnBrowserList resetWidthList(folderPath);
+    QCOMPARE(resetWidthList.preferredWidth(), 240);
+    QCOMPARE(resetWidthList.width(), 240);
 }
 
 void TestSelection::testIconViewSelection()
@@ -293,6 +338,287 @@ void TestSelection::testNavigationHistory()
     colPage.goForward();
     QCOMPARE(colPage.currentPath(), sub1);
     QVERIFY(colPage.canGoBack());
+}
+
+void TestSelection::testSplitTabManager()
+{
+    TabManager tabMgr;
+    TabPage* p1 = tabMgr.createTab(m_tempDir.path());
+    QVERIFY(p1 != nullptr);
+    QCOMPARE(tabMgr.currentPage(), p1);
+    QVERIFY(!tabMgr.isSplit());
+
+    // Toggle split
+    tabMgr.toggleSplit();
+    QVERIFY(tabMgr.isSplit());
+    TabPage* p2 = tabMgr.currentPage();
+    QVERIFY(p2 != nullptr);
+    QVERIFY(p2 != p1);
+    QCOMPARE(p2->currentPath(), m_tempDir.path());
+
+    // Toggle back
+    tabMgr.toggleSplit();
+    QVERIFY(!tabMgr.isSplit());
+    QCOMPARE(tabMgr.currentPage(), p1);
+}
+
+void TestSelection::testSplitViewSync()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString firstPath = directory.path() + QStringLiteral("/first");
+    const QString secondPath = directory.path() + QStringLiteral("/second");
+    QVERIFY(QDir().mkpath(firstPath));
+    QVERIFY(QDir().mkpath(secondPath));
+
+    SplitTabWidget split(directory.path());
+    split.toggleSplit();
+    QVERIFY(split.isSplit());
+    QVERIFY(split.primaryPage() != nullptr);
+    QVERIFY(split.secondaryPage() != nullptr);
+    QVERIFY(split.activePage() == split.secondaryPage());
+
+    split.setSyncEnabled(true);
+    QVERIFY(split.isSyncEnabled());
+
+    split.activePage()->navigateTo(firstPath);
+    QCOMPARE(split.primaryPage()->currentPath(), firstPath);
+    QCOMPARE(split.secondaryPage()->currentPath(), firstPath);
+
+    split.primaryPage()->navigateTo(secondPath);
+    QCOMPARE(split.primaryPage()->currentPath(), secondPath);
+    QCOMPARE(split.secondaryPage()->currentPath(), secondPath);
+
+    split.setSyncEnabled(false);
+    split.secondaryPage()->navigateTo(firstPath);
+    QCOMPARE(split.secondaryPage()->currentPath(), firstPath);
+    QCOMPARE(split.primaryPage()->currentPath(), secondPath);
+}
+
+void TestSelection::testTaggedFilesView()
+{
+    TabPage page(m_tempDir.path());
+    page.setViewMode(ViewMode::Column);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+
+    QString testTag = QStringLiteral("TestTag");
+    QString taggedFile = m_createdFiles.first();
+    TagManager::instance().addTag(taggedFile, testTag);
+
+    // Navigating or showing tagged files switches out of Column view to display the virtual tag view
+    page.showTaggedFiles(testTag);
+    QCOMPARE(page.currentPath(), QStringLiteral("tag://TestTag"));
+    QVERIFY(page.viewMode() != ViewMode::Column);
+    QCOMPARE(page.model()->rowCount(), 1);
+    QCOMPARE(page.model()->index(0, 0).data(FileSystemModel::FilePathRole).toString(), taggedFile);
+
+    // Navigating back to directory restores Column view
+    page.navigateTo(m_tempDir.path());
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+    QCOMPARE(page.currentPath(), m_tempDir.path());
+
+    TagManager::instance().removeTag(taggedFile, testTag);
+}
+
+void TestSelection::testInlineRenamingModel()
+{
+    QTemporaryDir renameDir;
+    QVERIFY(renameDir.isValid());
+    QString testFile = renameDir.filePath("rename_me.txt");
+    {
+        QFile f(testFile);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("content");
+    }
+
+    FileSystemModel model;
+    model.setRootPath(renameDir.path());
+    QCOMPARE(model.rowCount(), 1);
+
+    QModelIndex idx = model.index(0, FileSystemModel::ColName);
+    QVERIFY(idx.isValid());
+    // Editable flag must be present for inline renaming
+    QVERIFY(model.flags(idx) & Qt::ItemIsEditable);
+
+    QSignalSpy renameSpy(&model, &FileSystemModel::itemRenamed);
+
+    // Invalid rename with slash must fail
+    QVERIFY(!model.setData(idx, "bad/name.txt", Qt::EditRole));
+    QCOMPARE(renameSpy.count(), 0);
+
+    // Valid rename
+    QVERIFY(model.setData(idx, "renamed_success.txt", Qt::EditRole));
+    QCOMPARE(renameSpy.count(), 1);
+    QCOMPARE(renameSpy.at(0).at(0).toString(), testFile);
+    QCOMPARE(renameSpy.at(0).at(1).toString(), renameDir.filePath("renamed_success.txt"));
+
+    QVERIFY(QFile::exists(renameDir.filePath("renamed_success.txt")));
+    QVERIFY(!QFile::exists(testFile));
+}
+
+void TestSelection::testSelectByPatternAndInvert()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString alpha = directory.filePath(QStringLiteral("alpha.txt"));
+    const QString beta = directory.filePath(QStringLiteral("beta.txt"));
+    const QString gamma = directory.filePath(QStringLiteral("gamma.png"));
+    {
+        QFile file(alpha);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("a");
+    }
+    {
+        QFile file(beta);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("b");
+    }
+    {
+        QFile file(gamma);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("g");
+    }
+
+    TabPage page(directory.path());
+    page.setViewMode(ViewMode::Icon);
+    page.resize(600, 400);
+    page.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&page));
+    QTRY_COMPARE_WITH_TIMEOUT(page.model()->rowCount(), 3, 1000);
+
+    page.selectByPattern(QStringLiteral("*.txt"));
+    QStringList selected = page.selectedFilePaths();
+    QCOMPARE(selected.size(), 2);
+    QVERIFY(selected.contains(alpha));
+    QVERIFY(selected.contains(beta));
+
+    page.invertSelection();
+    selected = page.selectedFilePaths();
+    QCOMPARE(selected.size(), 1);
+    QCOMPARE(selected.first(), gamma);
+}
+
+void TestSelection::testRenameEditorSelectsStem()
+{
+    QTemporaryDir renameDir;
+    QVERIFY(renameDir.isValid());
+
+    const QString filePath = renameDir.filePath(QStringLiteral("rename_me.txt"));
+    {
+        QFile f(filePath);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("content");
+    }
+    const QString folderPath = renameDir.filePath(QStringLiteral("folder.name"));
+    QVERIFY(QDir(renameDir.path()).mkdir(QStringLiteral("folder.name")));
+
+    auto* model = new FileSystemModel(this);
+    model->setRootPath(renameDir.path());
+
+    IconView iconView;
+    iconView.setFileSystemModel(model);
+    iconView.resize(600, 400);
+    iconView.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&iconView));
+
+    int fileRow = -1;
+    int folderRow = -1;
+    for (int row = 0; row < model->rowCount(); ++row) {
+        const QModelIndex index = model->index(row, FileSystemModel::ColName);
+        const QString path = index.data(FileSystemModel::FilePathRole).toString();
+        if (path == filePath) fileRow = row;
+        if (path == folderPath) folderRow = row;
+    }
+    QVERIFY(fileRow >= 0);
+    QVERIFY(folderRow >= 0);
+
+    // Files: select the basename but leave the extension unselected.
+    const QModelIndex fileIndex = model->index(fileRow, FileSystemModel::ColName);
+    iconView.setCurrentIndex(fileIndex);
+    iconView.edit(fileIndex);
+    QLineEdit* fileEditor = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT((fileEditor = iconView.findChild<QLineEdit*>()) != nullptr, 1000);
+    QTRY_COMPARE_WITH_TIMEOUT(fileEditor->selectedText(), QStringLiteral("rename_me"), 1000);
+    QTest::keyClick(fileEditor, Qt::Key_Escape);
+    QTRY_VERIFY_WITH_TIMEOUT(iconView.findChild<QLineEdit*>() == nullptr, 1000);
+
+    // Directories: there is no extension, so the whole name stays selected.
+    const QModelIndex folderIndex = model->index(folderRow, FileSystemModel::ColName);
+    iconView.setCurrentIndex(folderIndex);
+    iconView.edit(folderIndex);
+    QLineEdit* folderEditor = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT((folderEditor = iconView.findChild<QLineEdit*>()) != nullptr, 1000);
+    QTRY_COMPARE_WITH_TIMEOUT(folderEditor->selectedText(), QStringLiteral("folder.name"), 1000);
+    QTest::keyClick(folderEditor, Qt::Key_Escape);
+}
+
+void TestSelection::testTabManagerCloseAndReopen()
+{
+    TabManager tabMgr;
+    tabMgr.createTab(m_tempDir.path());
+    QCOMPARE(tabMgr.count(), 1);
+
+    QTemporaryDir subDir;
+    QVERIFY(subDir.isValid());
+    tabMgr.createTab(subDir.path());
+    QCOMPARE(tabMgr.count(), 2);
+    QVERIFY(!tabMgr.canReopenClosedTab());
+
+    // Close second tab
+    tabMgr.closeTab(1);
+    QCOMPARE(tabMgr.count(), 1);
+    QVERIFY(tabMgr.canReopenClosedTab());
+
+    // Reopen closed tab
+    TabPage* reopened = tabMgr.reopenLastClosedTab();
+    QVERIFY(reopened != nullptr);
+    QCOMPARE(tabMgr.count(), 2);
+    QCOMPARE(reopened->currentPath(), subDir.path());
+    QVERIFY(!tabMgr.canReopenClosedTab());
+}
+
+void TestSelection::testTabTearOffSignal()
+{
+    TearOffTabBar tabBar;
+    tabBar.addTab(QStringLiteral("Tab 1"));
+    tabBar.addTab(QStringLiteral("Tab 2"));
+    tabBar.resize(300, 30);
+    tabBar.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&tabBar));
+
+    QSignalSpy spy(&tabBar, &TearOffTabBar::tearOffRequested);
+    const QPoint pressPosition = tabBar.tabRect(0).center();
+    QTest::mousePress(&tabBar, Qt::LeftButton, Qt::NoModifier, pressPosition);
+
+    const QPointF tearOffPosition(pressPosition.x(), tabBar.height() + 50);
+    QMouseEvent tearOffMove(QEvent::MouseMove, tearOffPosition,
+                            QPointF(tabBar.mapToGlobal(tearOffPosition.toPoint())),
+                            Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&tabBar, &tearOffMove);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toInt(), 0);
+    QTest::mouseRelease(&tabBar, Qt::LeftButton, Qt::NoModifier, pressPosition);
+
+    spy.clear();
+    QTest::mousePress(&tabBar, Qt::LeftButton, Qt::NoModifier, pressPosition);
+    const QPointF horizontalPosition(tabBar.width() + 60, pressPosition.y());
+    QMouseEvent horizontalMove(QEvent::MouseMove, horizontalPosition,
+                               QPointF(tabBar.mapToGlobal(horizontalPosition.toPoint())),
+                               Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&tabBar, &horizontalMove);
+    QCOMPARE(spy.count(), 0);
+    QTest::mouseRelease(&tabBar, Qt::LeftButton, Qt::NoModifier, pressPosition);
+}
+
+void TestSelection::testAppChooserDialog()
+{
+    AppChooserDialog dlg(QStringLiteral("text/plain"), QStringLiteral("notes.txt"));
+    QVERIFY(dlg.customCommand().isEmpty());
+    QVERIFY(!dlg.makeDefault());
+    // Should have selected an app from the system if any desktop apps exist
+    if (!DesktopAppsManager::allDesktopApps().isEmpty()) {
+        QVERIFY(!dlg.selectedAppId().isEmpty());
+    }
 }
 
 QTEST_MAIN(TestSelection)

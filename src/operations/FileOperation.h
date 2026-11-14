@@ -47,10 +47,14 @@ struct OperationProgress {
 };
 
 struct OperationResult {
+    OperationType type{OperationType::Copy};
     bool success{true};
     QString errorMessage;
+    QStringList warnings;
     int processedCount{0};
     int skippedCount{0};
     int errorCount{0};
     QStringList createdPaths;
+    QList<QPair<QString, QString>> movedPairs;   // (sourcePath, destinationPath)
+    QList<QPair<QString, QString>> trashedPairs; // (sourcePath, trashFilePath)
 };

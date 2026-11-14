@@ -10,6 +10,7 @@ private slots:
     void testFormatSize();
     void testFormatPermissions();
     void testItemProperties();
+    void testCalculatedFolderSize();
 };
 
 void TestFileItem::testFormatSize()
@@ -52,6 +53,24 @@ void TestFileItem::testItemProperties()
     QCOMPARE(item.suffix(), QStringLiteral("txt"));
     QVERIFY(item.size() > 0);
     QVERIFY(item.isReadable());
+    QVERIFY(item.inode() > 0);
+    QVERIFY(item.deviceId() > 0);
+    QVERIFY(item.hardLinks() >= 1);
+}
+
+void TestFileItem::testCalculatedFolderSize()
+{
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    FileItem dirItem(tempDir.path());
+    QVERIFY(dirItem.isDir());
+    QCOMPARE(dirItem.size(), 0);
+    QCOMPARE(dirItem.formattedSize(), QStringLiteral("--"));
+
+    dirItem.setCalculatedFolderSize(2048576, 42);
+    QCOMPARE(dirItem.size(), 2048576);
+    QVERIFY(dirItem.formattedSize().contains(QStringLiteral("42 items")));
 }
 
 QTEST_MAIN(TestFileItem)

@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QCheckBox>
 #include <QThread>
+#include <QFutureWatcher>
 #include <atomic>
 
 class FolderSizeWorker : public QObject {
@@ -40,9 +41,14 @@ private slots:
     void onFolderSizeCalculated(qint64 totalBytes, int fileCount, int folderCount);
     void onChangeDefaultAppClicked();
     void onPermissionCheckboxChanged();
+    void onOctalEdited(const QString& text);
+    void onApplyRecursivePermissions();
+    void onRelinkClicked();
 
 private:
     void setupGeneralSection(QVBoxLayout* layout, const FileItem& item);
+    void setupMetadataSection(QVBoxLayout* layout, const FileItem& item);
+    void setupChecksumSection(QVBoxLayout* layout, const FileItem& item);
     void setupTagsSection(QVBoxLayout* layout, const QString& path);
     void setupOpenWithSection(QVBoxLayout* layout, const FileItem& item);
     void setupPermissionsSection(QVBoxLayout* layout, const FileItem& item);
@@ -54,6 +60,15 @@ private:
     QComboBox* m_appCombo{nullptr};
     QPushButton* m_changeAllBtn{nullptr};
     QLabel* m_permStringLabel{nullptr};
+    QLineEdit* m_octalEdit{nullptr};
+    QPushButton* m_applyRecursiveBtn{nullptr};
+    QLabel* m_symlinkStatusLabel{nullptr};
+    QPushButton* m_relinkBtn{nullptr};
+    QLineEdit* m_checksumEdit{nullptr};
+    QPushButton* m_checksumBtn{nullptr};
+    QPushButton* m_checksumCopyBtn{nullptr};
+    QFutureWatcher<QString>* m_checksumWatcher{nullptr};
+    bool m_updatingPermissions{false};
 
     // Permission checkboxes
     QCheckBox* m_ownerR{nullptr};

@@ -7,7 +7,11 @@
 #include <QVector>
 #include <QMimeData>
 #include <QUrl>
+#include <atomic>
 #include <memory>
+#include <QTimer>
+
+class QTimer;
 
 class FileSystemModel : public QAbstractItemModel {
     Q_OBJECT
@@ -44,7 +48,13 @@ public:
     };
 
     explicit FileSystemModel(QObject* parent = nullptr);
-    ~FileSystemModel() override = default;
+    ~FileSystemModel() override;
+
+    // When enabled, directory scans run in the background and the model is
+    // reset once the result is available. Disabled by default so synchronous
+    // callers/tests keep their immediate-population semantics.
+    static void setAsyncLoadingEnabled(bool enabled);
+    [[nodiscard]] static bool asyncLoadingEnabled();
 
     void setRootPath(const QString& path);
     void setTaggedFiles(const QString& tag);
@@ -68,6 +78,9 @@ public:
     void setDirectoriesFirst(bool dirsFirst);
     [[nodiscard]] bool directoriesFirst() const noexcept { return m_directoriesFirst; }
 
+    void setCalculateFolderSizes(bool enabled);
+    [[nodiscard]] bool calculateFolderSizes() const noexcept { return m_calculateFolderSizes; }
+
     void refresh();
 
     // QAbstractItemModel interface
@@ -78,6 +91,7 @@ public:
     [[nodiscard]] QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
     [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
     [[nodiscard]] Qt::DropActions supportedDropActions() const override;
     [[nodiscard]] QStringList mimeTypes() const override;
     [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
@@ -85,24 +99,35 @@ public:
     bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
 
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
+    [[nodiscard]] int sortColumn() const noexcept { return m_sortColumn; }
+    [[nodiscard]] Qt::SortOrder sortOrder() const noexcept { return m_sortOrder; }
 
     [[nodiscard]] const FileItem* itemAt(int row) const;
     [[nodiscard]] const FileItem* itemForIndex(const QModelIndex& index) const;
     [[nodiscard]] QModelIndex indexForPath(const QString& path) const;
+    [[nodiscard]] const QString& longestFileName() const noexcept { return m_longestFileName; }
 
 signals:
     void rootPathChanged(const QString& newPath);
+    void directoryLoading(const QString& path);
     void directoryLoaded(const QString& path, int itemCount);
+    void sortChanged(int column, Qt::SortOrder order);
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
+    void itemRenamed(const QString& oldPath, const QString& newPath);
 
 private slots:
     void onDirectoryChanged(const QString& path);
 
 private:
     void populate();
+    void populateSync();
+    void populateAsync();
+    void cancelPendingLoad();
+    static bool isLocalFileSystem(const QString& path);
     void sortInternal();
     void applyFilterInternal();
     static bool itemMatchesFilter(const FileItem& item, const QString& query, const QString& kind);
+    void scheduleFolderSizeCalculations();
 
     QString m_rootPath;
     QString m_activeTag;
@@ -111,10 +136,18 @@ private:
     bool m_isSearchResultsView{false};
     bool m_showHidden{false};
     bool m_directoriesFirst{true};
+    bool m_calculateFolderSizes{false};
     int m_sortColumn{ColName};
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
 
     QVector<FileItem> m_items;
     QVector<FileItem> m_allFolderItems;
+    QHash<QString, QPair<qint64, int>> m_folderSizeCache;
+    QString m_longestFileName;
     QFileSystemWatcher m_watcher;
+    QTimer* m_refreshTimer{nullptr};
+
+    static bool s_asyncLoading;
+    quint64 m_generation{0};
+    std::shared_ptr<std::atomic<bool>> m_cancelFlag;
 };

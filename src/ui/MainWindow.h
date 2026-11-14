@@ -11,6 +11,9 @@
 #include <QSplitter>
 #include <QLabel>
 #include <QStringList>
+#include <QVariantList>
+
+class TerminalPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -20,6 +23,23 @@ public:
     ~MainWindow() override;
 
     void openPath(const QString& path);
+    void openInNewTab(const QString& path);
+    void openAndSelect(const QString& filePath);
+    void openRemoteLocation(const QString& uri);
+
+    // Used by the org.freedesktop.FileManager1 D-Bus service (browsers call
+    // these for "Show in folder" and "Properties").
+    void showItems(const QStringList& paths);
+    void showItemProperties(const QStringList& paths);
+
+    // Persists tabs and window state. Also invoked by the session manager on
+    // logout, so the next login restores the same session.
+    void saveSessionState();
+
+    // org.freedesktop.Application helpers.
+    void activateFromDesktop();
+    void setActivationToken(const QString& token);
+    void activateDesktopAction(const QString& actionName, const QVariantList& parameter);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -32,6 +52,7 @@ private slots:
     void onNavigateUp();
     void onPathChanged(const QString& path);
     void onViewModeChanged(ViewMode mode);
+    void onToggleSplitView();
     void onActivePageChanged(TabPage* page);
 
     // File operations
@@ -43,10 +64,21 @@ private slots:
     void onPaste();
     void onDuplicate();
     void onCompress(const QString& ext = QString());
+    void onCompressWithOptions();
     void onExtractHere();
     void onExtractToFolder();
+    void onExtractWithPassword();
+    void onExtractAppImage();
     void onMakeSymlink();
     void onCopyPath();
+    void onCopyTo();
+    void onMoveTo();
+    void onCopyToOtherPane();
+    void onMoveToOtherPane();
+    void onNewFolderWithSelection();
+    void onSelectByPattern();
+    void onInvertSelection();
+    void onCalculateChecksum();
     void onMoveToTrash();
     void onDeletePermanently();
     void onEmptyTrash();
@@ -78,11 +110,24 @@ private:
     void setupMenusAndShortcuts();
     void updateNavigationState();
     void updateStatusInfo();
+    bool ensureOperationsIdle();
+    void pasteIntoDirectory(const QString& destDir);
+    void connectToServerAsync(const QString& uri);
+    void applySort(int column, Qt::SortOrder order);
+    void updateSplitActions();
+    void applyIconSizeToAll(int size);
+    void adjustIconSize(int delta);
+    void onPreferences();
+    void onBatchRename();
+    void toggleTerminalPanel();
+    void requestKWinActivation();
 
+    QSplitter* m_verticalSplitter{nullptr};
     QSplitter* m_mainSplitter{nullptr};
     Toolbar* m_toolbar{nullptr};
     Sidebar* m_sidebar{nullptr};
     TabManager* m_tabManager{nullptr};
+    TerminalPanel* m_terminalPanel{nullptr};
 
     QLabel* m_statusItemCountLabel{nullptr};
     QLabel* m_statusDiskFreeLabel{nullptr};
@@ -94,7 +139,12 @@ private:
     QAction* m_toggleHiddenAction{nullptr};
     QAction* m_backAction{nullptr};
     QAction* m_fwdAction{nullptr};
+    QAction* m_syncSplitAction{nullptr};
+    QAction* m_copyToOtherPaneAction{nullptr};
+    QAction* m_moveToOtherPaneAction{nullptr};
 
     QStringList m_clipboardPaths;
     bool m_isCutOperation{false};
+    bool m_kwinActivationPending{false};
+    qint64 m_operationStartTime{0};
 };

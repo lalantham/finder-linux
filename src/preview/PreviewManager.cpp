@@ -1,13 +1,90 @@
 #include "PreviewManager.h"
-#include <QImageReader>
-#include <QFileInfo>
-#include <QMimeDatabase>
+#include <QCryptographicHash>
+#include <QDir>
 #include <QFile>
-#include <QTextStream>
+#include <QFileInfo>
+#include <QImageReader>
+#include <QMimeDatabase>
+#include <QStandardPaths>
+#include <QUrl>
+#include <QProcess>
+#include <QTemporaryFile>
+#include <QtConcurrent/QtConcurrentRun>
 
 #ifdef HAVE_POPPLER
 #include <poppler/qt6/poppler-qt6.h>
 #endif
+
+namespace {
+
+constexpr int NormalBucket = 128;
+constexpr int LargeBucket = 256;
+constexpr int XLargeBucket = 512;
+constexpr int XXLargeBucket = 1024;
+
+QString thumbnailUri(const QString& path)
+{
+    return QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath()).toString(QUrl::FullyEncoded);
+}
+
+QString baseCacheDirectory()
+{
+    QString base = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
+    if (base.isEmpty()) {
+        base = QDir::homePath() + QStringLiteral("/.cache");
+    }
+    return base + QStringLiteral("/thumbnails");
+}
+
+quint32 readBigEndian32(const QByteArray& data, qsizetype offset)
+{
+    return (static_cast<quint32>(static_cast<quint8>(data.at(offset))) << 24)
+         | (static_cast<quint32>(static_cast<quint8>(data.at(offset + 1))) << 16)
+         | (static_cast<quint32>(static_cast<quint8>(data.at(offset + 2))) << 8)
+         | static_cast<quint32>(static_cast<quint8>(data.at(offset + 3)));
+}
+
+// QImageReader does not reliably expose PNG tEXt chunks, so parse them here to
+// validate the XDG thumbnail cache (Thumb::URI / Thumb::MTime).
+QHash<QString, QString> readPngTextChunks(const QString& filePath)
+{
+    QHash<QString, QString> result;
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return result;
+    }
+    const QByteArray data = file.readAll();
+    if (!data.startsWith(QByteArrayLiteral("\x89PNG\r\n\x1a\n"))) {
+        return result;
+    }
+
+    qsizetype offset = 8;
+    while (offset + 12 <= data.size()) {
+        const quint32 length = readBigEndian32(data, offset);
+        const QByteArray type = data.mid(offset + 4, 4);
+        const qsizetype payloadOffset = offset + 8;
+        if (payloadOffset + static_cast<qsizetype>(length) + 4 > data.size()) {
+            break;
+        }
+
+        if (type == QByteArrayLiteral("tEXt")) {
+            const QByteArray payload = data.mid(payloadOffset, static_cast<qsizetype>(length));
+            const qsizetype separator = payload.indexOf('\0');
+            if (separator > 0) {
+                result.insert(QString::fromLatin1(payload.left(separator)),
+                              QString::fromLatin1(payload.mid(separator + 1)));
+            }
+        }
+
+        offset = payloadOffset + static_cast<qsizetype>(length) + 4;
+        if (type == QByteArrayLiteral("IEND")) {
+            break;
+        }
+    }
+    return result;
+}
+
+} // namespace
 
 PreviewManager& PreviewManager::instance()
 {
@@ -22,9 +99,18 @@ PreviewManager::PreviewManager()
 
 bool PreviewManager::isImage(const QString& path) const
 {
+    static const QSet<QString> imageExts = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("webp"),
+        QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("ico"),
+        QStringLiteral("svg")
+    };
+    if (imageExts.contains(QFileInfo(path).suffix().toLower())) {
+        return true;
+    }
     QMimeDatabase db;
-    QMimeType mime = db.mimeTypeForFile(path);
-    return mime.name().startsWith(QStringLiteral("image/"));
+    return db.mimeTypeForFile(path, QMimeDatabase::MatchExtension)
+        .name().startsWith(QStringLiteral("image/"));
 }
 
 bool PreviewManager::isText(const QString& path) const
@@ -40,42 +126,268 @@ bool PreviewManager::isText(const QString& path) const
 
 bool PreviewManager::isPdf(const QString& path) const
 {
+    return QFileInfo(path).suffix().compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0;
+}
+
+bool PreviewManager::isVideo(const QString& path) const
+{
+    static const QSet<QString> videoExts = {
+        QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
+        QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("wmv"),
+        QStringLiteral("flv"), QStringLiteral("m4v"), QStringLiteral("ts"),
+        QStringLiteral("mpg"), QStringLiteral("mpeg"), QStringLiteral("ogv")
+    };
+    if (videoExts.contains(QFileInfo(path).suffix().toLower())) {
+        return true;
+    }
     QMimeDatabase db;
-    QMimeType mime = db.mimeTypeForFile(path);
-    return mime.name() == QStringLiteral("application/pdf");
+    return db.mimeTypeForFile(path, QMimeDatabase::MatchExtension)
+        .name().startsWith(QStringLiteral("video/"));
+}
+
+bool PreviewManager::isAudio(const QString& path) const
+{
+    static const QSet<QString> audioExts = {
+        QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("wav"),
+        QStringLiteral("ogg"), QStringLiteral("oga"), QStringLiteral("opus"),
+        QStringLiteral("m4a"), QStringLiteral("aac"), QStringLiteral("wma"),
+        QStringLiteral("aiff"), QStringLiteral("aif"), QStringLiteral("ape"),
+        QStringLiteral("mka")
+    };
+    if (audioExts.contains(QFileInfo(path).suffix().toLower())) {
+        return true;
+    }
+    QMimeDatabase db;
+    return db.mimeTypeForFile(path, QMimeDatabase::MatchExtension)
+        .name().startsWith(QStringLiteral("audio/"));
+}
+
+bool PreviewManager::isThumbnailCandidate(const QString& path)
+{
+    static const QSet<QString> exts = {
+        QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+        QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("webp"),
+        QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("ico"),
+        QStringLiteral("svg"), QStringLiteral("pdf"),
+        QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
+        QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("wmv"),
+        QStringLiteral("flv"), QStringLiteral("m4v"), QStringLiteral("ts"),
+        QStringLiteral("mpg"), QStringLiteral("mpeg"), QStringLiteral("ogv")
+    };
+    return exts.contains(QFileInfo(path).suffix().toLower());
+}
+
+int PreviewManager::bucketForSize(int size)
+{
+    if (size <= NormalBucket) return NormalBucket;
+    if (size <= LargeBucket) return LargeBucket;
+    if (size <= XLargeBucket) return XLargeBucket;
+    return XXLargeBucket;
+}
+
+QString PreviewManager::bucketDirectory(int bucket)
+{
+    switch (bucket) {
+    case NormalBucket: return QStringLiteral("normal");
+    case LargeBucket: return QStringLiteral("large");
+    case XLargeBucket: return QStringLiteral("x-large");
+    default: return QStringLiteral("xx-large");
+    }
+}
+
+QString PreviewManager::cacheFilePath(const QString& path, int bucket) const
+{
+    const QByteArray hash = QCryptographicHash::hash(
+        thumbnailUri(path).toUtf8(), QCryptographicHash::Md5).toHex();
+    return baseCacheDirectory() + QLatin1Char('/') + bucketDirectory(bucket)
+        + QLatin1Char('/') + QString::fromLatin1(hash) + QStringLiteral(".png");
+}
+
+QPixmap PreviewManager::loadFromDiskCache(const QString& path, int bucket)
+{
+    const QString cachePath = cacheFilePath(path, bucket);
+    if (!QFile::exists(cachePath)) {
+        return {};
+    }
+
+    const QHash<QString, QString> text = readPngTextChunks(cachePath);
+    const QFileInfo info(path);
+    if (text.value(QStringLiteral("Thumb::URI")) != thumbnailUri(path)
+        || text.value(QStringLiteral("Thumb::MTime")) != QString::number(info.lastModified().toSecsSinceEpoch())) {
+        return {};
+    }
+
+    QImageReader reader(cachePath);
+    const QImage image = reader.read();
+    if (image.isNull()) {
+        return {};
+    }
+    return QPixmap::fromImage(image);
+}
+
+void PreviewManager::saveToDiskCache(const QString& path, int bucket, const QImage& image)
+{
+    const QString cachePath = cacheFilePath(path, bucket);
+    if (!QDir().mkpath(QFileInfo(cachePath).absolutePath())) {
+        return;
+    }
+
+    QImage thumbnail = image;
+    thumbnail.setText(QStringLiteral("Thumb::URI"), thumbnailUri(path));
+    thumbnail.setText(QStringLiteral("Thumb::MTime"),
+                      QString::number(QFileInfo(path).lastModified().toSecsSinceEpoch()));
+    thumbnail.save(cachePath, "PNG");
+}
+
+QImage PreviewManager::generateThumbnailImage(const QString& path, int bucket) const
+{
+    QFileInfo info(path);
+    if (!info.exists()) {
+        return {};
+    }
+
+    if (isVideo(path)) {
+        static const QString ffmpegThumb = QStandardPaths::findExecutable(QStringLiteral("ffmpegthumbnailer"));
+        if (!ffmpegThumb.isEmpty()) {
+            QTemporaryFile tempFile(QDir::tempPath() + QStringLiteral("/finder_vid_XXXXXX.png"));
+            tempFile.setAutoRemove(true);
+            if (tempFile.open()) {
+                QString tempPath = tempFile.fileName();
+                tempFile.close();
+                QProcess proc;
+                proc.start(ffmpegThumb, {
+                    QStringLiteral("-i"), path,
+                    QStringLiteral("-o"), tempPath,
+                    QStringLiteral("-s"), QString::number(bucket),
+                    QStringLiteral("-c"), QStringLiteral("png"),
+                    QStringLiteral("-t"), QStringLiteral("10%")
+                });
+                if (proc.waitForFinished(4000) && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0) {
+                    QImage img(tempPath);
+                    if (!img.isNull()) {
+                        return img;
+                    }
+                }
+            }
+        }
+        return {};
+    }
+
+    if (info.size() > 100 * 1024 * 1024) {
+        return {};
+    }
+
+    if (isPdf(path)) {
+#ifdef HAVE_POPPLER
+        std::unique_ptr<Poppler::Document> doc(Poppler::Document::load(path));
+        if (!doc || doc->isLocked() || doc->numPages() == 0) {
+            return {};
+        }
+        std::unique_ptr<Poppler::Page> page(doc->page(0));
+        if (!page) {
+            return {};
+        }
+        const QImage rendered = page->renderToImage(150.0, 150.0);
+        if (rendered.isNull()) {
+            return {};
+        }
+        return rendered.scaled(QSize(bucket, bucket), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+#else
+        return {};
+#endif
+    }
+
+    if (!isImage(path)) {
+        return {};
+    }
+
+    QImageReader reader(path);
+    reader.setAllocationLimit(128);
+    reader.setAutoTransform(true);
+    const QSize imageSize = reader.size();
+    if (imageSize.isValid()) {
+        reader.setScaledSize(imageSize.scaled(QSize(bucket, bucket), Qt::KeepAspectRatio));
+    }
+    return reader.read();
 }
 
 QPixmap PreviewManager::getThumbnail(const QString& path, const QSize& targetSize)
 {
-    QString cacheKey = QStringLiteral("%1_%2x%3").arg(path).arg(targetSize.width()).arg(targetSize.height());
-    QPixmap* cached = m_thumbnailCache.object(cacheKey);
-    if (cached) {
+    if (!isThumbnailCandidate(path)) {
+        return {};
+    }
+
+    const int bucket = bucketForSize(qMax(targetSize.width(), targetSize.height()));
+    const QString cacheKey = QStringLiteral("%1_%2x%3")
+                                 .arg(path).arg(targetSize.width()).arg(targetSize.height());
+    if (QPixmap* cached = m_thumbnailCache.object(cacheKey)) {
         return *cached;
     }
 
-    QPixmap result;
-    if (isImage(path)) {
-        QImageReader reader(path);
-        reader.setAutoTransform(true);
-        QSize imageSize = reader.size();
-        if (imageSize.isValid()) {
-            QSize scaled = imageSize.scaled(targetSize, Qt::KeepAspectRatio);
-            reader.setScaledSize(scaled);
-            QImage img = reader.read();
-            if (!img.isNull()) {
-                result = QPixmap::fromImage(img);
-            }
+    QPixmap thumbnail = loadFromDiskCache(path, bucket);
+    if (thumbnail.isNull()) {
+        const QImage image = generateThumbnailImage(path, bucket);
+        if (image.isNull()) {
+            return {};
         }
-    } else if (isPdf(path)) {
-        result = getPdfPreview(path, targetSize);
+        saveToDiskCache(path, bucket, image);
+        thumbnail = QPixmap::fromImage(image);
     }
 
-    if (!result.isNull()) {
-        int cost = result.width() * result.height() * 4;
-        m_thumbnailCache.insert(cacheKey, new QPixmap(result), cost);
+    if (thumbnail.isNull()) {
+        return {};
     }
 
-    return result;
+    m_thumbnailCache.insert(cacheKey, new QPixmap(thumbnail),
+                            thumbnail.width() * thumbnail.height() * 4);
+    return thumbnail.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
+
+QPixmap PreviewManager::iconThumbnail(const QString& path, int iconSize)
+{
+    if (iconSize < 48 || !isThumbnailCandidate(path)) {
+        return {};
+    }
+
+    const int bucket = bucketForSize(iconSize);
+    const QString cacheKey = QStringLiteral("%1#thumb%2").arg(path).arg(bucket);
+
+    if (QPixmap* cached = m_thumbnailCache.object(cacheKey)) {
+        return *cached;
+    }
+
+    QPixmap thumbnail = loadFromDiskCache(path, bucket);
+    if (!thumbnail.isNull()) {
+        m_thumbnailCache.insert(cacheKey, new QPixmap(thumbnail),
+                                thumbnail.width() * thumbnail.height() * 4);
+        return thumbnail;
+    }
+
+    if (m_pending.contains(cacheKey) || m_failed.contains(cacheKey)) {
+        return {};
+    }
+    m_pending.insert(cacheKey);
+
+    (void)QtConcurrent::run([this, path, bucket, cacheKey]() {
+        const QImage image = generateThumbnailImage(path, bucket);
+        if (!image.isNull()) {
+            saveToDiskCache(path, bucket, image);
+        }
+
+        QMetaObject::invokeMethod(this, [this, path, cacheKey, image]() {
+            m_pending.remove(cacheKey);
+            if (image.isNull()) {
+                m_failed.insert(cacheKey);
+                return;
+            }
+            QPixmap pixmap = QPixmap::fromImage(image);
+            m_thumbnailCache.insert(cacheKey, new QPixmap(pixmap),
+                                    pixmap.width() * pixmap.height() * 4);
+            emit thumbnailReady(path);
+        }, Qt::QueuedConnection);
+    });
+
+    return {};
 }
 
 QString PreviewManager::getTextPreview(const QString& path, int maxBytes)

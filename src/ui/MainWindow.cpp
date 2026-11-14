@@ -8,24 +8,198 @@
 #include "VolumeManager.h"
 #include "XdgTrash.h"
 #include "DesktopAppsManager.h"
+#include "ServiceMenuManager.h"
+#include "RecentFilesManager.h"
+#include "DesktopNotifier.h"
+#include "ApplicationService.h"
+#include "FileManager1Service.h"
 #include "AppChooserDialog.h"
+#include "BatchRenameDialog.h"
+#include "CompressDialog.h"
+#include "TrashDialog.h"
+#include "TerminalPanel.h"
 #include <QMenuBar>
 #include <QMenu>
+#include <QActionGroup>
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QSpinBox>
+#include <QVBoxLayout>
 #include <QStatusBar>
 #include <QInputDialog>
+#include <QFontMetrics>
+#include <QTimer>
 #include <QMessageBox>
 #include <QProcess>
 #include <QShortcut>
+#include <QSignalBlocker>
+#include <memory>
+#include <atomic>
+#include <QPushButton>
+#include <QProgressDialog>
+#include <QPlainTextEdit>
+#include <QCryptographicHash>
 #include <QKeySequence>
 #include <QApplication>
 #include <QClipboard>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDir>
+#include <QFile>
+#include <QTextStream>
 #include <QMimeData>
+#include <sys/stat.h>
 #include <QMimeDatabase>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QStorageInfo>
 #include <QWidgetAction>
 #include <QMouseEvent>
+#include <QFileInfo>
+#include <QFileDialog>
+#include <QHash>
+#include <QFutureWatcher>
+#include <QWindow>
+#include <QtConcurrent/QtConcurrentRun>
+#include <unistd.h>
+
+#ifdef HAVE_KWINDOWSYSTEM
+#include <KWindowSystem>
+#endif
+
+namespace {
+
+// Formats understood by GNOME Files, Dolphin and other freedesktop file managers.
+constexpr char GnomeClipboardMime[] = "x-special/gnome-copied-files";
+constexpr char KdeCutMime[] = "application/x-kde-cutselection";
+constexpr char PortalFileTransferMime[] = "application/vnd.portal.filetransfer";
+
+QStringList retrievePortalFiles(const QString& key)
+{
+    if (key.isEmpty()) {
+        return {};
+    }
+
+    QDBusMessage message = QDBusMessage::createMethodCall(
+        QStringLiteral("org.freedesktop.portal.Documents"),
+        QStringLiteral("/org/freedesktop/portal/documents"),
+        QStringLiteral("org.freedesktop.portal.FileTransfer"),
+        QStringLiteral("RetrieveFiles"));
+    message << key << QVariantMap();
+
+    const QDBusMessage reply =
+        QDBusConnection::sessionBus().call(message, QDBus::Block, 3000);
+    if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
+        return {};
+    }
+
+    QStringList paths;
+    const QStringList files = reply.arguments().first().toStringList();
+    for (const QString& file : files) {
+        const QUrl url(file);
+        if (url.isLocalFile()) {
+            const QString path = url.toLocalFile();
+            if (!path.isEmpty() && !paths.contains(path)) {
+                paths.append(path);
+            }
+        } else if (file.startsWith(QLatin1Char('/'))) {
+            if (!paths.contains(file)) {
+                paths.append(file);
+            }
+        }
+    }
+    return paths;
+}
+
+void setFileClipboard(const QStringList& paths, bool cut)
+{
+    auto* mime = new QMimeData();
+    QList<QUrl> urls;
+    urls.reserve(paths.size());
+    QStringList gnomeLines;
+    gnomeLines << (cut ? QStringLiteral("cut") : QStringLiteral("copy"));
+
+    for (const auto& path : paths) {
+        const QUrl url = QUrl::fromLocalFile(path);
+        urls.append(url);
+        gnomeLines << url.toString();
+    }
+
+    mime->setUrls(urls);
+    mime->setData(QString::fromLatin1(GnomeClipboardMime),
+                  gnomeLines.join(QLatin1Char('\n')).toUtf8());
+    mime->setData(QString::fromLatin1(KdeCutMime), cut ? QByteArray("1") : QByteArray("0"));
+    QApplication::clipboard()->setMimeData(mime);
+}
+
+struct ClipboardFiles {
+    QStringList paths;
+    bool cut{false};
+    bool valid{false};
+};
+
+ClipboardFiles readFileClipboard()
+{
+    ClipboardFiles result;
+    const QMimeData* mime = QApplication::clipboard()->mimeData();
+    if (!mime) return result;
+
+    const QByteArray gnome = mime->data(QString::fromLatin1(GnomeClipboardMime));
+    if (!gnome.isEmpty()) {
+        const QStringList lines = QString::fromUtf8(gnome).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        if (!lines.isEmpty()) {
+            result.cut = lines.first().trimmed().compare(QStringLiteral("cut"), Qt::CaseInsensitive) == 0;
+            for (int i = 1; i < lines.size(); ++i) {
+                const QUrl url(lines.at(i).trimmed());
+                if (url.isLocalFile() && !result.paths.contains(url.toLocalFile())) {
+                    result.paths.append(url.toLocalFile());
+                }
+            }
+            result.valid = !result.paths.isEmpty();
+            if (result.valid) return result;
+        }
+    }
+
+    if (mime->hasUrls()) {
+        for (const auto& url : mime->urls()) {
+            if (url.isLocalFile() && !result.paths.contains(url.toLocalFile())) {
+                result.paths.append(url.toLocalFile());
+            }
+        }
+        result.cut = mime->data(QString::fromLatin1(KdeCutMime)) == QByteArray("1");
+        result.valid = !result.paths.isEmpty();
+    }
+
+    // Flatpak/sandboxed apps expose copied files through the FileTransfer
+    // portal instead of text/uri-list. The clipboard data is the transfer key.
+    if (!result.valid) {
+        const QByteArray portalData = mime->data(QString::fromLatin1(PortalFileTransferMime));
+        if (!portalData.isEmpty()) {
+            const QString key = QString::fromUtf8(portalData).trimmed();
+            result.paths = retrievePortalFiles(key);
+            result.valid = !result.paths.isEmpty();
+            result.cut = false;
+        }
+    }
+
+    return result;
+}
+
+QStringList existingPathsOnly(const QStringList& paths)
+{
+    QStringList result;
+    for (const auto& path : paths) {
+        QFileInfo info(path);
+        if (info.exists() || info.isSymLink()) {
+            result.append(path);
+        }
+    }
+    return result;
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -39,23 +213,87 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_opEngine, &FileOperationEngine::progress, this, &MainWindow::onOperationProgress);
     connect(m_opEngine, &FileOperationEngine::conflictEncountered, this, &MainWindow::onOperationConflict);
     connect(m_opEngine, &FileOperationEngine::operationFinished, this, &MainWindow::onOperationFinished);
-    connect(m_progressDialog, &ProgressDialog::cancelRequested, m_opEngine, &FileOperationEngine::cancel);
+    connect(m_opEngine, &FileOperationEngine::queueStatusChanged, m_progressDialog, &ProgressDialog::updateQueueStatus);
+    connect(m_progressDialog, &ProgressDialog::cancelRequested, m_opEngine, &FileOperationEngine::cancelAll);
+    connect(m_progressDialog, &ProgressDialog::skipRequested, m_opEngine, &FileOperationEngine::cancel);
 
     qApp->installEventFilter(this);
 
     setupUi();
     setupMenusAndShortcuts();
 
-    // Restore geometry
+    // Restore geometry and toolbar/dock state before the first frame.
     if (!AppSettings::instance().windowGeometry().isEmpty()) {
         restoreGeometry(AppSettings::instance().windowGeometry());
     } else {
         resize(1024, 680);
     }
+    if (!AppSettings::instance().windowState().isEmpty()) {
+        restoreState(AppSettings::instance().windowState());
+    }
 
     // Initial navigation
-    QString startPath = AppSettings::instance().defaultPath();
-    openPath(startPath);
+    const QStringList savedTabs = AppSettings::instance().savedTabs();
+    if (AppSettings::instance().restoreTabsOnStartup() && !savedTabs.isEmpty()) {
+        bool first = true;
+        for (const QString& entry : savedTabs) {
+            // Entries are "path" (older versions) or "path\tviewMode".
+            QString tabPath = entry;
+            int viewMode = -1;
+            const qsizetype tabIndex = entry.lastIndexOf(QLatin1Char('\t'));
+            if (tabIndex > 0) {
+                bool ok = false;
+                const int parsed = entry.mid(tabIndex + 1).toInt(&ok);
+                if (ok) {
+                    tabPath = entry.left(tabIndex);
+                    viewMode = parsed;
+                }
+            }
+
+            if (!QDir(tabPath).exists()) continue;
+
+            if (first) {
+                openPath(tabPath);
+                first = false;
+            } else {
+                openInNewTab(tabPath);
+            }
+
+            if (viewMode >= static_cast<int>(ViewMode::Icon) && viewMode <= static_cast<int>(ViewMode::Gallery)) {
+                if (TabPage* page = m_tabManager->currentPage()) {
+                    page->setViewMode(static_cast<ViewMode>(viewMode));
+                }
+            }
+        }
+        if (first) {
+            openPath(AppSettings::instance().defaultPath());
+        }
+    } else {
+        openPath(AppSettings::instance().defaultPath());
+    }
+
+    // Purge old Trash items in the background if configured.
+    const int purgeDays = AppSettings::instance().trashAutoPurgeDays();
+    if (purgeDays > 0) {
+        QTimer::singleShot(2000, this, [this, purgeDays]() {
+            auto* watcher = new QFutureWatcher<int>(this);
+            connect(watcher, &QFutureWatcher<int>::finished, this, [this, watcher, purgeDays]() {
+                const int purged = watcher->result();
+                watcher->deleteLater();
+                if (purged > 0) {
+                    m_sidebar->refresh();
+                    DesktopNotifier::notify(QStringLiteral("Trash cleaned"),
+                        QStringLiteral("%1 item(s) older than %2 days were removed from Trash.")
+                            .arg(purged)
+                            .arg(purgeDays));
+                }
+            });
+            watcher->setFuture(QtConcurrent::run([purgeDays]() {
+                return XdgTrash::purgeOlderThan(
+                    QDateTime::currentDateTime().addDays(-purgeDays));
+            }));
+        });
+    }
 }
 
 MainWindow::~MainWindow()
@@ -67,10 +305,152 @@ MainWindow::~MainWindow()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    saveSessionState();
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::saveSessionState()
+{
     AppSettings::instance().setWindowGeometry(saveGeometry());
     AppSettings::instance().setWindowState(saveState());
+
+    QStringList tabPaths;
+    for (int i = 0; i < m_tabManager->count(); ++i) {
+        if (auto* page = m_tabManager->pageAt(i)) {
+            tabPaths.append(QStringLiteral("%1\t%2")
+                                .arg(page->currentPath())
+                                .arg(static_cast<int>(page->viewMode())));
+        }
+    }
+    AppSettings::instance().setSavedTabs(tabPaths);
     AppSettings::instance().save();
-    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::setActivationToken(const QString& token)
+{
+#ifdef HAVE_KWINDOWSYSTEM
+    if (!token.isEmpty()) {
+        KWindowSystem::setCurrentXdgActivationToken(token);
+    }
+#else
+    Q_UNUSED(token);
+#endif
+}
+
+void MainWindow::activateFromDesktop()
+{
+    if (isMinimized()) {
+        showNormal();
+    } else {
+        show();
+    }
+    raise();
+    activateWindow();
+    if (QWindow* handle = windowHandle()) {
+        handle->requestActivate();
+#ifdef HAVE_KWINDOWSYSTEM
+        // On Wayland, focus-stealing prevention needs the xdg-activation
+        // protocol; KWindowSystem knows how to request it correctly on Plasma.
+        KWindowSystem::activateWindow(handle);
+        // Activation tokens are single-use; do not leak one into later calls.
+        KWindowSystem::setCurrentXdgActivationToken(QString());
+#endif
+    }
+
+    // A compositor can still refuse a focus change coming from a background
+    // process. On KDE Wayland, fall back to asking KWin to activate our window.
+    QTimer::singleShot(150, this, [this]() {
+        if (!isActiveWindow()) {
+            requestKWinActivation();
+        }
+    });
+}
+
+void MainWindow::requestKWinActivation()
+{
+    const QString desktop = qEnvironmentVariable("XDG_CURRENT_DESKTOP");
+    const QString session = qEnvironmentVariable("XDG_SESSION_TYPE");
+    if (!desktop.contains(QStringLiteral("KDE"), Qt::CaseInsensitive)
+        || session.compare(QStringLiteral("wayland"), Qt::CaseInsensitive) != 0) {
+        return;
+    }
+    if (m_kwinActivationPending) {
+        return;
+    }
+    m_kwinActivationPending = true;
+
+    const qint64 pid = QCoreApplication::applicationPid();
+    const QString scriptName = QStringLiteral("finder-activate-%1").arg(pid);
+    const QString scriptPath = QDir::tempPath()
+        + QStringLiteral("/finder-linux-activate-%1.js").arg(pid);
+
+    QFile script(scriptPath);
+    if (!script.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        m_kwinActivationPending = false;
+        return;
+    }
+
+    QTextStream out(&script);
+    out << "const targetPid = " << pid << ";\n"
+        << "for (const w of workspace.windowList()) {\n"
+        << "    if (w.pid === targetPid) {\n"
+        << "        workspace.activeWindow = w;\n"
+        << "        break;\n"
+        << "    }\n"
+        << "}\n";
+    script.close();
+
+    auto sendScriptingCall = [](const QString& method, const QVariantList& args) {
+        QDBusMessage message = QDBusMessage::createMethodCall(
+            QStringLiteral("org.kde.KWin"),
+            QStringLiteral("/Scripting"),
+            QStringLiteral("org.kde.kwin.Scripting"),
+            method);
+        message.setArguments(args);
+        QDBusConnection::sessionBus().send(message);
+    };
+
+    sendScriptingCall(QStringLiteral("unloadScript"), {scriptName});
+    sendScriptingCall(QStringLiteral("loadScript"), {scriptPath, scriptName});
+    sendScriptingCall(QStringLiteral("start"), {});
+
+    QTimer::singleShot(1000, this, [this, scriptName, scriptPath]() {
+        QDBusMessage unload = QDBusMessage::createMethodCall(
+            QStringLiteral("org.kde.KWin"),
+            QStringLiteral("/Scripting"),
+            QStringLiteral("org.kde.kwin.Scripting"),
+            QStringLiteral("unloadScript"));
+        unload.setArguments({scriptName});
+        QDBusConnection::sessionBus().send(unload);
+        QFile::remove(scriptPath);
+        m_kwinActivationPending = false;
+    });
+}
+
+void MainWindow::activateDesktopAction(const QString& actionName, const QVariantList& parameter)
+{
+    Q_UNUSED(parameter);
+    const QString action = actionName.toLower();
+
+    if (action == QStringLiteral("newwindow") || action == QStringLiteral("new-window")) {
+        QString path = AppSettings::instance().defaultPath();
+        if (TabPage* page = m_tabManager->currentPage()) {
+            path = page->currentPath();
+        }
+        QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                {QStringLiteral("--new-window"), path});
+        return;
+    }
+
+    if (action == QStringLiteral("newtab") || action == QStringLiteral("new-tab")) {
+        TabPage* page = m_tabManager->currentPage();
+        m_tabManager->createTab(page ? page->currentPath() : AppSettings::instance().defaultPath());
+        activateFromDesktop();
+        return;
+    }
+
+    // Unknown action: at least bring the window to the front.
+    activateFromDesktop();
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
@@ -94,6 +474,7 @@ void MainWindow::setupUi()
 
     // Toolbar
     m_toolbar = new Toolbar(this);
+    m_toolbar->setObjectName(QStringLiteral("mainToolBar"));
     addToolBar(Qt::TopToolBarArea, m_toolbar);
 
     connect(m_toolbar, &Toolbar::backRequested, this, &MainWindow::onNavigateBack);
@@ -104,7 +485,7 @@ void MainWindow::setupUi()
     connect(m_toolbar, &Toolbar::quickLookRequested, this, &MainWindow::onQuickLook);
     connect(m_toolbar, &Toolbar::getInfoRequested, this, &MainWindow::onGetInfo);
     connect(m_toolbar, &Toolbar::toggleHiddenRequested, this, &MainWindow::onToggleHidden);
-    connect(m_toolbar, &Toolbar::openTerminalRequested, this, &MainWindow::onOpenTerminal);
+    connect(m_toolbar, &Toolbar::openTerminalRequested, this, &MainWindow::toggleTerminalPanel);
     connect(m_toolbar, &Toolbar::searchTextChanged, this, &MainWindow::onSearchTextChanged);
 
     // Splitter: Sidebar + TabManager
@@ -140,10 +521,7 @@ void MainWindow::setupUi()
     connect(m_sidebar, &Sidebar::tagSelected, this, [this](const QString& tag) {
         auto* page = m_tabManager->currentPage();
         if (page) {
-            page->model()->setTaggedFiles(tag);
-            m_toolbar->setPath(QStringLiteral("tag://") + tag);
-            updateNavigationState();
-            updateStatusInfo();
+            page->showTaggedFiles(tag);
         }
     });
 
@@ -152,7 +530,11 @@ void MainWindow::setupUi()
     connect(m_tabManager, &TabManager::activePagePathChanged, this, [this](TabPage* page, const QString& p) {
         if (page == m_tabManager->currentPage()) {
             m_toolbar->setPath(p);
+            m_toolbar->setViewMode(page->viewMode());
             m_sidebar->selectPath(p);
+            if (m_terminalPanel && m_terminalPanel->isVisible()) {
+                m_terminalPanel->setCurrentDirectory(p);
+            }
             updateNavigationState();
             updateStatusInfo();
         }
@@ -181,13 +563,40 @@ void MainWindow::setupUi()
     connect(m_tabManager, &TabManager::searchClearRequested, this, [this]() {
         m_toolbar->clearSearch();
     });
+    connect(m_tabManager, &TabManager::itemRenamed, this, [this](const QString& oldPath, const QString& newPath) {
+        UndoAction act;
+        act.type = UndoActionType::Rename;
+        act.description = QStringLiteral("Rename \"%1\" to \"%2\"").arg(QFileInfo(oldPath).fileName(), QFileInfo(newPath).fileName());
+        act.sourcePath = oldPath;
+        act.targetPath = newPath;
+        m_undoManager->pushAction(act);
+    });
 
     m_mainSplitter->addWidget(m_sidebar);
     m_mainSplitter->addWidget(m_tabManager);
     m_mainSplitter->setStretchFactor(0, 0);
     m_mainSplitter->setStretchFactor(1, 1);
+    // The splitter sizes children from their size hints (QTreeWidget reports
+    // 256), which leaves a gap next to the fixed-width sidebar.
+    m_mainSplitter->setSizes({m_sidebar->minimumWidth(), 1});
 
-    setCentralWidget(m_mainSplitter);
+    m_terminalPanel = new TerminalPanel(this);
+    m_terminalPanel->hide();
+    connect(m_terminalPanel, &TerminalPanel::directoryChanged, this, [this](const QString& dir) {
+        if (TabPage* page = m_tabManager->currentPage()) {
+            page->navigateTo(dir);
+        }
+    });
+    connect(m_terminalPanel, &TerminalPanel::closeRequested, this, &MainWindow::toggleTerminalPanel);
+
+    m_verticalSplitter = new QSplitter(Qt::Vertical, this);
+    m_verticalSplitter->setHandleWidth(1);
+    m_verticalSplitter->addWidget(m_mainSplitter);
+    m_verticalSplitter->addWidget(m_terminalPanel);
+    m_verticalSplitter->setStretchFactor(0, 1);
+    m_verticalSplitter->setStretchFactor(1, 0);
+
+    setCentralWidget(m_verticalSplitter);
 
     // Status bar
     auto* sBar = statusBar();
@@ -209,11 +618,62 @@ void MainWindow::setupMenusAndShortcuts()
         QString path = curr ? curr->currentPath() : AppSettings::instance().defaultPath();
         m_tabManager->createTab(path);
     });
+    fileMenu->addAction(QStringLiteral("New Window"), QKeySequence::New, this, [this]() {
+        QString path = AppSettings::instance().defaultPath();
+        if (TabPage* page = m_tabManager->currentPage()) {
+            path = page->currentPath();
+        }
+        QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                {QStringLiteral("--new-window"), path});
+    });
 
     fileMenu->addAction(QStringLiteral("New Folder"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), this, &MainWindow::onNewFolder);
     fileMenu->addAction(QStringLiteral("New Text File..."), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_N), this, &MainWindow::onNewTextFile);
+    auto* recentMenu = fileMenu->addMenu(QStringLiteral("Open Recent"));
+    connect(recentMenu, &QMenu::aboutToShow, this, [this, recentMenu]() {
+        recentMenu->clear();
+        const QList<RecentFile> recent = RecentFilesManager::list(15);
+        if (recent.isEmpty()) {
+            QAction* empty = recentMenu->addAction(QStringLiteral("No Recent Files"));
+            empty->setEnabled(false);
+            return;
+        }
+
+        for (const RecentFile& entry : recent) {
+            const QFileInfo info(entry.path);
+            QString label = info.fileName();
+            if (label.isEmpty()) {
+                label = entry.path;
+            }
+            QAction* action = recentMenu->addAction(
+                QIcon::fromTheme(QStringLiteral("document-open")), label, this,
+                [this, path = entry.path]() {
+                    const QFileInfo recentInfo(path);
+                    if (recentInfo.isDir()) {
+                        openInNewTab(path);
+                    } else if (!DesktopAppsManager::launchFile(path)) {
+                        QMessageBox::warning(this, QStringLiteral("Cannot Open Recent File"),
+                            QStringLiteral("Could not open \"%1\".").arg(path));
+                    }
+                });
+            action->setToolTip(entry.path);
+        }
+
+        recentMenu->addSeparator();
+        recentMenu->addAction(QStringLiteral("Clear Recent Files"), this, [this, recentMenu]() {
+            if (QMessageBox::question(this, QStringLiteral("Clear Recent Files"),
+                    QStringLiteral("Clear the recently used files list for all applications?"),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+                RecentFilesManager::clear();
+                recentMenu->clear();
+            }
+        });
+    });
     fileMenu->addAction(QStringLiteral("Close Tab"), QKeySequence(Qt::CTRL | Qt::Key_W), this, [this]() {
         m_tabManager->closeCurrentTab();
+    });
+    fileMenu->addAction(QStringLiteral("Reopen Closed Tab"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T), this, [this]() {
+        m_tabManager->reopenLastClosedTab();
     });
 
     fileMenu->addSeparator();
@@ -242,12 +702,21 @@ void MainWindow::setupMenusAndShortcuts()
     editMenu->addAction(QStringLiteral("Cut"), QKeySequence(Qt::CTRL | Qt::Key_X), this, &MainWindow::onCut);
     editMenu->addAction(QStringLiteral("Copy"), QKeySequence(Qt::CTRL | Qt::Key_C), this, &MainWindow::onCopy);
     editMenu->addAction(QStringLiteral("Paste"), QKeySequence(Qt::CTRL | Qt::Key_V), this, &MainWindow::onPaste);
+    m_copyToOtherPaneAction = editMenu->addAction(QStringLiteral("Copy to Other Pane"), this, &MainWindow::onCopyToOtherPane);
+    m_moveToOtherPaneAction = editMenu->addAction(QStringLiteral("Move to Other Pane"), this, &MainWindow::onMoveToOtherPane);
+    m_copyToOtherPaneAction->setEnabled(false);
+    m_moveToOtherPaneAction->setEnabled(false);
     editMenu->addSeparator();
     editMenu->addAction(QStringLiteral("Rename"), QKeySequence(Qt::Key_F2), this, &MainWindow::onRename);
+    editMenu->addAction(QStringLiteral("Batch Rename..."), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R), this, &MainWindow::onBatchRename);
     editMenu->addSeparator();
     editMenu->addAction(QStringLiteral("Find..."), QKeySequence::Find, this, [this]() {
         m_toolbar->focusSearch();
     });
+    editMenu->addAction(QStringLiteral("Select by Pattern..."), this, &MainWindow::onSelectByPattern);
+    editMenu->addAction(QStringLiteral("Invert Selection"), this, &MainWindow::onInvertSelection);
+    editMenu->addSeparator();
+    editMenu->addAction(QStringLiteral("Preferences..."), QKeySequence(Qt::CTRL | Qt::Key_Comma), this, &MainWindow::onPreferences);
 
     // View Menu
     auto* viewMenu = mBar->addMenu(QStringLiteral("&View"));
@@ -256,10 +725,113 @@ void MainWindow::setupMenusAndShortcuts()
     viewMenu->addAction(QStringLiteral("as Columns"), QKeySequence(Qt::CTRL | Qt::Key_3), this, [this]() { onViewModeChanged(ViewMode::Column); });
     viewMenu->addAction(QStringLiteral("as Gallery"), QKeySequence(Qt::CTRL | Qt::Key_4), this, [this]() { onViewModeChanged(ViewMode::Gallery); });
     viewMenu->addSeparator();
+    auto* splitAction = viewMenu->addAction(QStringLiteral("Split View"), this, &MainWindow::onToggleSplitView);
+    splitAction->setShortcut(QKeySequence(Qt::Key_F3));
+    m_syncSplitAction = viewMenu->addAction(QStringLiteral("Synchronize Split Panes"));
+    m_syncSplitAction->setCheckable(true);
+    m_syncSplitAction->setEnabled(false);
+    connect(m_syncSplitAction, &QAction::toggled, this, [this](bool checked) {
+        m_tabManager->setSplitSyncEnabled(checked);
+    });
+    auto* terminalAction = viewMenu->addAction(QStringLiteral("Terminal Panel"), this, &MainWindow::toggleTerminalPanel);
+    terminalAction->setShortcut(QKeySequence(Qt::Key_F4));
+    viewMenu->addSeparator();
     m_toggleHiddenAction = viewMenu->addAction(QStringLiteral("Toggle Hidden Files"), QKeySequence(Qt::CTRL | Qt::Key_H), this, &MainWindow::onToggleHidden);
     m_toggleHiddenAction->setCheckable(true);
     m_toggleHiddenAction->setChecked(AppSettings::instance().showHiddenFiles());
+
+    auto* calcFolderSizesAction = viewMenu->addAction(QStringLiteral("Calculate Folder Sizes"), this, [this](bool checked) {
+        AppSettings::instance().setCalculateFolderSizes(checked);
+        m_tabManager->setCalculateFolderSizes(checked);
+    });
+    calcFolderSizesAction->setCheckable(true);
+    calcFolderSizesAction->setChecked(AppSettings::instance().calculateFolderSizes());
     viewMenu->addAction(QStringLiteral("Customize Sidebar..."), m_sidebar, &Sidebar::openManageSidebarDialog);
+
+    auto* refreshAction = viewMenu->addAction(QStringLiteral("Refresh"), this, [this]() {
+        m_tabManager->refreshCurrentTab();
+        m_sidebar->refresh();
+    });
+    refreshAction->setShortcuts({QKeySequence(Qt::Key_F5), QKeySequence(Qt::CTRL | Qt::Key_R)});
+
+    viewMenu->addSeparator();
+    auto* sortMenu = viewMenu->addMenu(QStringLiteral("Sort By"));
+    auto* sortGroup = new QActionGroup(this);
+    sortGroup->setExclusive(true);
+    auto addSortAction = [&](const QString& label, int column) {
+        QAction* action = sortMenu->addAction(label);
+        action->setCheckable(true);
+        action->setData(column);
+        sortGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, column]() {
+            TabPage* page = m_tabManager->currentPage();
+            const Qt::SortOrder order = page ? page->sortOrder()
+                                             : AppSettings::instance().sortOrder();
+            applySort(column, order);
+        });
+    };
+    addSortAction(QStringLiteral("Name"), FileSystemModel::ColName);
+    addSortAction(QStringLiteral("Date Modified"), FileSystemModel::ColDateModified);
+    addSortAction(QStringLiteral("Size"), FileSystemModel::ColSize);
+    addSortAction(QStringLiteral("Kind"), FileSystemModel::ColKind);
+
+    sortMenu->addSeparator();
+    auto* orderGroup = new QActionGroup(this);
+    orderGroup->setExclusive(true);
+    auto* ascendingAction = sortMenu->addAction(QStringLiteral("Ascending"));
+    ascendingAction->setCheckable(true);
+    orderGroup->addAction(ascendingAction);
+    auto* descendingAction = sortMenu->addAction(QStringLiteral("Descending"));
+    descendingAction->setCheckable(true);
+    orderGroup->addAction(descendingAction);
+    connect(ascendingAction, &QAction::triggered, this, [this]() {
+        TabPage* page = m_tabManager->currentPage();
+        const int column = page ? page->sortColumn() : AppSettings::instance().sortColumn();
+        applySort(column, Qt::AscendingOrder);
+    });
+    connect(descendingAction, &QAction::triggered, this, [this]() {
+        TabPage* page = m_tabManager->currentPage();
+        const int column = page ? page->sortColumn() : AppSettings::instance().sortColumn();
+        applySort(column, Qt::DescendingOrder);
+    });
+
+    QAction* dirsFirstAction = viewMenu->addAction(QStringLiteral("Keep Folders on Top"));
+    dirsFirstAction->setCheckable(true);
+    connect(dirsFirstAction, &QAction::toggled, this, [this](bool checked) {
+        AppSettings::instance().setDirectoriesFirst(checked);
+        AppSettings::instance().save();
+        for (int i = 0; i < m_tabManager->count(); ++i) {
+            if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
+                if (split->primaryPage()) split->primaryPage()->setDirectoriesFirst(checked);
+                if (split->secondaryPage()) split->secondaryPage()->setDirectoriesFirst(checked);
+            }
+        }
+    });
+
+    // Header clicks also change the sort; keep the menu in sync when opened.
+    connect(sortMenu, &QMenu::aboutToShow, this, [sortGroup, ascendingAction, descendingAction, dirsFirstAction]() {
+        const int column = AppSettings::instance().sortColumn();
+        for (QAction* action : sortGroup->actions()) {
+            action->setChecked(action->data().toInt() == column);
+        }
+        ascendingAction->setChecked(AppSettings::instance().sortOrder() == Qt::AscendingOrder);
+        descendingAction->setChecked(AppSettings::instance().sortOrder() == Qt::DescendingOrder);
+        dirsFirstAction->setChecked(AppSettings::instance().directoriesFirst());
+    });
+
+    viewMenu->addSeparator();
+    QAction* zoomInAction = viewMenu->addAction(QStringLiteral("Zoom In"), this, [this]() { adjustIconSize(16); });
+    zoomInAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Plus), QKeySequence(Qt::CTRL | Qt::Key_Equal)});
+    QAction* zoomOutAction = viewMenu->addAction(QStringLiteral("Zoom Out"), this, [this]() { adjustIconSize(-16); });
+    zoomOutAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Minus)});
+    viewMenu->addAction(QStringLiteral("Actual Size"), QKeySequence(Qt::CTRL | Qt::Key_0), this, [this]() {
+        applyIconSizeToAll(64);
+    });
+
+    auto* nextTabShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Tab")), this);
+    connect(nextTabShortcut, &QShortcut::activated, this, [this]() { m_tabManager->activateNextTab(); });
+    auto* prevTabShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Tab")), this);
+    connect(prevTabShortcut, &QShortcut::activated, this, [this]() { m_tabManager->activatePreviousTab(); });
 
     // Go Menu
     auto* goMenu = mBar->addMenu(QStringLiteral("&Go"));
@@ -277,6 +849,28 @@ void MainWindow::setupMenusAndShortcuts()
         m_toolbar->breadcrumbBar()->showPathEditor();
     });
     goMenu->addAction(QStringLiteral("Home"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H), this, [this]() { openPath(QDir::homePath()); });
+    goMenu->addSeparator();
+    goMenu->addAction(QStringLiteral("Connect to Server..."), QKeySequence(Qt::CTRL | Qt::Key_K), this, [this]() {
+        bool ok = false;
+        const QString uri = QInputDialog::getText(this, QStringLiteral("Connect to Server"),
+            QStringLiteral("Server address (sftp://user@host, smb://server/share, ftp://host, dav://host):"),
+            QLineEdit::Normal, QStringLiteral("sftp://"), &ok);
+        if (ok && !uri.trimmed().isEmpty()) {
+            connectToServerAsync(uri.trimmed());
+        }
+    });
+    goMenu->addAction(QStringLiteral("Trash..."), this, [this]() {
+        TrashDialog dialog(this);
+        connect(&dialog, &TrashDialog::trashChanged, this, [this]() {
+            m_sidebar->refresh();
+            if (TabPage* page = m_tabManager->currentPage()) {
+                if (page->currentPath().startsWith(XdgTrash::trashDirectory())) {
+                    page->refresh();
+                }
+            }
+        });
+        dialog.exec();
+    });
 
     // Theme Menu
     auto* themeMenu = mBar->addMenu(QStringLiteral("&Theme"));
@@ -308,6 +902,131 @@ void MainWindow::openPath(const QString& path)
     } else {
         page->navigateTo(path);
     }
+}
+
+void MainWindow::openInNewTab(const QString& path)
+{
+    m_tabManager->createTab(path);
+}
+
+void MainWindow::openAndSelect(const QString& filePath)
+{
+    QFileInfo fi(filePath);
+    if (!fi.exists() && !fi.isSymLink()) {
+        openPath(filePath);
+        return;
+    }
+    QString folder = fi.isDir() ? fi.absoluteFilePath() : fi.absolutePath();
+    openPath(folder);
+    if (TabPage* page = m_tabManager->currentPage()) {
+        page->refresh(fi.absoluteFilePath());
+    }
+}
+
+void MainWindow::openRemoteLocation(const QString& uri)
+{
+    connectToServerAsync(uri);
+}
+
+void MainWindow::showItems(const QStringList& paths)
+{
+    QStringList directories;
+    QStringList files;
+    QStringList remoteUris;
+
+    for (const QString& item : paths) {
+        if (item.isEmpty()) continue;
+
+        const QUrl url(item);
+        if (!url.isLocalFile() && url.isValid() && !url.scheme().isEmpty()) {
+            remoteUris.append(item);
+            continue;
+        }
+
+        const QFileInfo info(url.isLocalFile() ? url.toLocalFile() : item);
+        if (info.isDir()) {
+            directories.append(info.absoluteFilePath());
+        } else if (info.exists() || info.isSymLink()) {
+            files.append(info.absoluteFilePath());
+        }
+    }
+
+    for (const QString& uri : remoteUris) {
+        openRemoteLocation(uri);
+    }
+
+    bool openedAny = false;
+    auto presentDirectory = [&](const QString& directory, const QStringList& selection) {
+        if (!openedAny) {
+            openPath(directory);
+        } else {
+            openInNewTab(directory);
+        }
+        openedAny = true;
+
+        if (!selection.isEmpty()) {
+            if (TabPage* page = m_tabManager->currentPage()) {
+                page->refreshWithSelection(selection);
+            }
+        }
+    };
+
+    for (const QString& directory : directories) {
+        presentDirectory(directory, {});
+    }
+
+    // Group files by parent folder so that a multi-file request opens one
+    // tab per folder instead of one tab per file.
+    QStringList directoryOrder;
+    QHash<QString, QStringList> filesByDirectory;
+    for (const QString& file : files) {
+        const QString directory = QFileInfo(file).absolutePath();
+        if (!filesByDirectory.contains(directory)) {
+            directoryOrder.append(directory);
+        }
+        filesByDirectory[directory].append(file);
+    }
+    for (const QString& directory : directoryOrder) {
+        presentDirectory(directory, filesByDirectory.value(directory));
+    }
+
+    // Nothing on disk matched (for example a stale download entry): fall back
+    // to the normal open path so the user still gets a window.
+    if (!openedAny && !remoteUris.isEmpty()) {
+        openedAny = true;
+    }
+    if (!openedAny && !paths.isEmpty()) {
+        openPath(paths.first());
+    }
+
+    activateFromDesktop();
+}
+
+void MainWindow::showItemProperties(const QStringList& paths)
+{
+    bool shownAny = false;
+    for (const QString& item : paths) {
+        if (item.isEmpty()) continue;
+
+        const QUrl url(item);
+        const QString path = url.isLocalFile() ? url.toLocalFile() : item;
+        const QFileInfo info(path);
+        if (!info.exists() && !info.isSymLink() && !info.isDir()) {
+            continue;
+        }
+
+        auto* dlg = new GetInfoDialog(info.absoluteFilePath(), this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
+        shownAny = true;
+    }
+
+    if (!shownAny) {
+        onGetInfo();
+        return;
+    }
+
+    activateFromDesktop();
 }
 
 void MainWindow::onNavigateBack()
@@ -345,6 +1064,12 @@ void MainWindow::onViewModeChanged(ViewMode mode)
     }
 }
 
+void MainWindow::onToggleSplitView()
+{
+    m_tabManager->toggleSplit();
+    updateSplitActions();
+}
+
 void MainWindow::onActivePageChanged(TabPage* page)
 {
     if (!page) return;
@@ -353,8 +1078,27 @@ void MainWindow::onActivePageChanged(TabPage* page)
     m_toolbar->setViewMode(page->viewMode());
     m_sidebar->selectPath(page->currentPath());
 
+    if (m_terminalPanel && m_terminalPanel->isVisible()) {
+        m_terminalPanel->setCurrentDirectory(page->currentPath());
+    }
+
     updateNavigationState();
     updateStatusInfo();
+    updateSplitActions();
+}
+
+void MainWindow::toggleTerminalPanel()
+{
+    if (!m_terminalPanel) return;
+    bool show = !m_terminalPanel->isVisible();
+    m_terminalPanel->setVisible(show);
+    if (show) {
+        if (TabPage* page = m_tabManager->currentPage()) {
+            m_terminalPanel->setCurrentDirectory(page->currentPath());
+        }
+        m_terminalPanel->focusInput();
+        m_verticalSplitter->setSizes({qMax(300, height() - 200), 200});
+    }
 }
 
 void MainWindow::updateNavigationState()
@@ -385,6 +1129,16 @@ void MainWindow::updateStatusInfo()
     }
 }
 
+bool MainWindow::ensureOperationsIdle()
+{
+    if (!m_opEngine->isRunning()) {
+        return true;
+    }
+    QMessageBox::information(this, QStringLiteral("Operation in Progress"),
+        QStringLiteral("Another file operation is still running. Please wait for it to finish, then try again."));
+    return false;
+}
+
 void MainWindow::onNewFolder()
 {
     TabPage* page = m_tabManager->currentPage();
@@ -402,6 +1156,9 @@ void MainWindow::onNewFolder()
             act.type = UndoActionType::Create;
             act.description = QStringLiteral("Create \"%1\"").arg(name.trimmed());
             act.targetPath = createdPath;
+            act.isDirectory = true;
+            act.createdSize = 0;
+            act.createdModified = QFileInfo(createdPath).lastModified();
             m_undoManager->pushAction(act);
             page->refresh();
         } else {
@@ -427,6 +1184,10 @@ void MainWindow::onNewTextFile()
             act.type = UndoActionType::Create;
             act.description = QStringLiteral("Create \"%1\"").arg(name.trimmed());
             act.targetPath = createdPath;
+            act.isDirectory = false;
+            QFileInfo createdFi(createdPath);
+            act.createdSize = createdFi.size();
+            act.createdModified = createdFi.lastModified();
             m_undoManager->pushAction(act);
             page->refresh();
         } else {
@@ -469,21 +1230,278 @@ void MainWindow::onCopyPath()
     }
 }
 
+void MainWindow::onCopyTo()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    const QStringList sources = existingPathsOnly(page->selectedFilePaths());
+    if (sources.isEmpty()) return;
+
+    const QString destination = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("Copy To Folder"), page->currentPath());
+    if (destination.isEmpty()) return;
+
+    m_opEngine->copyItems(sources, destination);
+}
+
+void MainWindow::onMoveTo()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    const QStringList sources = existingPathsOnly(page->selectedFilePaths());
+    if (sources.isEmpty()) return;
+
+    const QString destination = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("Move To Folder"), page->currentPath());
+    if (destination.isEmpty()) return;
+
+    m_opEngine->moveItems(sources, destination);
+}
+
+void MainWindow::onCopyToOtherPane()
+{
+    TabPage* page = m_tabManager->currentPage();
+    TabPage* other = m_tabManager->otherPage();
+    if (!page || !other) {
+        return;
+    }
+
+    const QStringList sources = existingPathsOnly(page->selectedFilePaths());
+    if (sources.isEmpty()) {
+        return;
+    }
+
+    m_opEngine->copyItems(sources, other->currentPath());
+}
+
+void MainWindow::onMoveToOtherPane()
+{
+    TabPage* page = m_tabManager->currentPage();
+    TabPage* other = m_tabManager->otherPage();
+    if (!page || !other) {
+        return;
+    }
+
+    const QStringList sources = existingPathsOnly(page->selectedFilePaths());
+    if (sources.isEmpty()) {
+        return;
+    }
+
+    m_opEngine->moveItems(sources, other->currentPath());
+}
+
+void MainWindow::onNewFolderWithSelection()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    const QStringList sources = existingPathsOnly(page->selectedFilePaths());
+    if (sources.isEmpty()) return;
+
+    const QString parentDirectory = QFileInfo(sources.first()).absolutePath();
+    for (const QString& source : sources) {
+        if (QFileInfo(source).absolutePath() != parentDirectory) {
+            QMessageBox::information(this, QStringLiteral("New Folder with Selection"),
+                QStringLiteral("All selected items must be in the same folder."));
+            return;
+        }
+    }
+
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, QStringLiteral("New Folder with Selection"),
+        QStringLiteral("Folder name:"), QLineEdit::Normal,
+        QStringLiteral("New Folder"), &ok);
+    if (!ok || name.trimmed().isEmpty()) return;
+
+    QString createdPath;
+    QString error;
+    if (!m_opEngine->createFolder(parentDirectory, name.trimmed(), &createdPath, &error)) {
+        QMessageBox::warning(this, QStringLiteral("New Folder with Selection"), error);
+        return;
+    }
+
+    UndoAction act;
+    act.type = UndoActionType::Create;
+    act.description = QStringLiteral("Create \"%1\"").arg(name.trimmed());
+    act.targetPath = createdPath;
+    act.isDirectory = true;
+    act.createdSize = 0;
+    act.createdModified = QFileInfo(createdPath).lastModified();
+    m_undoManager->pushAction(act);
+
+    m_opEngine->moveItems(sources, createdPath);
+    page->refresh();
+}
+
+void MainWindow::onSelectByPattern()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    bool ok = false;
+    const QString pattern = QInputDialog::getText(
+        this, QStringLiteral("Select by Pattern"),
+        QStringLiteral("Pattern (for example: *.txt, IMG_*):"),
+        QLineEdit::Normal, QStringLiteral("*"), &ok);
+    if (ok && !pattern.trimmed().isEmpty()) {
+        page->selectByPattern(pattern);
+    }
+}
+
+void MainWindow::onInvertSelection()
+{
+    if (TabPage* page = m_tabManager->currentPage()) {
+        page->invertSelection();
+    }
+}
+
+void MainWindow::onCalculateChecksum()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) {
+        return;
+    }
+
+    QStringList files;
+    for (const QString& path : page->selectedFilePaths()) {
+        if (!QFileInfo(path).isDir()) {
+            files.append(path);
+        }
+    }
+    if (files.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Calculate Checksum"),
+            QStringLiteral("Select one or more files to calculate a checksum."));
+        return;
+    }
+
+    auto cancelled = std::make_shared<std::atomic_bool>(false);
+    auto* progress = new QProgressDialog(
+        QStringLiteral("Calculating SHA-256 checksums..."), QStringLiteral("Cancel"),
+        0, 0, this);
+    progress->setWindowTitle(QStringLiteral("Calculate Checksums"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    connect(progress, &QProgressDialog::canceled, this, [cancelled]() {
+        cancelled->store(true);
+    });
+    progress->show();
+
+    auto* watcher = new QFutureWatcher<QStringList>(this);
+    connect(watcher, &QFutureWatcher<QStringList>::finished, this,
+        [this, watcher, progress]() {
+            progress->close();
+            progress->deleteLater();
+
+            const QStringList results = watcher->result();
+            watcher->deleteLater();
+            if (results.isEmpty()) {
+                return;
+            }
+
+            QDialog dialog(this);
+            dialog.setWindowTitle(QStringLiteral("Checksums"));
+            dialog.resize(680, 420);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* text = new QPlainTextEdit(&dialog);
+            text->setReadOnly(true);
+            text->setPlainText(results.join(QStringLiteral("\n\n")));
+            text->setLineWrapMode(QPlainTextEdit::NoWrap);
+            layout->addWidget(text);
+
+            auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+            auto* copyButton = buttons->addButton(
+                QStringLiteral("Copy"), QDialogButtonBox::ActionRole);
+            connect(copyButton, &QPushButton::clicked, &dialog, [text]() {
+                QApplication::clipboard()->setText(text->toPlainText());
+            });
+            connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+            layout->addWidget(buttons);
+            dialog.exec();
+        });
+
+    watcher->setFuture(QtConcurrent::run([files, cancelled]() {
+        QStringList results;
+        constexpr qint64 chunkSize = 1024 * 1024;
+        for (const QString& path : files) {
+            if (cancelled->load()) {
+                results.append(QStringLiteral("%1\nSHA-256: cancelled").arg(path));
+                continue;
+            }
+
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) {
+                results.append(QStringLiteral("%1\nSHA-256: cannot open: %2")
+                                   .arg(path, file.errorString()));
+                continue;
+            }
+
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            bool readError = false;
+            while (!file.atEnd()) {
+                if (cancelled->load()) {
+                    break;
+                }
+                const QByteArray data = file.read(chunkSize);
+                if (data.isEmpty() && file.error() != QFileDevice::NoError) {
+                    readError = true;
+                    break;
+                }
+                hash.addData(data);
+            }
+
+            if (cancelled->load()) {
+                results.append(QStringLiteral("%1\nSHA-256: cancelled").arg(path));
+            } else if (readError) {
+                results.append(QStringLiteral("%1\nSHA-256: read error: %2")
+                                   .arg(path, file.errorString()));
+            } else {
+                results.append(QStringLiteral("%1\nSHA-256: %2")
+                                   .arg(path, QString::fromLatin1(hash.result().toHex())));
+            }
+        }
+        return results;
+    }));
+}
+
 void MainWindow::onRename()
 {
     TabPage* page = m_tabManager->currentPage();
     if (!page) return;
 
+    if (page->triggerRename()) {
+        return;
+    }
+
     QString selected = page->selectedFilePath();
     if (selected.isEmpty()) return;
 
     QFileInfo fi(selected);
-    bool ok = false;
-    QString newName = QInputDialog::getText(this, QStringLiteral("Rename"),
-                                            QStringLiteral("New name:"),
-                                            QLineEdit::Normal,
-                                            fi.fileName(), &ok);
-    if (ok && !newName.trimmed().isEmpty() && newName.trimmed() != fi.fileName()) {
+
+    QInputDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Rename"));
+    dialog.setLabelText(QStringLiteral("New name:"));
+    dialog.setTextValue(fi.fileName());
+    dialog.resize(qBound(520, QFontMetrics(dialog.font()).horizontalAdvance(fi.fileName()) + 180, 900),
+                  dialog.sizeHint().height());
+
+    // Preselect the base name, keeping the extension untouched.
+    if (auto* edit = dialog.findChild<QLineEdit*>()) {
+        const QString name = fi.fileName();
+        const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+        const int selectionLength = static_cast<int>(dot > 0 ? dot : name.size());
+        QTimer::singleShot(0, edit, [edit, selectionLength]() {
+            edit->setSelection(0, selectionLength);
+        });
+    }
+
+    if (dialog.exec() != QDialog::Accepted) return;
+    const QString newName = dialog.textValue();
+    if (!newName.trimmed().isEmpty() && newName.trimmed() != fi.fileName()) {
         QString renamedPath, error;
         if (m_opEngine->renameItem(selected, newName.trimmed(), &renamedPath, &error)) {
             UndoAction act;
@@ -503,30 +1521,335 @@ void MainWindow::onCopy()
 {
     TabPage* page = m_tabManager->currentPage();
     if (!page) return;
-    m_clipboardPaths = page->selectedFilePaths();
+    QStringList paths = existingPathsOnly(page->selectedFilePaths());
+    if (paths.isEmpty()) return;
+    m_clipboardPaths = paths;
     m_isCutOperation = false;
+    setFileClipboard(paths, false);
 }
 
 void MainWindow::onCut()
 {
     TabPage* page = m_tabManager->currentPage();
     if (!page) return;
-    m_clipboardPaths = page->selectedFilePaths();
+    QStringList paths = existingPathsOnly(page->selectedFilePaths());
+    if (paths.isEmpty()) return;
+    m_clipboardPaths = paths;
     m_isCutOperation = true;
+    setFileClipboard(paths, true);
 }
 
 void MainWindow::onPaste()
 {
     TabPage* page = m_tabManager->currentPage();
-    if (!page || m_clipboardPaths.isEmpty()) return;
+    if (!page) return;
+    pasteIntoDirectory(page->currentPath());
+}
 
-    QString destDir = page->currentPath();
-    if (m_isCutOperation) {
-        m_opEngine->moveItems(m_clipboardPaths, destDir);
-        m_clipboardPaths.clear();
-        m_isCutOperation = false;
+void MainWindow::connectToServerAsync(const QString& uri)
+{
+    if (uri.trimmed().isEmpty()) return;
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    auto* watcher = new QFutureWatcher<QPair<bool, QString>>(this);
+    connect(watcher, &QFutureWatcher<QPair<bool, QString>>::finished, this, [this, watcher, uri]() {
+        QApplication::restoreOverrideCursor();
+        const QPair<bool, QString> result = watcher->result();
+        watcher->deleteLater();
+
+        m_sidebar->refresh();
+        if (!result.first) {
+            QMessageBox::warning(this, QStringLiteral("Cannot Connect"),
+                result.second.isEmpty() ? QStringLiteral("Could not connect to %1").arg(uri) : result.second);
+            return;
+        }
+
+        // gvfs exposes remote mounts as directories under /run/user/<uid>/gvfs.
+        const QString host = QUrl(uri).host();
+        const QDir gvfs(QStringLiteral("/run/user/%1/gvfs").arg(::getuid()));
+        QString mountPath;
+        QDateTime newest;
+        for (const auto& entry : gvfs.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden)) {
+            if (!host.isEmpty() && !entry.fileName().contains(host, Qt::CaseInsensitive)) {
+                continue;
+            }
+            if (!newest.isValid() || entry.lastModified() > newest) {
+                newest = entry.lastModified();
+                mountPath = entry.absoluteFilePath();
+            }
+        }
+
+        if (mountPath.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("Connected"),
+                QStringLiteral("%1 was mounted. It should now appear in the sidebar under Devices.").arg(uri));
+            return;
+        }
+
+        if (TabPage* page = m_tabManager->currentPage()) {
+            page->navigateTo(mountPath);
+        } else {
+            m_tabManager->createTab(mountPath);
+        }
+    });
+
+    watcher->setFuture(QtConcurrent::run([uri]() {
+        QProcess proc;
+        proc.start(QStringLiteral("gio"), {QStringLiteral("mount"), uri});
+        if (!proc.waitForFinished(60000) || proc.exitCode() != 0) {
+            QString error = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+            if (error.isEmpty()) error = QStringLiteral("Could not mount %1").arg(uri);
+            return qMakePair(false, error);
+        }
+        return qMakePair(true, QString());
+    }));
+}
+
+void MainWindow::applySort(int column, Qt::SortOrder order)
+{
+    AppSettings::instance().setSortColumn(column);
+    AppSettings::instance().setSortOrder(order);
+    AppSettings::instance().save();
+
+    if (m_tabManager->isSplit()) {
+        if (TabPage* page = m_tabManager->currentPage()) {
+            page->applySort(column, order);
+        }
+        return;
+    }
+
+    for (int i = 0; i < m_tabManager->count(); ++i) {
+        if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
+            if (split->primaryPage()) split->primaryPage()->applySort(column, order);
+            if (split->secondaryPage()) split->secondaryPage()->applySort(column, order);
+        }
+    }
+}
+
+void MainWindow::updateSplitActions()
+{
+    const bool split = m_tabManager->isSplit();
+
+    if (m_syncSplitAction) {
+        QSignalBlocker blocker(m_syncSplitAction);
+        m_syncSplitAction->setEnabled(split);
+        m_syncSplitAction->setChecked(split && m_tabManager->isSplitSyncEnabled());
+    }
+    if (m_copyToOtherPaneAction) {
+        m_copyToOtherPaneAction->setEnabled(split);
+    }
+    if (m_moveToOtherPaneAction) {
+        m_moveToOtherPaneAction->setEnabled(split);
+    }
+}
+
+void MainWindow::applyIconSizeToAll(int size)
+{
+    size = qBound(16, size, 256);
+    AppSettings::instance().setIconSize(size);
+    AppSettings::instance().save();
+
+    for (int i = 0; i < m_tabManager->count(); ++i) {
+        if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
+            if (split->primaryPage()) split->primaryPage()->applyIconSize(size);
+            if (split->secondaryPage()) split->secondaryPage()->applyIconSize(size);
+        }
+    }
+}
+
+void MainWindow::adjustIconSize(int delta)
+{
+    applyIconSizeToAll(AppSettings::instance().iconSize() + delta);
+}
+
+void MainWindow::onPreferences()
+{
+    auto& settings = AppSettings::instance();
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Preferences"));
+    dialog.setMinimumWidth(420);
+
+    auto* layout = new QVBoxLayout(&dialog);
+
+    auto* restoreTabs = new QCheckBox(QStringLiteral("Reopen tabs from the last session"), &dialog);
+    restoreTabs->setChecked(settings.restoreTabsOnStartup());
+    layout->addWidget(restoreTabs);
+
+    auto* dirsFirst = new QCheckBox(QStringLiteral("Keep folders on top when sorting"), &dialog);
+    dirsFirst->setChecked(settings.directoriesFirst());
+    layout->addWidget(dirsFirst);
+
+    auto* rememberFolderViews = new QCheckBox(QStringLiteral("Remember view mode for each folder"), &dialog);
+    rememberFolderViews->setChecked(settings.rememberFolderViewModes());
+    layout->addWidget(rememberFolderViews);
+
+    auto* calcFolderSizes = new QCheckBox(QStringLiteral("Calculate folder sizes in file lists"), &dialog);
+    calcFolderSizes->setChecked(settings.calculateFolderSizes());
+    layout->addWidget(calcFolderSizes);
+
+    auto* springLoaded = new QCheckBox(QStringLiteral("Enable spring-loaded folders"), &dialog);
+    springLoaded->setChecked(settings.springLoadedFoldersEnabled());
+    layout->addWidget(springLoaded);
+
+    auto* form = new QFormLayout();
+    auto* springDelay = new QSpinBox(&dialog);
+    springDelay->setRange(100, 3000);
+    springDelay->setSingleStep(50);
+    springDelay->setSuffix(QStringLiteral(" ms"));
+    springDelay->setValue(settings.springLoadDelayMs());
+    form->addRow(QStringLiteral("Spring-load delay:"), springDelay);
+
+    auto* iconSize = new QSpinBox(&dialog);
+    iconSize->setRange(16, 256);
+    iconSize->setSingleStep(8);
+    iconSize->setSuffix(QStringLiteral(" px"));
+    iconSize->setValue(settings.iconSize());
+    form->addRow(QStringLiteral("Icon size:"), iconSize);
+
+    auto* trashPurgeDays = new QSpinBox(&dialog);
+    trashPurgeDays->setRange(0, 365);
+    trashPurgeDays->setSingleStep(1);
+    trashPurgeDays->setSpecialValueText(QStringLiteral("Never"));
+    trashPurgeDays->setSuffix(QStringLiteral(" days"));
+    trashPurgeDays->setValue(settings.trashAutoPurgeDays());
+    form->addRow(QStringLiteral("Auto-purge Trash older than:"), trashPurgeDays);
+    layout->addLayout(form);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    auto* defaultFileManagerBtn = new QPushButton(QStringLiteral("Set Finder as the default file manager"), &dialog);
+    layout->addWidget(defaultFileManagerBtn);
+    connect(defaultFileManagerBtn, &QPushButton::clicked, this, [this]() {
+        bool registered = false;
+
+        QProcess xdg;
+        xdg.start(QStringLiteral("xdg-mime"),
+                  {QStringLiteral("default"), QStringLiteral("org.finderlinux.Finder.desktop"), QStringLiteral("inode/directory")});
+        if (xdg.waitForFinished(2000) && xdg.exitCode() == 0) {
+            registered = true;
+        }
+
+        QProcess gio;
+        gio.start(QStringLiteral("gio"),
+                  {QStringLiteral("mime"), QStringLiteral("inode/directory"), QStringLiteral("org.finderlinux.Finder.desktop")});
+        if (gio.waitForFinished(2000) && gio.exitCode() == 0) {
+            registered = true;
+        }
+
+        // Also install the FileManager1 and Application activation files so
+        // browsers and launchers can start Finder when it is not running yet.
+        if (FileManager1Service::installActivationFile()) {
+            registered = true;
+        }
+        if (ApplicationService::installActivationFile()) {
+            registered = true;
+        }
+
+        QProcess::startDetached(QStringLiteral("kbuildsycoca6"), {QStringLiteral("--noincremental")});
+
+        QMessageBox::information(this, QStringLiteral("Default File Manager"),
+            registered
+                ? QStringLiteral("Finder is now registered as the default file manager for folders.\n\n"
+                                 "If another file manager was handling \"Show in folder\", restarting "
+                                 "the session (or that file manager) once will hand it over to Finder.")
+                : QStringLiteral("Could not register Finder as the default file manager."));
+    });
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    settings.setRestoreTabsOnStartup(restoreTabs->isChecked());
+    settings.setSpringLoadedFoldersEnabled(springLoaded->isChecked());
+    settings.setSpringLoadDelayMs(springDelay->value());
+    settings.setDirectoriesFirst(dirsFirst->isChecked());
+    settings.setRememberFolderViewModes(rememberFolderViews->isChecked());
+    settings.setCalculateFolderSizes(calcFolderSizes->isChecked());
+    settings.setTrashAutoPurgeDays(trashPurgeDays->value());
+    settings.save();
+
+    m_tabManager->setCalculateFolderSizes(calcFolderSizes->isChecked());
+
+    applyIconSizeToAll(iconSize->value());
+
+    for (int i = 0; i < m_tabManager->count(); ++i) {
+        if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
+            if (split->primaryPage()) split->primaryPage()->setDirectoriesFirst(dirsFirst->isChecked());
+            if (split->secondaryPage()) split->secondaryPage()->setDirectoriesFirst(dirsFirst->isChecked());
+        }
+    }
+}
+
+void MainWindow::onBatchRename()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    QStringList paths = page->selectedFilePaths();
+    if (paths.isEmpty()) {
+        const QString single = page->selectedFilePath();
+        if (!single.isEmpty()) paths.append(single);
+    }
+    if (paths.isEmpty()) return;
+    if (!ensureOperationsIdle()) return;
+
+    BatchRenameDialog dialog(paths, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const auto renames = dialog.renames();
+    if (renames.isEmpty()) return;
+
+    int renamed = 0;
+    QStringList errors;
+    for (const auto& pair : renames) {
+        QString renamedPath;
+        QString error;
+        const QString newName = QFileInfo(pair.second).fileName();
+        if (m_opEngine->renameItem(pair.first, newName, &renamedPath, &error)) {
+            renamed++;
+            UndoAction action;
+            action.type = UndoActionType::Rename;
+            action.description = QStringLiteral("Rename \"%1\"").arg(QFileInfo(pair.first).fileName());
+            action.sourcePath = pair.first;
+            action.targetPath = renamedPath;
+            m_undoManager->pushAction(action);
+        } else {
+            errors.append(QStringLiteral("%1: %2").arg(QFileInfo(pair.first).fileName(), error));
+        }
+    }
+
+    page->refresh();
+
+    if (!errors.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Batch Rename"),
+            QStringLiteral("%1 item(s) were renamed.\n\n%2")
+                .arg(renamed)
+                .arg(QStringList(errors.mid(0, 10)).join(QLatin1Char('\n'))));
+    }
+}
+
+void MainWindow::pasteIntoDirectory(const QString& destDir)
+{
+    // Prefer the system clipboard so files copied in Dolphin, Nautilus or any
+    // other application can be pasted here (and vice versa).
+    const ClipboardFiles clip = readFileClipboard();
+    QStringList sources = clip.valid ? clip.paths : m_clipboardPaths;
+    const bool cut = clip.valid ? clip.cut : m_isCutOperation;
+
+    sources = existingPathsOnly(sources);
+    if (sources.isEmpty() || destDir.isEmpty()) return;
+
+    if (cut) {
+        // Only forget the cut selection once the engine has accepted the job.
+        if (m_opEngine->moveItems(sources, destDir)) {
+            m_clipboardPaths.clear();
+            m_isCutOperation = false;
+        }
     } else {
-        m_opEngine->copyItems(m_clipboardPaths, destDir);
+        m_opEngine->copyItems(sources, destDir);
     }
 }
 
@@ -550,6 +1873,24 @@ void MainWindow::onCompress(const QString& ext)
     QString format = ext.isEmpty() ? QStringLiteral("zip") : ext;
     QString destArchive = ArchiveService::suggestedArchiveName(paths, format);
     m_opEngine->compressItems(paths, destArchive);
+}
+
+void MainWindow::onCompressWithOptions()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    const QStringList paths = existingPathsOnly(page->selectedFilePaths());
+    if (paths.isEmpty()) return;
+
+    CompressDialog dialog(paths, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const QString archivePath = dialog.archivePath();
+    if (archivePath.isEmpty()) return;
+
+    m_opEngine->compressItems(paths, archivePath,
+                              dialog.compressionLevel(), dialog.passphrase());
 }
 
 void MainWindow::onExtractHere()
@@ -580,6 +1921,89 @@ void MainWindow::onExtractToFolder()
             m_opEngine->extractArchive(p, destDir);
         }
     }
+}
+
+void MainWindow::onExtractWithPassword()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    QStringList archives;
+    for (const QString& path : page->selectedFilePaths()) {
+        if (ArchiveService::isArchive(path)) {
+            archives.append(path);
+        }
+    }
+    if (archives.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Extract with Password"),
+            QStringLiteral("Select one or more archive files to extract."));
+        return;
+    }
+
+    bool ok = false;
+    const QString password = QInputDialog::getText(
+        this, QStringLiteral("Extract with Password"), QStringLiteral("Password:"),
+        QLineEdit::Password, QString(), &ok);
+    if (!ok) return;
+
+    for (const QString& archive : archives) {
+        m_opEngine->extractArchive(archive, QFileInfo(archive).absolutePath(), password);
+    }
+}
+
+void MainWindow::onExtractAppImage()
+{
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) return;
+
+    QStringList appImages;
+    for (const QString& path : page->selectedFilePaths()) {
+        if (DesktopAppsManager::isAppImageFile(path)) {
+            appImages.append(path);
+        }
+    }
+    if (appImages.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Extract AppImage"),
+            QStringLiteral("Select one or more AppImage files to extract."));
+        return;
+    }
+
+    auto* progress = new QProgressDialog(
+        QStringLiteral("Extracting AppImage..."), QString(), 0, 0, this);
+    progress->setWindowTitle(QStringLiteral("Extract AppImage"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setCancelButton(nullptr);
+    progress->setAutoClose(false);
+    progress->show();
+
+    auto* watcher = new QFutureWatcher<QStringList>(this);
+    connect(watcher, &QFutureWatcher<QStringList>::finished, this,
+        [this, watcher, progress]() {
+            progress->close();
+            progress->deleteLater();
+            const QStringList errors = watcher->result();
+            watcher->deleteLater();
+
+            if (TabPage* current = m_tabManager->currentPage()) {
+                current->refresh();
+            }
+            if (!errors.isEmpty()) {
+                QMessageBox::warning(this, QStringLiteral("Extract AppImage"),
+                    errors.join(QLatin1Char('\n')));
+            }
+        });
+
+    watcher->setFuture(QtConcurrent::run([appImages]() {
+        QStringList errors;
+        for (const QString& appImage : appImages) {
+            QString error;
+            if (!ArchiveService::extractAppImage(appImage, nullptr, &error)) {
+                errors.append(error);
+            }
+        }
+        return errors;
+    }));
 }
 
 void MainWindow::onMoveToTrash()
@@ -639,6 +2063,7 @@ void MainWindow::onPutBack()
         if (!single.isEmpty()) paths.append(single);
     }
     if (paths.isEmpty()) return;
+    if (!ensureOperationsIdle()) return;
 
     int failed = 0;
     QString lastErr;
@@ -667,6 +2092,48 @@ void MainWindow::onFilesDropped(const QStringList& sources, const QString& targe
     if (targetDir == XdgTrash::trashFilesDirectory() || targetDir.startsWith(XdgTrash::trashDirectory())) {
         m_opEngine->trashItems(sources);
         return;
+    }
+
+    bool isRightClickOrAlt = (QGuiApplication::mouseButtons() & Qt::RightButton) ||
+                             (QGuiApplication::keyboardModifiers() & Qt::AltModifier);
+
+    if (isRightClickOrAlt) {
+        QMenu dropMenu(this);
+        QAction* copyAct = dropMenu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")), QStringLiteral("Copy Here"));
+        QAction* moveAct = dropMenu.addAction(QIcon::fromTheme(QStringLiteral("go-jump")), QStringLiteral("Move Here"));
+        QAction* linkAct = dropMenu.addAction(QIcon::fromTheme(QStringLiteral("insert-link")), QStringLiteral("Link Here"));
+        dropMenu.addSeparator();
+        dropMenu.addAction(QStringLiteral("Cancel"));
+
+        QAction* selected = dropMenu.exec(QCursor::pos());
+        if (!selected || selected->text() == QStringLiteral("Cancel")) {
+            return;
+        }
+        if (selected == copyAct) {
+            action = Qt::CopyAction;
+        } else if (selected == moveAct) {
+            action = Qt::MoveAction;
+        } else if (selected == linkAct) {
+            for (const auto& src : sources) {
+                QFileInfo fi(src);
+                QString linkDst = QDir(targetDir).filePath(fi.fileName());
+                QString err;
+                m_opEngine->createSymlink(src, linkDst, &err);
+            }
+            if (TabPage* page = m_tabManager->currentPage()) {
+                page->refresh();
+            }
+            return;
+        }
+    } else if (action != Qt::CopyAction && !(QGuiApplication::keyboardModifiers() & Qt::ShiftModifier)) {
+        // Cross-filesystem drops default to Copy instead of Move
+        struct stat stSrc {}, stDst {};
+        if (::stat(QFile::encodeName(sources.first()).constData(), &stSrc) == 0 &&
+            ::stat(QFile::encodeName(targetDir).constData(), &stDst) == 0) {
+            if (stSrc.st_dev != stDst.st_dev) {
+                action = Qt::CopyAction;
+            }
+        }
     }
 
     if (action == Qt::CopyAction) {
@@ -726,35 +2193,15 @@ void MainWindow::onOpenTerminal()
     TabPage* page = m_tabManager->currentPage();
     if (!page) return;
 
-    QString currentDir = page->currentPath();
-    // Try launching installed terminal
-    QStringList terms = {
-        QStringLiteral("x-terminal-emulator"),
-        QStringLiteral("ptyxis"),
-        QStringLiteral("gnome-terminal"),
-        QStringLiteral("konsole"),
-        QStringLiteral("xfce4-terminal"),
-        QStringLiteral("kitty"),
-        QStringLiteral("alacritty"),
-        QStringLiteral("xterm")
-    };
-
-    bool started = false;
-    for (const auto& term : terms) {
-        if (QProcess::startDetached(term, QStringList(), currentDir)) {
-            started = true;
-            break;
-        }
-    }
-
-    if (!started) {
-        QMessageBox::information(this, QStringLiteral("Terminal"),
-            QStringLiteral("Could not find a terminal emulator installed."));
+    QString error;
+    if (!DesktopAppsManager::openTerminal(page->currentPath(), &error)) {
+        QMessageBox::information(this, QStringLiteral("Terminal"), error);
     }
 }
 
 void MainWindow::onUndo()
 {
+    if (!ensureOperationsIdle()) return;
     if (m_undoManager->canUndo()) {
         QString error;
         if (!m_undoManager->undo(&error)) {
@@ -768,6 +2215,7 @@ void MainWindow::onUndo()
 
 void MainWindow::onRedo()
 {
+    if (!ensureOperationsIdle()) return;
     if (m_undoManager->canRedo()) {
         QString error;
         if (!m_undoManager->redo(&error)) {
@@ -788,6 +2236,7 @@ void MainWindow::onSearchTextChanged(const QString& query)
 
 void MainWindow::onOperationStarted(OperationType type, int totalItems, qint64 totalBytes)
 {
+    m_operationStartTime = QDateTime::currentMSecsSinceEpoch();
     m_progressDialog->setOperation(type, totalItems, totalBytes);
 }
 
@@ -810,32 +2259,139 @@ void MainWindow::onOperationConflict(const OperationConflict& conflict, Conflict
 
 void MainWindow::onOperationFinished(const OperationResult& result)
 {
-    m_progressDialog->hide();
+    if (m_opEngine->activeAndPendingJobCount() == 0) {
+        m_progressDialog->hide();
+    }
     QString pathToSelect;
-    if (!result.createdPaths.isEmpty()) {
+    if (result.success && !result.createdPaths.isEmpty()) {
         pathToSelect = result.createdPaths.first();
     }
     if (TabPage* page = m_tabManager->currentPage()) {
         if (!QDir(page->currentPath()).exists()) {
             page->goUp();
-        } else {
-            page->refresh(pathToSelect);
         }
     }
+    m_tabManager->refreshCurrentTab(pathToSelect);
     m_sidebar->refresh();
     if (TabPage* page = m_tabManager->currentPage()) {
         m_sidebar->selectPath(page->currentPath());
     }
     updateStatusInfo();
 
+    for (const auto& pair : result.movedPairs) {
+        UndoAction act;
+        act.type = UndoActionType::Move;
+        act.sourcePath = pair.first;
+        act.targetPath = pair.second;
+        act.description = QStringLiteral("Move %1").arg(QFileInfo(pair.second).fileName());
+        m_undoManager->pushAction(act);
+    }
+
+    for (const auto& pair : result.trashedPairs) {
+        UndoAction act;
+        act.type = UndoActionType::Trash;
+        act.sourcePath = pair.first;
+        act.targetPath = pair.second;
+        act.description = QStringLiteral("Trash %1").arg(QFileInfo(pair.first).fileName());
+        m_undoManager->pushAction(act);
+    }
+
     if (!result.success && !result.errorMessage.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("Operation Incomplete"), result.errorMessage);
+    } else if (!result.warnings.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Operation Completed"),
+            result.warnings.join(QLatin1Char('\n')));
+    }
+
+    // Surface as desktop notification when window is inactive, for long-running operations (> 3s), or errors
+    qint64 durationMs = QDateTime::currentMSecsSinceEpoch() - m_operationStartTime;
+    if (!isActiveWindow() || durationMs > 3000 || !result.success) {
+        QString verb = QStringLiteral("Operation");
+        switch (result.type) {
+        case OperationType::Copy: verb = QStringLiteral("Copy"); break;
+        case OperationType::Move: verb = QStringLiteral("Move"); break;
+        case OperationType::Duplicate: verb = QStringLiteral("Duplicate"); break;
+        case OperationType::Trash: verb = QStringLiteral("Move to Trash"); break;
+        case OperationType::Delete: verb = QStringLiteral("Delete"); break;
+        case OperationType::Compress: verb = QStringLiteral("Compression"); break;
+        case OperationType::Extract: verb = QStringLiteral("Extraction"); break;
+        default: break;
+        }
+
+        const QString summary = result.success
+            ? QStringLiteral("%1 complete").arg(verb)
+            : QStringLiteral("%1 failed").arg(verb);
+
+        QString body;
+        if (result.success) {
+            body = QStringLiteral("%1 item(s) processed").arg(result.processedCount);
+            if (result.skippedCount > 0) {
+                body += QStringLiteral(", %1 skipped").arg(result.skippedCount);
+            }
+        } else {
+            body = result.errorMessage.isEmpty()
+                ? QStringLiteral("%1 item(s) failed").arg(result.errorCount)
+                : result.errorMessage.left(240);
+        }
+
+        DesktopNotifier::notify(summary, body);
     }
 }
 
 void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir)
 {
     QMenu menu(this);
+    menu.setToolTipsVisible(true);
+
+    // Keep menu labels compact: long filenames are middle-elided (extension
+    // preserved) and the full name is shown as a tooltip.
+    const QFontMetrics menuMetrics(menu.font());
+    auto elidedMenuName = [menuMetrics](const QString& name) {
+        QString elided = menuMetrics.elidedText(name, Qt::ElideMiddle, 300);
+        if (elided == name) {
+            return elided;
+        }
+        // Avoid a run of dots/dashes right next to the ellipsis.
+        elided.replace(QStringLiteral(".…"), QStringLiteral("…"));
+        elided.replace(QStringLiteral("…."), QStringLiteral("…"));
+        elided.replace(QStringLiteral("-…"), QStringLiteral("…"));
+        elided.replace(QStringLiteral("_…"), QStringLiteral("…"));
+        return elided;
+    };
+
+    auto addServiceMenuActions = [this](QMenu* parentMenu, const QStringList& paths) {
+        if (paths.isEmpty()) {
+            return;
+        }
+
+        const QVector<ServiceMenuAction> actions = ServiceMenuManager::actionsFor(paths);
+        if (actions.isEmpty()) {
+            return;
+        }
+
+        auto* actionsMenu = parentMenu->addMenu(
+            QIcon::fromTheme(QStringLiteral("system-run")), QStringLiteral("Actions"));
+        QHash<QString, QMenu*> submenus;
+        for (const auto& action : actions) {
+            QMenu* target = actionsMenu;
+            if (!action.submenu.isEmpty()) {
+                if (!submenus.contains(action.submenu)) {
+                    submenus.insert(action.submenu, actionsMenu->addMenu(action.submenu));
+                }
+                target = submenus.value(action.submenu);
+            }
+
+            const QIcon icon = QIcon::fromTheme(action.icon,
+                QIcon::fromTheme(QStringLiteral("application-x-executable")));
+            target->addAction(icon, action.name, this, [this, action, paths]() {
+                if (!ServiceMenuManager::launch(action, paths)) {
+                    QMessageBox::warning(this, QStringLiteral("Action Failed"),
+                        QStringLiteral("The action \"%1\" could not be started.").arg(action.name));
+                }
+            });
+        }
+    };
+
     bool inTrash = (currentDir == XdgTrash::trashFilesDirectory() ||
                     currentDir.startsWith(XdgTrash::trashDirectory()) ||
                     (!selectedPaths.isEmpty() && selectedPaths.first().startsWith(XdgTrash::trashFilesDirectory())));
@@ -894,12 +2450,49 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                 menu.addAction(QStringLiteral("Open in New Tab"), this, [this, primaryPath]() {
                     m_tabManager->createTab(primaryPath);
                 });
+                menu.addAction(QStringLiteral("Open in New Window"), this, [primaryPath]() {
+                    QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                            {QStringLiteral("--new-window"), primaryPath});
+                });
+
+                // Let folders be opened with other applications too (IDEs,
+                // other file managers, terminal-based tools, ...).
+                QMimeDatabase folderMimeDb;
+                const QString folderMime = folderMimeDb.mimeTypeForFile(primaryPath).name();
+                QVector<AppEntry> folderApps;
+                for (const auto& app : DesktopAppsManager::appsForMime(folderMime)) {
+                    if (app.id != QStringLiteral("org.finderlinux.Finder.desktop") &&
+                        app.id != QStringLiteral("finder-linux.desktop")) {
+                        folderApps.append(app);
+                    }
+                }
+                if (!folderApps.isEmpty()) {
+                    auto* folderOpenWith = menu.addMenu(
+                        QIcon::fromTheme(QStringLiteral("application-x-executable")),
+                        QStringLiteral("Open With"));
+                    for (const auto& app : folderApps) {
+                        folderOpenWith->addAction(app.icon, app.name, this, [this, appId = app.id, primaryPath]() {
+                            if (!DesktopAppsManager::launchApp(appId, primaryPath)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Open Folder"),
+                                    QStringLiteral("The selected application could not be launched."));
+                            }
+                        });
+                    }
+                }
 
                 bool isMount = VolumeManager::isMountPoint(primaryPath);
                 if (isMount && primaryPath != QStringLiteral("/")) {
                     menu.addAction(QIcon::fromTheme(QStringLiteral("media-eject")), QStringLiteral("Eject / Unmount"), this, [this, primaryPath]() {
-                        QString err;
-                        if (VolumeManager::unmountVolume(primaryPath, &err)) {
+                        QApplication::setOverrideCursor(Qt::WaitCursor);
+                        auto* watcher = new QFutureWatcher<QString>(this);
+                        connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, primaryPath]() {
+                            QApplication::restoreOverrideCursor();
+                            const QString err = watcher->result();
+                            watcher->deleteLater();
+                            if (!err.isEmpty()) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Eject"), err);
+                                return;
+                            }
                             m_sidebar->refresh();
                             auto* page = m_tabManager->currentPage();
                             if (page) {
@@ -909,9 +2502,12 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                                     page->refresh();
                                 }
                             }
-                        } else {
-                            QMessageBox::warning(this, QStringLiteral("Cannot Unmount"), err);
-                        }
+                        });
+                        watcher->setFuture(QtConcurrent::run([primaryPath]() {
+                            QString error;
+                            VolumeManager::ejectVolume(primaryPath, &error);
+                            return error;
+                        }));
                     });
                 }
 
@@ -940,8 +2536,11 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                         if (app.isDefault) {
                             title += QStringLiteral(" (default)");
                         }
-                        openWithMenu->addAction(app.icon, title, this, [appId = app.id, primaryPath]() {
-                            DesktopAppsManager::launchApp(appId, primaryPath);
+                        openWithMenu->addAction(app.icon, title, this, [this, appId = app.id, primaryPath]() {
+                            if (!DesktopAppsManager::launchApp(appId, primaryPath)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Open File"),
+                                    QStringLiteral("The selected application could not be launched."));
+                            }
                         });
                     }
                     openWithMenu->addSeparator();
@@ -950,11 +2549,25 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                 openWithMenu->addAction(QStringLiteral("Other Application..."), this, [this, mime, primaryFi, primaryPath]() {
                     AppChooserDialog dlg(mime, primaryFi.fileName(), this);
                     if (dlg.exec() == QDialog::Accepted) {
+                        QString custom = dlg.customCommand();
+                        if (!custom.isEmpty()) {
+                            if (!DesktopAppsManager::launchCustomCommand(custom, primaryPath)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Open File"),
+                                    QStringLiteral("The custom command could not be launched."));
+                            }
+                            return;
+                        }
+
                         QString chosen = dlg.selectedAppId();
                         if (!chosen.isEmpty()) {
-                            DesktopAppsManager::launchApp(chosen, primaryPath);
-                            if (dlg.makeDefault()) {
-                                DesktopAppsManager::setDefaultAppForMime(mime, chosen);
+                            if (!DesktopAppsManager::launchApp(chosen, primaryPath)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Open File"),
+                                    QStringLiteral("The selected application could not be launched."));
+                            }
+                            if (dlg.makeDefault()
+                                && !DesktopAppsManager::setDefaultAppForMime(mime, chosen)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Set Default"),
+                                    QStringLiteral("The default application could not be updated."));
                             }
                         }
                     }
@@ -971,10 +2584,87 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                     }
                 }
             });
+
+            // Open With for multi-selection when all items share one file type.
+            QMimeDatabase mimeDb;
+            QString commonMime;
+            bool allFiles = true;
+            for (const QString& path : selectedPaths) {
+                const QFileInfo info(path);
+                if (info.isDir()) {
+                    allFiles = false;
+                    break;
+                }
+                const QString mime = mimeDb.mimeTypeForFile(path, QMimeDatabase::MatchDefault).name();
+                if (commonMime.isEmpty()) {
+                    commonMime = mime;
+                } else if (mime != commonMime) {
+                    commonMime.clear();
+                    break;
+                }
+            }
+
+            if (allFiles && !commonMime.isEmpty()) {
+                const QVector<AppEntry> apps = DesktopAppsManager::appsForMime(commonMime);
+                if (!apps.isEmpty()) {
+                    auto* openWithMenu = menu.addMenu(
+                        QIcon::fromTheme(QStringLiteral("application-x-executable")),
+                        QStringLiteral("Open With"));
+                    for (const auto& app : apps) {
+                        QString title = app.name;
+                        if (app.isDefault) {
+                            title += QStringLiteral(" (default)");
+                        }
+                        openWithMenu->addAction(app.icon, title, this,
+                            [this, appId = app.id, selectedPaths]() {
+                                if (!DesktopAppsManager::launchApp(appId, selectedPaths)) {
+                                    QMessageBox::warning(this, QStringLiteral("Cannot Open Files"),
+                                        QStringLiteral("The selected application could not be launched."));
+                                }
+                            });
+                    }
+
+                    openWithMenu->addSeparator();
+                    openWithMenu->addAction(QStringLiteral("Other Application..."), this,
+                        [this, commonMime, selectedPaths]() {
+                            AppChooserDialog dlg(commonMime,
+                                QStringLiteral("%1 items").arg(selectedPaths.size()), this);
+                            if (dlg.exec() != QDialog::Accepted) {
+                                return;
+                            }
+
+                            const QString custom = dlg.customCommand();
+                            if (!custom.isEmpty()) {
+                                if (!DesktopAppsManager::launchCustomCommand(custom, selectedPaths)) {
+                                    QMessageBox::warning(this, QStringLiteral("Cannot Open Files"),
+                                        QStringLiteral("The custom command could not be launched."));
+                                }
+                                return;
+                            }
+
+                            const QString chosen = dlg.selectedAppId();
+                            if (chosen.isEmpty()) {
+                                return;
+                            }
+                            if (!DesktopAppsManager::launchApp(chosen, selectedPaths)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Open Files"),
+                                    QStringLiteral("The selected application could not be launched."));
+                            }
+                            if (dlg.makeDefault()
+                                && !DesktopAppsManager::setDefaultAppForMime(commonMime, chosen)) {
+                                QMessageBox::warning(this, QStringLiteral("Cannot Set Default"),
+                                    QStringLiteral("The default application could not be updated."));
+                            }
+                        });
+                }
+            }
         }
 
         // Quick Look
         menu.addAction(QStringLiteral("Quick Look"), this, &MainWindow::onQuickLook);
+
+        // KDE service menu actions (Dolphin-compatible)
+        addServiceMenuActions(&menu, selectedPaths);
 
         menu.addSeparator();
 
@@ -984,6 +2674,20 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             dlg->setAttribute(Qt::WA_DeleteOnClose);
             dlg->show();
         });
+
+        bool hasFile = false;
+        for (const QString& path : selectedPaths) {
+            if (!QFileInfo(path).isDir()) {
+                hasFile = true;
+                break;
+            }
+        }
+        if (hasFile) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("document-properties")),
+                selectedPaths.size() > 1 ? QStringLiteral("Calculate Checksums...")
+                                         : QStringLiteral("Calculate Checksum..."),
+                this, &MainWindow::onCalculateChecksum);
+        }
 
         // Tags Bar Widget
         auto* tagWidgetAction = new QWidgetAction(&menu);
@@ -1111,31 +2815,58 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             menu.addAction(QIcon::fromTheme(QStringLiteral("package-x-generic")),
                 QStringLiteral("Extract Here"), this, &MainWindow::onExtractHere);
             if (single) {
-                QString extractFolder = QFileInfo(ArchiveService::suggestedExtractDir(primaryPath)).fileName();
-                menu.addAction(QIcon::fromTheme(QStringLiteral("archive-extract")),
-                    QStringLiteral("Extract to \"%1/\"").arg(extractFolder), this, &MainWindow::onExtractToFolder);
+                const QString extractFolder = QFileInfo(ArchiveService::suggestedExtractDir(primaryPath)).fileName();
+                QAction* extractAction = menu.addAction(QIcon::fromTheme(QStringLiteral("archive-extract")),
+                    QStringLiteral("Extract to \"%1/\"").arg(elidedMenuName(extractFolder)),
+                    this, &MainWindow::onExtractToFolder);
+                extractAction->setToolTip(extractFolder);
             } else {
                 menu.addAction(QIcon::fromTheme(QStringLiteral("archive-extract")),
                     QStringLiteral("Extract Each to Subfolder"), this, &MainWindow::onExtractToFolder);
             }
+            menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-password")),
+                QStringLiteral("Extract with Password..."), this, &MainWindow::onExtractWithPassword);
+        }
+
+        bool anyAppImage = false;
+        for (const QString& path : selectedPaths) {
+            if (DesktopAppsManager::isAppImageFile(path)) {
+                anyAppImage = true;
+                break;
+            }
+        }
+        if (anyAppImage) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("package-x-generic")),
+                QStringLiteral("Extract AppImage..."), this, &MainWindow::onExtractAppImage);
         }
 
         if (!isMount) {
             QString compressTitle = single
-                ? QStringLiteral("Compress \"%1\"").arg(primaryFi.fileName())
+                ? QStringLiteral("Compress \"%1\"").arg(elidedMenuName(primaryFi.fileName()))
                 : QStringLiteral("Compress %1 Items").arg(selectedPaths.size());
-            menu.addAction(QIcon::fromTheme(QStringLiteral("archive-insert")),
+            QAction* compressAction = menu.addAction(QIcon::fromTheme(QStringLiteral("archive-insert")),
                 compressTitle, this, [this]() { onCompress(QStringLiteral("zip")); });
+            if (single) {
+                compressAction->setToolTip(primaryFi.fileName());
+            }
 
             auto* compressAsMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("archive-insert")), QStringLiteral("Compress As"));
             compressAsMenu->addAction(QStringLiteral(".zip (ZIP Archive)"), this, [this]() { onCompress(QStringLiteral("zip")); });
             compressAsMenu->addAction(QStringLiteral(".tar.gz (GZip Tarball)"), this, [this]() { onCompress(QStringLiteral("tar.gz")); });
             compressAsMenu->addAction(QStringLiteral(".tar.xz (XZ Tarball)"), this, [this]() { onCompress(QStringLiteral("tar.xz")); });
             compressAsMenu->addAction(QStringLiteral(".7z (7-Zip Archive)"), this, [this]() { onCompress(QStringLiteral("7z")); });
+            compressAsMenu->addSeparator();
+            compressAsMenu->addAction(QStringLiteral("Compression Options..."), this, &MainWindow::onCompressWithOptions);
         }
 
         // Copy Path
         menu.addAction(QStringLiteral("Copy Path"), this, &MainWindow::onCopyPath);
+        menu.addAction(QIcon::fromTheme(QStringLiteral("folder-new")),
+            QStringLiteral("New Folder with Selection..."), this, &MainWindow::onNewFolderWithSelection);
+        if (selectedPaths.size() > 1) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-rename")),
+                QStringLiteral("Batch Rename..."), this, &MainWindow::onBatchRename);
+        }
 
         menu.addSeparator();
 
@@ -1143,23 +2874,35 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
         menu.addAction(QIcon::fromTheme(QStringLiteral("edit-cut")), QStringLiteral("Cut"), this, &MainWindow::onCut);
 
         // Copy
-        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
-            single ? QStringLiteral("Copy \"%1\"").arg(primaryFi.fileName())
+        QAction* copyAction = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
+            single ? QStringLiteral("Copy \"%1\"").arg(elidedMenuName(primaryFi.fileName()))
                    : QStringLiteral("Copy %1 Items").arg(selectedPaths.size()),
             this, &MainWindow::onCopy);
+        if (single) {
+            copyAction->setToolTip(primaryFi.fileName());
+        }
 
-        // If folder is selected and clipboard has files, allow "Paste into Folder"
-        if (single && isDir && !m_clipboardPaths.isEmpty()) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-paste")),
-                QStringLiteral("Paste into \"%1\"").arg(primaryFi.fileName()), this, [this, primaryPath]() {
-                if (m_isCutOperation) {
-                    m_opEngine->moveItems(m_clipboardPaths, primaryPath);
-                    m_clipboardPaths.clear();
-                    m_isCutOperation = false;
-                } else {
-                    m_opEngine->copyItems(m_clipboardPaths, primaryPath);
-                }
-            });
+        // Copy To / Move To
+        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
+            QStringLiteral("Copy To..."), this, &MainWindow::onCopyTo);
+        menu.addAction(QIcon::fromTheme(QStringLiteral("edit-cut")),
+            QStringLiteral("Move To..."), this, &MainWindow::onMoveTo);
+        if (m_tabManager->isSplit()) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
+                QStringLiteral("Copy to Other Pane"), this, &MainWindow::onCopyToOtherPane);
+            menu.addAction(QIcon::fromTheme(QStringLiteral("edit-cut")),
+                QStringLiteral("Move to Other Pane"), this, &MainWindow::onMoveToOtherPane);
+        }
+
+        // If folder is selected and the clipboard has files, allow "Paste into Folder"
+        const bool clipboardHasFiles = readFileClipboard().valid || !m_clipboardPaths.isEmpty();
+        if (single && isDir && clipboardHasFiles) {
+            QAction* pasteAction = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-paste")),
+                QStringLiteral("Paste into \"%1\"").arg(elidedMenuName(primaryFi.fileName())),
+                this, [this, primaryPath]() {
+                    pasteIntoDirectory(primaryPath);
+                });
+            pasteAction->setToolTip(primaryFi.fileName());
         }
 
         // Move to Trash and Delete Permanently (suppressed for mounts)
@@ -1169,26 +2912,15 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             menu.addAction(QIcon::fromTheme(QStringLiteral("edit-delete")), QStringLiteral("Delete Permanently"), this, &MainWindow::onDeletePermanently);
         }
 
-        // If folder, also offer "Open in Terminal"
-        if (single && isDir) {
+        // Open in Terminal: for folders use the folder itself; for files use
+        // the file's parent directory.
+        if (single) {
             menu.addSeparator();
-            menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")), QStringLiteral("Open in Terminal"), this, [primaryPath]() {
-                QStringList terms = {
-                    QStringLiteral("x-terminal-emulator"),
-                    QStringLiteral("ptyxis"),
-                    QStringLiteral("gnome-terminal"),
-                    QStringLiteral("konsole"),
-                    QStringLiteral("xfce4-terminal"),
-                    QStringLiteral("kitty"),
-                    QStringLiteral("alacritty"),
-                    QStringLiteral("xterm")
-                };
-                for (const auto& term : terms) {
-                    if (QProcess::startDetached(term, QStringList(), primaryPath)) {
-                        break;
-                    }
-                }
-            });
+            const QString terminalDirectory = isDir ? primaryPath : primaryFi.absolutePath();
+            menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")),
+                QStringLiteral("Open in Terminal"), this, [terminalDirectory]() {
+                    DesktopAppsManager::openTerminal(terminalDirectory);
+                });
         }
 
     } else {
@@ -1225,12 +2957,20 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             });
         }
 
-        // Paste
+        // Paste. The system clipboard may be owned by another application
+        // (Dolphin, Nautilus, Firefox, ...), so include its contents here too.
+        const ClipboardFiles clipboard = readFileClipboard();
+        const bool clipboardHasFiles = clipboard.valid || !m_clipboardPaths.isEmpty();
+        const qsizetype clipboardCount = clipboard.valid
+            ? clipboard.paths.size() : m_clipboardPaths.size();
         auto* pasteAct = menu.addAction(QIcon::fromTheme(QStringLiteral("edit-paste")),
-            m_clipboardPaths.isEmpty() ? QStringLiteral("Paste")
-                                       : QStringLiteral("Paste (%1 Item%2)").arg(m_clipboardPaths.size()).arg(m_clipboardPaths.size() == 1 ? QString() : QStringLiteral("s")),
+            clipboardHasFiles
+                ? QStringLiteral("Paste (%1 Item%2)")
+                      .arg(clipboardCount)
+                      .arg(clipboardCount == 1 ? QString() : QStringLiteral("s"))
+                : QStringLiteral("Paste"),
             this, &MainWindow::onPaste);
-        pasteAct->setEnabled(!m_clipboardPaths.isEmpty());
+        pasteAct->setEnabled(clipboardHasFiles);
 
         // Select All
         menu.addAction(QIcon::fromTheme(QStringLiteral("edit-select-all")), QStringLiteral("Select All"), this, [this]() {
@@ -1238,22 +2978,51 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                 p->selectAll();
             }
         });
+        menu.addAction(QStringLiteral("Select by Pattern..."), this, &MainWindow::onSelectByPattern);
+        menu.addAction(QStringLiteral("Invert Selection"), this, &MainWindow::onInvertSelection);
 
         menu.addSeparator();
 
         // Sort By submenu
         auto* sortMenu = menu.addMenu(QStringLiteral("Sort By"));
-        sortMenu->addAction(QStringLiteral("Name"), this, [this]() {
-            if (TabPage* p = m_tabManager->currentPage()) p->model()->sort(FileSystemModel::ColName);
+        auto* sortGroup = new QActionGroup(sortMenu);
+        sortGroup->setExclusive(true);
+        TabPage* sortPage = m_tabManager->currentPage();
+        const int activeColumn = sortPage ? sortPage->sortColumn()
+                                          : AppSettings::instance().sortColumn();
+        const Qt::SortOrder activeOrder = sortPage ? sortPage->sortOrder()
+                                                   : AppSettings::instance().sortOrder();
+        auto addSortField = [&, this](const QString& label, int column) {
+            QAction* action = sortMenu->addAction(label);
+            action->setCheckable(true);
+            action->setChecked(activeColumn == column);
+            action->setData(column);
+            sortGroup->addAction(action);
+            connect(action, &QAction::triggered, this, [this, column, activeOrder]() {
+                applySort(column, activeOrder);
+            });
+        };
+        addSortField(QStringLiteral("Name"), FileSystemModel::ColName);
+        addSortField(QStringLiteral("Date Modified"), FileSystemModel::ColDateModified);
+        addSortField(QStringLiteral("Size"), FileSystemModel::ColSize);
+        addSortField(QStringLiteral("Kind"), FileSystemModel::ColKind);
+
+        sortMenu->addSeparator();
+        auto* orderGroup = new QActionGroup(sortMenu);
+        orderGroup->setExclusive(true);
+        auto* contextAscending = sortMenu->addAction(QStringLiteral("Ascending"));
+        contextAscending->setCheckable(true);
+        contextAscending->setChecked(activeOrder == Qt::AscendingOrder);
+        orderGroup->addAction(contextAscending);
+        connect(contextAscending, &QAction::triggered, this, [this, activeColumn]() {
+            applySort(activeColumn, Qt::AscendingOrder);
         });
-        sortMenu->addAction(QStringLiteral("Date Modified"), this, [this]() {
-            if (TabPage* p = m_tabManager->currentPage()) p->model()->sort(FileSystemModel::ColDateModified);
-        });
-        sortMenu->addAction(QStringLiteral("Size"), this, [this]() {
-            if (TabPage* p = m_tabManager->currentPage()) p->model()->sort(FileSystemModel::ColSize);
-        });
-        sortMenu->addAction(QStringLiteral("Kind"), this, [this]() {
-            if (TabPage* p = m_tabManager->currentPage()) p->model()->sort(FileSystemModel::ColKind);
+        auto* contextDescending = sortMenu->addAction(QStringLiteral("Descending"));
+        contextDescending->setCheckable(true);
+        contextDescending->setChecked(activeOrder == Qt::DescendingOrder);
+        orderGroup->addAction(contextDescending);
+        connect(contextDescending, &QAction::triggered, this, [this, activeColumn]() {
+            applySort(activeColumn, Qt::DescendingOrder);
         });
 
         // Show Hidden Files (checkable)
@@ -1266,21 +3035,7 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
 
         // Open in Terminal
         menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")), QStringLiteral("Open in Terminal"), this, [currentDir]() {
-            QStringList terms = {
-                QStringLiteral("x-terminal-emulator"),
-                QStringLiteral("ptyxis"),
-                QStringLiteral("gnome-terminal"),
-                QStringLiteral("konsole"),
-                QStringLiteral("xfce4-terminal"),
-                QStringLiteral("kitty"),
-                QStringLiteral("alacritty"),
-                QStringLiteral("xterm")
-            };
-            for (const auto& term : terms) {
-                if (QProcess::startDetached(term, QStringList(), currentDir)) {
-                    break;
-                }
-            }
+            DesktopAppsManager::openTerminal(currentDir);
         });
 
         // Refresh

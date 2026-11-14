@@ -6,6 +6,7 @@
 #include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QStandardPaths>
 #include <QTextStream>
 #include <QMap>
 
@@ -22,7 +23,8 @@ ThemeManager& ThemeManager::instance()
 
 bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
 {
-    QString configPath = QDir::homePath() + QStringLiteral("/.config/kdeglobals");
+    QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                         + QStringLiteral("/kdeglobals");
     if (!QFile::exists(configPath)) {
         return false;
     }

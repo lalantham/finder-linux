@@ -16,11 +16,18 @@ public:
                          const QString& archivePath,
                          const std::function<void(const QString& currentFile, qint64 processedBytes, qint64 totalBytes)>& progressCallback = nullptr,
                          std::atomic<bool>* cancelFlag = nullptr,
-                         QString* error = nullptr);
+                         QString* error = nullptr,
+                         int compressionLevel = -1,
+                         const QString& passphrase = QString());
+
+    static bool extractAppImage(const QString& appImagePath, QString* outputDir = nullptr,
+                                QString* error = nullptr);
 
     static bool extract(const QString& archivePath,
                         const QString& destinationDir,
                         const std::function<void(const QString& currentFile, qint64 processedBytes, qint64 totalBytes)>& progressCallback = nullptr,
                         std::atomic<bool>* cancelFlag = nullptr,
-                        QString* error = nullptr);
+                        QString* error = nullptr,
+                        QString* warning = nullptr,
+                        const QString& passphrase = QString());
 };

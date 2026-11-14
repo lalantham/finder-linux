@@ -1,11 +1,14 @@
 #include "FileItemDelegate.h"
 #include "FileSystemModel.h"
+#include "PreviewManager.h"
 #include "TagManager.h"
 #include "ThemeManager.h"
 #include <QPainter>
 #include <QApplication>
 #include <QPainterPath>
 #include <QFileIconProvider>
+#include <QLineEdit>
+#include <QTimer>
 
 FileItemDelegate::FileItemDelegate(QObject* parent)
     : QStyledItemDelegate(parent)
@@ -52,14 +55,24 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
                        m_iconSize,
                        iconAreaHeight);
 
-        QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
-        if (icon.isNull()) {
-            static QFileIconProvider fallbackProv;
-            bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
-            icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"), fallbackProv.icon(QFileIconProvider::Folder))
-                         : QIcon::fromTheme(QStringLiteral("text-x-generic"), fallbackProv.icon(QFileIconProvider::File));
+        bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
+        QPixmap thumbnail = isDir ? QPixmap()
+                                  : PreviewManager::instance().iconThumbnail(itemPath, m_iconSize);
+        if (!thumbnail.isNull()) {
+            const QSize scaled = thumbnail.size().scaled(iconRect.size(), Qt::KeepAspectRatio);
+            const QRect target(iconRect.x() + (iconRect.width() - scaled.width()) / 2,
+                               iconRect.y() + (iconRect.height() - scaled.height()) / 2,
+                               scaled.width(), scaled.height());
+            painter->drawPixmap(target, thumbnail.scaled(scaled, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        } else {
+            QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
+            if (icon.isNull()) {
+                static QFileIconProvider fallbackProv;
+                icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"), fallbackProv.icon(QFileIconProvider::Folder))
+                             : QIcon::fromTheme(QStringLiteral("text-x-generic"), fallbackProv.icon(QFileIconProvider::File));
+            }
+            icon.paint(painter, iconRect, Qt::AlignCenter);
         }
-        icon.paint(painter, iconRect, Qt::AlignCenter);
 
         // Draw text below icon
         QRect textRect(itemRect.left() + 4,
@@ -210,4 +223,60 @@ QSize FileItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QMode
         return QSize(w, h);
     }
     return QSize(option.rect.width(), 24);
+}
+
+QWidget* FileItemDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    Q_UNUSED(option);
+    Q_UNUSED(index);
+    auto* editor = new QLineEdit(parent);
+    editor->setFrame(true);
+    editor->setStyleSheet(QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 4px; padding: 2px 4px; }")
+        .arg(ThemeManager::instance().isDark() ? QStringLiteral("#2d2d2d") : QStringLiteral("#ffffff"))
+        .arg(ThemeManager::instance().isDark() ? QStringLiteral("#ffffff") : QStringLiteral("#000000"))
+        .arg(ThemeManager::instance().accentColor().name()));
+    return editor;
+}
+
+void FileItemDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const
+{
+    auto* lineEdit = qobject_cast<QLineEdit*>(editor);
+    if (!lineEdit) {
+        QStyledItemDelegate::setEditorData(editor, index);
+        return;
+    }
+    QString name = index.data(Qt::DisplayRole).toString();
+    lineEdit->setText(name);
+    const bool isDirectory = index.data(FileSystemModel::FileIsDirRole).toBool();
+    const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+    const int selectionLen = (!isDirectory && dot > 0)
+        ? static_cast<int>(dot)
+        : static_cast<int>(name.size());
+    lineEdit->setSelection(0, selectionLen);
+    // QAbstractItemView selects the whole editor text after setEditorData().
+    // Re-apply the stem selection once the view has finished opening the editor.
+    QTimer::singleShot(0, lineEdit, [lineEdit, selectionLen]() {
+        lineEdit->setSelection(0, selectionLen);
+    });
+}
+
+void FileItemDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& index) const
+{
+    if (option.decorationPosition == QStyleOptionViewItem::Top) {
+        int iconAreaHeight = m_iconSize;
+        QRect textRect(option.rect.left() + 2,
+                       option.rect.top() + iconAreaHeight + 10,
+                       option.rect.width() - 4,
+                       24);
+        editor->setGeometry(textRect);
+    } else {
+        if (index.column() == 0) {
+            int textLeft = option.rect.left() + 30;
+            QRect textRect(textLeft, option.rect.top() + (option.rect.height() - 24) / 2,
+                           option.rect.width() - 34, 24);
+            editor->setGeometry(textRect);
+        } else {
+            QStyledItemDelegate::updateEditorGeometry(editor, option, index);
+        }
+    }
 }

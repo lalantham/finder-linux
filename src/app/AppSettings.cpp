@@ -4,10 +4,26 @@
 #include <QDir>
 #include <QStandardPaths>
 
+static QString s_customSettingsPath;
+
 AppSettings& AppSettings::instance()
 {
     static AppSettings settings;
     return settings;
+}
+
+void AppSettings::setSettingsFilePath(const QString& path)
+{
+    s_customSettingsPath = path;
+    instance().load();
+}
+
+static std::unique_ptr<QSettings> createQSettings()
+{
+    if (!s_customSettingsPath.isEmpty()) {
+        return std::make_unique<QSettings>(s_customSettingsPath, QSettings::IniFormat);
+    }
+    return std::make_unique<QSettings>(QStringLiteral("FinderLinux"), QStringLiteral("FinderLinux"));
 }
 
 AppSettings::AppSettings()
@@ -21,10 +37,14 @@ AppSettings::AppSettings()
 
 void AppSettings::load()
 {
-    QSettings s(QStringLiteral("FinderLinux"), QStringLiteral("FinderLinux"));
+    auto sPtr = createQSettings();
+    QSettings& s = *sPtr;
     m_viewMode = static_cast<ViewMode>(s.value(QStringLiteral("viewMode"), static_cast<int>(ViewMode::Icon)).toInt());
     m_showHiddenFiles = s.value(QStringLiteral("showHiddenFiles"), false).toBool();
+    m_calculateFolderSizes = s.value(QStringLiteral("calculateFolderSizes"), false).toBool();
     m_directoriesFirst = s.value(QStringLiteral("directoriesFirst"), true).toBool();
+    m_sortColumn = s.value(QStringLiteral("sortColumn"), 0).toInt();
+    m_sortOrder = static_cast<Qt::SortOrder>(s.value(QStringLiteral("sortOrder"), static_cast<int>(Qt::AscendingOrder)).toInt());
     m_iconSize = s.value(QStringLiteral("iconSize"), 64).toInt();
     m_theme = static_cast<AppTheme>(s.value(QStringLiteral("theme"), static_cast<int>(AppTheme::System)).toInt());
     m_customFavorites = s.value(QStringLiteral("customFavorites")).toStringList();
@@ -36,14 +56,24 @@ void AppSettings::load()
     m_windowState = s.value(QStringLiteral("windowState")).toByteArray();
     m_springLoadedFolders = s.value(QStringLiteral("springLoadedFolders"), true).toBool();
     m_springLoadDelayMs = s.value(QStringLiteral("springLoadDelayMs"), 750).toInt();
+    m_restoreTabsOnStartup = s.value(QStringLiteral("restoreTabsOnStartup"), true).toBool();
+    m_savedTabs = s.value(QStringLiteral("savedTabs")).toStringList();
+    m_rememberFolderViewModes = s.value(QStringLiteral("rememberFolderViewModes"), false).toBool();
+    m_folderViewModes = s.value(QStringLiteral("folderViewModes")).toMap();
+    m_columnViewWidths = s.value(QStringLiteral("columnViewWidths")).toMap();
+    m_trashAutoPurgeDays = s.value(QStringLiteral("trashAutoPurgeDays"), 0).toInt();
 }
 
 void AppSettings::save()
 {
-    QSettings s(QStringLiteral("FinderLinux"), QStringLiteral("FinderLinux"));
+    auto sPtr = createQSettings();
+    QSettings& s = *sPtr;
     s.setValue(QStringLiteral("viewMode"), static_cast<int>(m_viewMode));
     s.setValue(QStringLiteral("showHiddenFiles"), m_showHiddenFiles);
+    s.setValue(QStringLiteral("calculateFolderSizes"), m_calculateFolderSizes);
     s.setValue(QStringLiteral("directoriesFirst"), m_directoriesFirst);
+    s.setValue(QStringLiteral("sortColumn"), m_sortColumn);
+    s.setValue(QStringLiteral("sortOrder"), static_cast<int>(m_sortOrder));
     s.setValue(QStringLiteral("iconSize"), m_iconSize);
     s.setValue(QStringLiteral("theme"), static_cast<int>(m_theme));
     s.setValue(QStringLiteral("customFavorites"), m_customFavorites);
@@ -55,6 +85,51 @@ void AppSettings::save()
     s.setValue(QStringLiteral("windowState"), m_windowState);
     s.setValue(QStringLiteral("springLoadedFolders"), m_springLoadedFolders);
     s.setValue(QStringLiteral("springLoadDelayMs"), m_springLoadDelayMs);
+    s.setValue(QStringLiteral("restoreTabsOnStartup"), m_restoreTabsOnStartup);
+    s.setValue(QStringLiteral("savedTabs"), m_savedTabs);
+    s.setValue(QStringLiteral("rememberFolderViewModes"), m_rememberFolderViewModes);
+    s.setValue(QStringLiteral("folderViewModes"), m_folderViewModes);
+    s.setValue(QStringLiteral("columnViewWidths"), m_columnViewWidths);
+    s.setValue(QStringLiteral("trashAutoPurgeDays"), m_trashAutoPurgeDays);
+}
+
+std::optional<ViewMode> AppSettings::folderViewMode(const QString& path) const
+{
+    if (!m_rememberFolderViewModes || path.isEmpty()) return std::nullopt;
+    auto it = m_folderViewModes.find(path);
+    if (it != m_folderViewModes.end()) {
+        return static_cast<ViewMode>(it.value().toInt());
+    }
+    return std::nullopt;
+}
+
+void AppSettings::setFolderViewMode(const QString& path, ViewMode mode)
+{
+    if (path.isEmpty() || path.startsWith(QStringLiteral("tag://"))) return;
+    m_folderViewModes.insert(path, static_cast<int>(mode));
+    save();
+}
+
+int AppSettings::columnViewWidth(const QString& path) const
+{
+    if (path.isEmpty() || path.startsWith(QStringLiteral("tag://"))) return 0;
+    const auto it = m_columnViewWidths.constFind(path);
+    return it == m_columnViewWidths.constEnd() ? 0 : it.value().toInt();
+}
+
+void AppSettings::setColumnViewWidth(const QString& path, int width)
+{
+    if (path.isEmpty() || path.startsWith(QStringLiteral("tag://")) || width <= 0) return;
+    m_columnViewWidths.insert(path, width);
+    save();
+}
+
+void AppSettings::removeColumnViewWidth(const QString& path)
+{
+    if (path.isEmpty()) return;
+    if (m_columnViewWidths.remove(path) > 0) {
+        save();
+    }
 }
 
 void AppSettings::addFavorite(const QString& path)

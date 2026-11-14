@@ -6,13 +6,15 @@ Comment=Browse the file system and manage files
 Exec=finder-linux %U
 Icon=finder-linux
 Terminal=false
-Categories=System;FileTools;FileManager;Qt;
+DBusActivatable=true
+Categories=System;FileTools;FileManager;Qt;KDE;
 MimeType=inode/directory;
-Keywords=folder;manager;explore;disk;filesystem;finder;mac;
+Keywords=folder;manager;explore;disk;filesystem;dolphin;kde;
 StartupNotify=true
-StartupWMClass=finder-linux
+StartupWMClass=org.finderlinux.Finder
+X-GNOME-UsesNotifications=true
 Actions=NewWindow;
 
 [Desktop Action NewWindow]
 Name=New Window
-Exec=finder-linux
+Exec=finder-linux --new-window

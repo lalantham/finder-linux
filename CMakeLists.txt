@@ -16,7 +16,14 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Concurrent Svg Test)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Concurrent Svg Test Network DBus)
+
+# Optional KDE window activation support (uses the Wayland xdg-activation
+# protocol correctly on Plasma). The app still builds without KF6.
+find_package(KF6WindowSystem QUIET)
+
+# Optional Qt Multimedia for video/audio playback in Quick Look.
+find_package(Qt6 6.4 QUIET COMPONENTS Multimedia MultimediaWidgets)
 
 # Optional Poppler for PDF QuickLook preview and LibArchive for archive operations
 find_package(PkgConfig REQUIRED)
@@ -48,6 +55,14 @@ set(FINDER_CORE_SOURCES
     src/core/UndoManager.h
     src/core/DesktopAppsManager.cpp
     src/core/DesktopAppsManager.h
+    src/core/DesktopNotifier.cpp
+    src/core/DesktopNotifier.h
+    src/core/DbusActivation.cpp
+    src/core/DbusActivation.h
+    src/core/ServiceMenuManager.cpp
+    src/core/ServiceMenuManager.h
+    src/core/RecentFilesManager.cpp
+    src/core/RecentFilesManager.h
     src/core/TagManager.cpp
     src/core/TagManager.h
     src/operations/FileOperation.h
@@ -78,10 +93,25 @@ set(FINDER_UI_SOURCES
     src/ui/TabPage.h
     src/ui/TabManager.cpp
     src/ui/TabManager.h
+    src/ui/TearOffTabBar.cpp
+    src/ui/TearOffTabBar.h
+    src/ui/WrappingLabel.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/ui/FileManager1Service.cpp
+    src/ui/FileManager1Service.h
+    src/ui/ApplicationService.cpp
+    src/ui/ApplicationService.h
     src/ui/ProgressDialog.cpp
     src/ui/ProgressDialog.h
+    src/ui/BatchRenameDialog.cpp
+    src/ui/BatchRenameDialog.h
+    src/ui/CompressDialog.cpp
+    src/ui/CompressDialog.h
+    src/ui/TrashDialog.cpp
+    src/ui/TrashDialog.h
+    src/ui/TerminalPanel.cpp
+    src/ui/TerminalPanel.h
     src/operations/ConflictDialog.cpp
     src/operations/ConflictDialog.h
     src/preview/PreviewManager.cpp
@@ -114,6 +144,7 @@ target_include_directories(finder_core PUBLIC
 target_link_libraries(finder_core PUBLIC
     Qt6::Core
     Qt6::Gui
+    Qt6::DBus
     Qt6::Widgets
     Qt6::Concurrent
     ${LibArchive_LIBRARIES}
@@ -130,6 +161,16 @@ target_link_libraries(finder_ui PUBLIC
     Qt6::Svg
 )
 
+if(KF6WindowSystem_FOUND)
+    target_compile_definitions(finder_ui PUBLIC HAVE_KWINDOWSYSTEM)
+    target_link_libraries(finder_ui PUBLIC KF6::WindowSystem)
+endif()
+
+if(Qt6Multimedia_FOUND AND Qt6MultimediaWidgets_FOUND)
+    target_compile_definitions(finder_ui PUBLIC HAVE_QT_MULTIMEDIA)
+    target_link_libraries(finder_ui PUBLIC Qt6::Multimedia Qt6::MultimediaWidgets)
+endif()
+
 if(PopplerQt6_FOUND)
     target_compile_definitions(finder_ui PUBLIC HAVE_POPPLER)
     target_include_directories(finder_ui PUBLIC ${PopplerQt6_INCLUDE_DIRS})
@@ -143,6 +184,7 @@ add_executable(finder-linux
 target_link_libraries(finder-linux PRIVATE
     finder_ui
     finder_core
+    Qt6::Network
 )
 
 include(GNUInstallDirs)
@@ -151,8 +193,43 @@ install(TARGETS finder-linux
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(FILES data/finder-linux.desktop
+install(FILES data/org.finderlinux.Finder.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
+
+# D-Bus service so browsers can activate Finder for "Show in folder"
+# (org.freedesktop.FileManager1).
+configure_file(data/org.freedesktop.FileManager1.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.FileManager1.service @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.FileManager1.service
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services
+)
+
+# Standard org.freedesktop.Application activation (DBusActivatable=true).
+configure_file(data/org.finderlinux.Finder.service.in
+    ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.service @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.service
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services
+)
+
+install(FILES data/org.finderlinux.Finder.metainfo.xml
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
+)
+install(FILES data/finder-linux.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+)
+install(FILES data/completions/finder-linux.bash
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/bash-completion/completions
+    RENAME finder-linux
+)
+install(FILES data/completions/_finder-linux
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/zsh/site-functions
+)
+install(FILES data/completions/finder-linux.fish
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/fish/vendor_completions.d
+)
+install(FILES LICENSE
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/finder-linux
 )
 
 foreach(SIZE 16 24 32 48 64 128 256 512)

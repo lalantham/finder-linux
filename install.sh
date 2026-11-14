@@ -10,6 +10,13 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# When the installer is started with sudo, target the invoking user's home for
+# per-user desktop/D-Bus integration instead of /root.
+USER_HOME="${HOME}"
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  RESOLVED_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+  [[ -n "${RESOLVED_HOME}" ]] && USER_HOME="${RESOLVED_HOME}"
+fi
 BUILD_DIR="${ROOT_DIR}/build"
 
 echo -e "${BLUE}${BOLD}"
@@ -120,9 +127,42 @@ else
   cmake --install "${BUILD_DIR}"
 fi
 
-if [[ "${PREFIX}" == "${HOME}"* && -f "${PREFIX}/share/applications/finder-linux.desktop" ]]; then
-  sed -i "s|^Exec=finder-linux|Exec=${PREFIX}/bin/finder-linux|" "${PREFIX}/share/applications/finder-linux.desktop"
+DESKTOP_FILE="${PREFIX}/share/applications/org.finderlinux.Finder.desktop"
+if [[ -f "${DESKTOP_FILE}" ]]; then
+  if [[ -n "${SUDO}" ]]; then
+    ${SUDO} sed -i "s|^Exec=finder-linux|Exec=${PREFIX}/bin/finder-linux|" "${DESKTOP_FILE}"
+  else
+    sed -i "s|^Exec=finder-linux|Exec=${PREFIX}/bin/finder-linux|" "${DESKTOP_FILE}"
+  fi
 fi
+
+# Migrate from the old finder-linux.desktop ID. DBusActivatable requires a
+# reverse-DNS desktop ID, so the launcher is now org.finderlinux.Finder.
+OLD_DESKTOP_ID="finder-linux"
+NEW_DESKTOP_ID="org.finderlinux.Finder"
+USER_APPS_DIR="${USER_HOME}/.local/share/applications"
+mkdir -p "${USER_APPS_DIR}"
+cat > "${USER_APPS_DIR}/${OLD_DESKTOP_ID}.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Finder
+Exec=finder-linux %U
+Hidden=true
+EOF
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  chown "${SUDO_USER}:" "${USER_APPS_DIR}/${OLD_DESKTOP_ID}.desktop" 2>/dev/null || true
+fi
+
+MIMEAPPS_FILE="${USER_HOME}/.config/mimeapps.list"
+if [[ -f "${MIMEAPPS_FILE}" ]]; then
+  if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -u "${SUDO_USER}" sed -i "s/${OLD_DESKTOP_ID}\\.desktop/${NEW_DESKTOP_ID}.desktop/g" "${MIMEAPPS_FILE}" 2>/dev/null || true
+  else
+    sed -i "s/${OLD_DESKTOP_ID}\\.desktop/${NEW_DESKTOP_ID}.desktop/g" "${MIMEAPPS_FILE}" 2>/dev/null || true
+  fi
+fi
+
+rm -f "${USER_HOME}/.local/share/dbus-1/services/${OLD_DESKTOP_ID}.service" 2>/dev/null || true
 
 # Update desktop & icon caches
 echo -e "\n${BLUE}==>${NC} Updating desktop and icon caches..."
@@ -146,14 +186,71 @@ if command -v kbuildsycoca6 >/dev/null 2>&1; then
   kbuildsycoca6 --noincremental 2>/dev/null || true
 fi
 
-# Set default file manager if requested
-if [[ "${SET_DEFAULT}" == "true" ]]; then
+# Register Finder for the freedesktop.org FileManager1 D-Bus interface and
+# the standard org.freedesktop.Application activation interface. Browsers use
+# FileManager1 for "Show in folder"; launchers use Application for Activate/Open.
+# A user-scoped activation file takes precedence over system-wide providers
+# such as Dolphin or elementary Files.
+FINDER_BIN="${PREFIX}/bin/finder-linux"
+if [[ -x "${FINDER_BIN}" ]]; then
+  DBUS_SERVICE_DIR="${USER_HOME}/.local/share/dbus-1/services"
+  mkdir -p "${DBUS_SERVICE_DIR}"
+
+  install_dbus_activation() {
+    local service_name="$1"
+    cat > "${DBUS_SERVICE_DIR}/${service_name}.service" <<EOF
+[D-BUS Service]
+Name=${service_name}
+Exec="${FINDER_BIN}"
+EOF
+    if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+      chown "${SUDO_USER}:" "${DBUS_SERVICE_DIR}/${service_name}.service" 2>/dev/null || true
+    fi
+  }
+
+  install_dbus_activation org.freedesktop.FileManager1
+  install_dbus_activation org.finderlinux.Finder
+  rm -f "${DBUS_SERVICE_DIR}/finder-linux.service" 2>/dev/null || true
+  echo -e "${GREEN}✓${NC} Registered Finder for the FileManager1 and Application D-Bus interfaces."
+
+  # Make the session bus pick up the new activation file without a re-login.
+  dbus-send --session --type=method_call --dest=org.freedesktop.DBus \
+    /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
+
+  # If another file-manager daemon already owns the name, it must exit once
+  # before Finder can take over. Only daemons are listed here; no file manager
+  # windows are affected.
+  if command -v busctl >/dev/null 2>&1; then
+    OWNER_PID=$(busctl --user list --no-legend 2>/dev/null \
+      | awk '$1=="org.freedesktop.FileManager1" {print $2; exit}')
+    if [[ -n "${OWNER_PID}" && "${OWNER_PID}" =~ ^[0-9]+$ ]]; then
+      OWNER_CMD=$(tr '\0' ' ' < "/proc/${OWNER_PID}/cmdline" 2>/dev/null || true)
+      if [[ -n "${OWNER_CMD}" && "${OWNER_CMD}" != *"finder-linux"* ]]; then
+        echo -e "${YELLOW}Notice:${NC} '${OWNER_CMD}' is currently the FileManager1 provider."
+        echo -e "Finder will take over after you log out and back in (or after"
+        echo -e "that daemon exits). To switch immediately, run:"
+        echo -e "  ${BOLD}pkill -f io.elementary.files-daemon${NC}   # or: pkill -f 'dolphin --daemon'"
+      fi
+    fi
+  fi
+fi
+
+# Set Finder as the default file manager, or migrate an existing old ID.
+NEW_DESKTOP_ID="org.finderlinux.Finder"
+OLD_DESKTOP_ID="finder-linux"
+CURRENT_DEFAULT=$(xdg-mime query default inode/directory 2>/dev/null || true)
+if [[ "${SET_DEFAULT}" == "true" || "${CURRENT_DEFAULT}" == "${OLD_DESKTOP_ID}.desktop" ]]; then
   echo -e "\n${BLUE}==>${NC} Setting Finder as default file manager..."
-  xdg-mime default finder-linux.desktop inode/directory
+  xdg-mime default "${NEW_DESKTOP_ID}.desktop" inode/directory
   if command -v gio >/dev/null 2>&1; then
-    gio mime inode/directory finder-linux.desktop 2>/dev/null || true
+    gio mime inode/directory "${NEW_DESKTOP_ID}.desktop" 2>/dev/null || true
   fi
   echo -e "${GREEN}✓${NC} Finder is now your default file manager."
+fi
+
+if pgrep -x finder-linux >/dev/null 2>&1; then
+  echo -e "\n${YELLOW}${BOLD}Notice:${NC} Finder is currently running. Restart it once so the"
+  echo -e "new FileManager1 and Application (\"Show in folder\"/launcher) integration takes effect."
 fi
 
 echo -e "\n${GREEN}${BOLD}✓ Installation Successful!${NC}"

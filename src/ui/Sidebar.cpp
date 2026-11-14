@@ -4,6 +4,8 @@
 #include "ThemeManager.h"
 #include "XdgTrash.h"
 #include "TagManager.h"
+#include "DesktopAppsManager.h"
+#include "FileItem.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QMessageBox>
@@ -19,9 +21,14 @@
 #include <QUrl>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHelpEvent>
+#include <QStorageInfo>
 #include <QDrag>
 #include <QPainter>
 #include <QTimer>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
+#include <QDBusConnection>
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 
@@ -38,6 +45,34 @@ static constexpr int AvailableBytesRole = Qt::UserRole + 19;
 static constexpr int DeviceRole = Qt::UserRole + 20;
 static constexpr int IsMountedRole = Qt::UserRole + 21;
 static constexpr int IsUsbRole = Qt::UserRole + 22;
+
+namespace {
+
+QString volumeToolTip(const QString& name, const QString& device,
+                      qint64 totalBytes, qint64 availableBytes, bool isMounted)
+{
+    const QString safeName = name.toHtmlEscaped();
+    if (!isMounted || totalBytes <= 0) {
+        return QStringLiteral("%1 (Unmounted — click to open)").arg(safeName);
+    }
+
+    const qint64 usedBytes = qMax<qint64>(0, totalBytes - availableBytes);
+    const double usedPercent = static_cast<double>(usedBytes) * 100.0
+        / static_cast<double>(totalBytes);
+
+    QString tip = QStringLiteral("<b>%1</b><br/>").arg(safeName);
+    tip += QStringLiteral("Used: %1 of %2 (%3%)<br/>")
+               .arg(FileItem::formatSize(usedBytes),
+                    FileItem::formatSize(totalBytes),
+                    QString::number(usedPercent, 'f', 1));
+    tip += QStringLiteral("Free: %1").arg(FileItem::formatSize(availableBytes));
+    if (!device.isEmpty()) {
+        tip += QStringLiteral("<br/>Device: %1").arg(device.toHtmlEscaped());
+    }
+    return tip;
+}
+
+} // namespace
 
 SidebarItemDelegate::SidebarItemDelegate(QObject* parent)
     : QStyledItemDelegate(parent)
@@ -173,7 +208,8 @@ Sidebar::Sidebar(QWidget* parent)
     setDefaultDropAction(Qt::MoveAction);
     setDropIndicatorShown(true);
     setSelectionMode(QAbstractItemView::SingleSelection);
-    setFocusPolicy(Qt::NoFocus);
+    setFocusPolicy(Qt::StrongFocus);
+    setAccessibleName(QStringLiteral("Sidebar"));
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
@@ -199,11 +235,36 @@ Sidebar::Sidebar(QWidget* parent)
     }
 
     m_volumePollTimer = new QTimer(this);
-    m_volumePollTimer->setInterval(1500);
+    m_volumePollTimer->setInterval(3000);
     connect(m_volumePollTimer, &QTimer::timeout, this, &Sidebar::checkVolumeChanges);
     m_volumePollTimer->start();
 
+    // Refresh promptly on hotplug via udisks2 signals; polling remains as a
+    // fallback for environments without a system bus.
+    m_volumeDebounceTimer = new QTimer(this);
+    m_volumeDebounceTimer->setSingleShot(true);
+    m_volumeDebounceTimer->setInterval(400);
+    connect(m_volumeDebounceTimer, &QTimer::timeout, this, &Sidebar::refresh);
+
+    if (QDBusConnection::systemBus().isConnected()) {
+        QDBusConnection::systemBus().connect(
+            QStringLiteral("org.freedesktop.UDisks2"),
+            QStringLiteral("/org/freedesktop/UDisks2"),
+            QStringLiteral("org.freedesktop.DBus.ObjectManager"),
+            QStringLiteral("InterfacesAdded"),
+            this,
+            SLOT(onUdisksInterfacesAdded(QDBusObjectPath,QVariantMap)));
+        QDBusConnection::systemBus().connect(
+            QStringLiteral("org.freedesktop.UDisks2"),
+            QStringLiteral("/org/freedesktop/UDisks2"),
+            QStringLiteral("org.freedesktop.DBus.ObjectManager"),
+            QStringLiteral("InterfacesRemoved"),
+            this,
+            SLOT(onUdisksInterfacesRemoved(QDBusObjectPath,QStringList)));
+    }
+
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
+    connect(this, &QTreeWidget::itemActivated, this, &Sidebar::onItemClicked);
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this]() {
         viewport()->update();
@@ -225,12 +286,37 @@ void Sidebar::refresh()
     populateFavorites();
     populateLocations();
     populateTags();
+    requestVolumeScan();
 
     expandAll();
 
     if (!currentSelected.isEmpty()) {
         selectPath(currentSelected);
     }
+}
+
+void Sidebar::requestVolumeScan(bool force)
+{
+    if (m_volumeScanRunning) {
+        return;
+    }
+    if (!force && m_volumeScanTimestamp.isValid()
+        && m_volumeScanTimestamp.elapsed() < 10000) {
+        return;
+    }
+
+    m_volumeScanRunning = true;
+    auto* watcher = new QFutureWatcher<QVector<VolumeEntry>>(this);
+    connect(watcher, &QFutureWatcher<QVector<VolumeEntry>>::finished, this, [this, watcher]() {
+        m_volumeScanRunning = false;
+        m_lastVolumes = watcher->result();
+        watcher->deleteLater();
+        m_volumeScanTimestamp.start();
+        refresh();
+    });
+    watcher->setFuture(QtConcurrent::run([]() {
+        return VolumeManager::mountedVolumes();
+    }));
 }
 
 void Sidebar::populateFavorites()
@@ -326,7 +412,7 @@ void Sidebar::populateLocations()
     m_locationsHeader->setFlags(Qt::ItemIsEnabled);
 
     QFileIconProvider iconProv;
-    QVector<VolumeEntry> volumes = VolumeManager::mountedVolumes();
+    const QVector<VolumeEntry> volumes = m_lastVolumes;
 
     struct LocData {
         QString name;
@@ -359,9 +445,8 @@ void Sidebar::populateLocations()
         item->setData(0, TotalBytesRole, data.totalBytes);
         item->setData(0, AvailableBytesRole, data.availableBytes);
         item->setIcon(0, data.icon);
-        if (!data.isMounted) {
-            item->setToolTip(0, QStringLiteral("%1 (Unmounted — click to open)").arg(data.name));
-        }
+        item->setToolTip(0, volumeToolTip(data.name, data.device, data.totalBytes,
+                                          data.availableBytes, data.isMounted));
         addedPaths.insert(path);
     }
 
@@ -380,9 +465,8 @@ void Sidebar::populateLocations()
         item->setData(0, TotalBytesRole, vol.totalBytes);
         item->setData(0, AvailableBytesRole, vol.availableBytes);
         item->setIcon(0, vol.icon);
-        if (!vol.isMounted) {
-            item->setToolTip(0, QStringLiteral("%1 (Unmounted — click to open)").arg(vol.name));
-        }
+        item->setToolTip(0, volumeToolTip(vol.name, vol.device, vol.totalBytes,
+                                          vol.availableBytes, vol.isMounted));
         addedPaths.insert(vol.path);
     }
 }
@@ -413,6 +497,63 @@ void Sidebar::populateTags()
     }
 }
 
+namespace {
+struct VolumeTaskResult {
+    QString path;
+    QString error;
+    bool ok{false};
+};
+}
+
+void Sidebar::mountDeviceAsync(const QString& device)
+{
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    auto* watcher = new QFutureWatcher<VolumeTaskResult>(this);
+    connect(watcher, &QFutureWatcher<VolumeTaskResult>::finished, this, [this, watcher, device]() {
+        QApplication::restoreOverrideCursor();
+        const VolumeTaskResult result = watcher->result();
+        watcher->deleteLater();
+        if (!result.path.isEmpty()) {
+            m_volumeScanTimestamp.invalidate();
+            refresh();
+            emit pathSelected(result.path);
+        } else {
+            QMessageBox::warning(this, QStringLiteral("Cannot Mount Device"),
+                result.error.isEmpty() ? QStringLiteral("Failed to mount %1").arg(device) : result.error);
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([device]() {
+        VolumeTaskResult result;
+        result.path = VolumeManager::mountDevice(device, &result.error);
+        result.ok = !result.path.isEmpty();
+        return result;
+    }));
+}
+
+void Sidebar::ejectVolumeAsync(const QString& path)
+{
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    auto* watcher = new QFutureWatcher<VolumeTaskResult>(this);
+    connect(watcher, &QFutureWatcher<VolumeTaskResult>::finished, this, [this, watcher, path]() {
+        QApplication::restoreOverrideCursor();
+        const VolumeTaskResult result = watcher->result();
+        watcher->deleteLater();
+        if (result.ok) {
+            emit volumeUnmounted(path);
+            m_volumeScanTimestamp.invalidate();
+            refresh();
+        } else {
+            QMessageBox::warning(this, QStringLiteral("Cannot Eject"),
+                result.error.isEmpty() ? QStringLiteral("Failed to eject %1").arg(path) : result.error);
+        }
+    });
+    watcher->setFuture(QtConcurrent::run([path]() {
+        VolumeTaskResult result;
+        result.ok = VolumeManager::ejectVolume(path, &result.error);
+        return result;
+    }));
+}
+
 void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
 {
     if (!item) return;
@@ -426,15 +567,7 @@ void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
         if (!isMounted) {
             QString dev = item->data(0, DeviceRole).toString();
             if (dev.isEmpty()) dev = item->data(0, PathRole).toString();
-            QString err;
-            QString mp = VolumeManager::mountDevice(dev, &err);
-            if (!mp.isEmpty()) {
-                refresh();
-                emit pathSelected(mp);
-            } else {
-                QMessageBox::warning(this, QStringLiteral("Cannot Mount Device"),
-                                     err.isEmpty() ? QStringLiteral("Failed to mount %1").arg(dev) : err);
-            }
+            mountDeviceAsync(dev);
             return;
         }
     }
@@ -446,6 +579,23 @@ void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
 
 void Sidebar::selectPath(const QString& path)
 {
+    if (path.startsWith(QStringLiteral("tag://"))) {
+        QString tagName = path.mid(6);
+        for (int i = 0; i < topLevelItemCount(); ++i) {
+            QTreeWidgetItem* top = topLevelItem(i);
+            for (int j = 0; j < top->childCount(); ++j) {
+                QTreeWidgetItem* child = top->child(j);
+                if (child->data(0, IsTagRole).toBool()) {
+                    if (child->data(0, TagNameRole).toString().compare(tagName, Qt::CaseInsensitive) == 0) {
+                        setCurrentItem(child);
+                        return;
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     QString clean = QDir::cleanPath(path);
     for (int i = 0; i < topLevelItemCount(); ++i) {
         QTreeWidgetItem* top = topLevelItem(i);
@@ -457,6 +607,40 @@ void Sidebar::selectPath(const QString& path)
             }
         }
     }
+}
+
+bool Sidebar::viewportEvent(QEvent* event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        auto* help = static_cast<QHelpEvent*>(event);
+        QTreeWidgetItem* item = itemAt(help->pos());
+        if (item && item->data(0, IsLocationRole).toBool()) {
+            const QString path = item->data(0, PathRole).toString();
+            const QString device = item->data(0, DeviceRole).toString();
+            const bool isMounted = item->data(0, IsMountedRole).isValid()
+                ? item->data(0, IsMountedRole).toBool() : true;
+
+            qint64 totalBytes = item->data(0, TotalBytesRole).toLongLong();
+            qint64 availableBytes = item->data(0, AvailableBytesRole).toLongLong();
+
+            // Re-query on hover so the numbers are current even when the
+            // sidebar has not been refreshed since the last file operation.
+            if (isMounted && !path.isEmpty()) {
+                const QStorageInfo storage(path);
+                if (storage.isValid() && storage.isReady()) {
+                    totalBytes = storage.bytesTotal();
+                    availableBytes = storage.bytesAvailable();
+                    item->setData(0, TotalBytesRole, totalBytes);
+                    item->setData(0, AvailableBytesRole, availableBytes);
+                }
+            }
+
+            item->setToolTip(0, volumeToolTip(item->text(0), device, totalBytes,
+                                              availableBytes, isMounted));
+        }
+    }
+
+    return QTreeWidget::viewportEvent(event);
 }
 
 void Sidebar::contextMenuEvent(QContextMenuEvent* event)
@@ -587,26 +771,16 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             menu.addAction(QStringLiteral("Open in New Tab"), this, [this, path]() {
                 emit openInNewTabRequested(path);
             });
+            menu.addAction(QStringLiteral("Open in New Window"), this, [path]() {
+                QProcess::startDetached(QCoreApplication::applicationFilePath(),
+                                        {QStringLiteral("--new-window"), path});
+            });
         }
 
         // Open in Terminal
         if (!isTrash && !path.isEmpty()) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")), QStringLiteral("Open in Terminal"), this, [path]() {
-                QStringList terms = {
-                    QStringLiteral("x-terminal-emulator"),
-                    QStringLiteral("ptyxis"),
-                    QStringLiteral("gnome-terminal"),
-                    QStringLiteral("konsole"),
-                    QStringLiteral("xfce4-terminal"),
-                    QStringLiteral("kitty"),
-                    QStringLiteral("alacritty"),
-                    QStringLiteral("xterm")
-                };
-                for (const auto& term : terms) {
-                    if (QProcess::startDetached(term, QStringList(), path)) {
-                        break;
-                    }
-                }
+                DesktopAppsManager::openTerminal(path);
             });
         }
 
@@ -622,36 +796,54 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
         // Location specific or Favorite specific actions
         if (isLocation) {
             bool isMounted = item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
+            bool isUsb = item->data(0, IsUsbRole).toBool();
+            QString dev = item->data(0, DeviceRole).toString();
+
             if (isTrash) {
                 menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash"), this, &Sidebar::emptyTrashRequested);
                 menu.addSeparator();
             } else if (!isMounted) {
-                menu.addAction(QIcon::fromTheme(QStringLiteral("media-mount")), QStringLiteral("Mount"), this, [this, item]() {
-                    QString dev = item->data(0, DeviceRole).toString();
-                    if (dev.isEmpty()) dev = item->data(0, PathRole).toString();
-                    QString err;
-                    QString mp = VolumeManager::mountDevice(dev, &err);
-                    if (!mp.isEmpty()) {
-                        refresh();
-                        emit pathSelected(mp);
-                    } else {
-                        QMessageBox::warning(this, QStringLiteral("Cannot Mount Device"),
-                                             err.isEmpty() ? QStringLiteral("Failed to mount %1").arg(dev) : err);
-                    }
+                menu.addAction(QIcon::fromTheme(QStringLiteral("media-mount")), QStringLiteral("Mount"), this, [this, dev, path]() {
+                    QString toMount = !dev.isEmpty() ? dev : path;
+                    mountDeviceAsync(toMount);
                 });
                 menu.addSeparator();
             } else if (path != QStringLiteral("/") && !path.isEmpty()) {
                 // Eject / Unmount
                 menu.addAction(QIcon::fromTheme(QStringLiteral("media-eject")), QStringLiteral("Eject / Unmount"), this, [this, path]() {
-                    QString err;
-                    if (VolumeManager::unmountVolume(path, &err)) {
-                        emit volumeUnmounted(path);
-                        refresh();
-                    } else {
-                        QMessageBox::warning(this, QStringLiteral("Cannot Unmount"), err);
-                    }
+                    ejectVolumeAsync(path);
                 });
+                if (isUsb) {
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("media-removable")), QStringLiteral("Safely Remove Drive"), this, [this, dev, path]() {
+                        ejectVolumeAsync(path);
+                        if (!dev.isEmpty()) {
+                            QProcess::startDetached(QStringLiteral("udisksctl"), {QStringLiteral("power-off"), QStringLiteral("-b"), dev});
+                        }
+                    });
+                }
                 menu.addSeparator();
+            }
+
+            // Disk Management (Partition Manager / GNOME Disks / GParted)
+            if (path != QStringLiteral("/")) {
+                QString diskTool;
+                if (!QStandardPaths::findExecutable(QStringLiteral("partitionmanager")).isEmpty()) {
+                    diskTool = QStringLiteral("partitionmanager");
+                } else if (!QStandardPaths::findExecutable(QStringLiteral("gnome-disks")).isEmpty()) {
+                    diskTool = QStringLiteral("gnome-disks");
+                } else if (!QStandardPaths::findExecutable(QStringLiteral("gparted")).isEmpty()) {
+                    diskTool = QStringLiteral("gparted");
+                }
+                if (!diskTool.isEmpty()) {
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("drive-harddisk")), QStringLiteral("Manage Partition / Format..."), [diskTool, dev]() {
+                        if (!dev.isEmpty()) {
+                            QProcess::startDetached(diskTool, {dev});
+                        } else {
+                            QProcess::startDetached(diskTool, {});
+                        }
+                    });
+                    menu.addSeparator();
+                }
             }
 
             menu.addAction(QStringLiteral("Hide from Sidebar"), this, [this, path]() {
@@ -1070,6 +1262,22 @@ void Sidebar::resetSpringTimer()
     }
 }
 
+void Sidebar::onUdisksInterfacesAdded(const QDBusObjectPath& /*path*/, const QVariantMap& /*interfaces*/)
+{
+    m_volumeScanTimestamp.invalidate();
+    if (m_volumeDebounceTimer) {
+        m_volumeDebounceTimer->start();
+    }
+}
+
+void Sidebar::onUdisksInterfacesRemoved(const QDBusObjectPath& /*path*/, const QStringList& /*interfaces*/)
+{
+    m_volumeScanTimestamp.invalidate();
+    if (m_volumeDebounceTimer) {
+        m_volumeDebounceTimer->start();
+    }
+}
+
 void Sidebar::onSpringTimeout()
 {
     if (!m_springHoverPath.isEmpty()) {
@@ -1108,6 +1316,7 @@ void Sidebar::checkVolumeChanges()
         if (m_volumeWatcher && QDir(userMedia).exists() && !m_volumeWatcher->directories().contains(userMedia)) {
             m_volumeWatcher->addPath(userMedia);
         }
+        m_volumeScanTimestamp.invalidate();
         refresh();
     }
 }

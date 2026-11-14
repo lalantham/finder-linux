@@ -1,3 +1,18 @@
 build/
+build-*/
 .cache/
 compile_commands.json
+CMakeUserPresets.json
+
+# Local editor / assistant configuration
+.commandcode/
+.vscode/
+.idea/
+.cache/clangd/
+.clangd/
+
+# Generated / temporary files
+*.user
+*.swp
+*~
+.DS_Store

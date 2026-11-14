@@ -20,6 +20,7 @@ public:
     explicit FileItem(const QFileInfo& fileInfo);
 
     void refresh();
+    void setCalculatedFolderSize(qint64 size, int itemCount = -1);
 
     [[nodiscard]] const QString& path() const noexcept { return m_path; }
     [[nodiscard]] const QString& fileName() const noexcept { return m_fileName; }
@@ -27,6 +28,9 @@ public:
     [[nodiscard]] const QString& suffix() const noexcept { return m_suffix; }
     [[nodiscard]] qint64 size() const noexcept { return m_size; }
     [[nodiscard]] qint64 diskUsage() const noexcept { return m_diskUsage; }
+    [[nodiscard]] quint64 inode() const noexcept { return m_inode; }
+    [[nodiscard]] quint64 deviceId() const noexcept { return m_deviceId; }
+    [[nodiscard]] quint64 hardLinks() const noexcept { return m_hardLinks; }
     [[nodiscard]] const QString& formattedSize() const noexcept { return m_formattedSize; }
     [[nodiscard]] const QDateTime& modified() const noexcept { return m_modified; }
     [[nodiscard]] const QDateTime& created() const noexcept { return m_created; }
@@ -48,7 +52,7 @@ public:
     [[nodiscard]] mode_t posixMode() const noexcept { return m_posixMode; }
     [[nodiscard]] const QString& owner() const noexcept { return m_owner; }
     [[nodiscard]] const QString& group() const noexcept { return m_group; }
-    [[nodiscard]] const QStringList& tags() const noexcept { return m_tags; }
+    [[nodiscard]] const QStringList& tags() const;
 
     [[nodiscard]] QIcon icon() const;
 
@@ -64,13 +68,17 @@ private:
     QString m_suffix;
     qint64 m_size{0};
     qint64 m_diskUsage{0};
+    quint64 m_inode{0};
+    quint64 m_deviceId{0};
+    quint64 m_hardLinks{0};
     QString m_formattedSize;
     QDateTime m_modified;
     QDateTime m_created;
     QDateTime m_accessed;
     QString m_kind;
     QString m_mimeTypeName;
-    QStringList m_tags;
+    mutable QStringList m_tags;
+    mutable bool m_tagsLoaded{false};
 
     bool m_isDir{false};
     bool m_isFile{false};

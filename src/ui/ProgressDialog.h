@@ -14,13 +14,17 @@ public:
 
     void setOperation(OperationType type, int totalItems, qint64 totalBytes);
     void updateProgress(const OperationProgress& progress);
+    void updateQueueStatus(int currentIndex, int totalCount);
 
 signals:
     void cancelRequested();
+    void skipRequested();
 
 private:
     QLabel* m_titleLabel{nullptr};
+    QLabel* m_queueLabel{nullptr};
     QLabel* m_detailLabel{nullptr};
     QProgressBar* m_progressBar{nullptr};
+    QPushButton* m_skipBtn{nullptr};
     QPushButton* m_cancelBtn{nullptr};
 };

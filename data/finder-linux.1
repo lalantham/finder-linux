@@ -1,0 +1,65 @@
+.TH FINDER-LINUX 1 "2026-11-14" "Finder 1.0.0" "User Commands"
+.SH NAME
+finder-linux \- macOS Finder-inspired file manager for Linux
+.SH SYNOPSIS
+.B finder-linux
+[\fIOPTIONS\fR] [\fIPATH\fR...]
+.SH DESCRIPTION
+.B Finder Linux
+is a native Qt 6 file manager with icon, list, column, and gallery views,
+Quick Look previews, split-pane browsing, XDG Trash support, archive management,
+and freedesktop.org/KDE desktop integration.
+.PP
+When launched without arguments it opens the configured default folder.
+Multiple paths are opened as separate tabs. If an instance is already running,
+the paths are forwarded to it unless
+.B \-\-new\-window
+is used.
+.SH OPTIONS
+.TP
+.BR \-s ", " \-\-select " " \fITARGET\fR
+Open the containing folder of
+.I TARGET
+and select that item.
+.TP
+.BR \-n ", " \-\-new\-window
+Open a new window even if Finder is already running.
+.TP
+.B \-\-help
+Display command-line help and exit.
+.TP
+.B \-\-version
+Display version information and exit.
+.SH EXAMPLES
+.TP
+Open the current user's home folder:
+.EX
+finder-linux
+.EE
+.TP
+Open a folder in a new tab in an existing instance:
+.EX
+finder-linux /path/to/folder
+.EE
+.TP
+Open a folder and select a file inside it:
+.EX
+finder-linux \-\-select /path/to/folder/document.pdf
+.EE
+.SH FILES
+.TP
+.I ~/.config/FinderLinux/FinderLinux.conf
+Persistent application settings.
+.TP
+.I ~/.local/share/recently-used.xbel
+Shared freedesktop.org recent-files database.
+.TP
+.I ~/.local/share/Trash
+XDG Trash location.
+.SH SEE ALSO
+.BR xdg-open (1),
+.BR gio (1),
+.BR dolphin (1),
+.BR ark (1)
+.SH AUTHOR
+Finder Linux contributors

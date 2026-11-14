@@ -31,6 +31,7 @@ ListView::ListView(QWidget* parent)
     setDefaultDropAction(Qt::MoveAction);
     header()->setSectionsMovable(true);
     header()->setStretchLastSection(true);
+    setEditTriggers(QAbstractItemView::EditKeyPressed | QAbstractItemView::SelectedClicked);
 
     m_delegate = new FileItemDelegate(this);
     setItemDelegate(m_delegate);
@@ -40,7 +41,6 @@ ListView::ListView(QWidget* parent)
     connect(m_springTimer, &QTimer::timeout, this, &ListView::onSpringTimeout);
 
     connect(this, &QTreeView::activated, this, &ListView::onItemActivated);
-    connect(header(), &QHeaderView::sectionClicked, this, &ListView::onHeaderClicked);
 }
 
 void ListView::setFileSystemModel(FileSystemModel* model)
@@ -55,13 +55,6 @@ void ListView::setFileSystemModel(FileSystemModel* model)
         setColumnWidth(FileSystemModel::ColSize, 90);
         setColumnWidth(FileSystemModel::ColKind, 140);
     }
-}
-
-void ListView::onHeaderClicked(int logicalIndex)
-{
-    if (!m_fsModel) return;
-    Qt::SortOrder currentOrder = header()->sortIndicatorOrder();
-    m_fsModel->sort(logicalIndex, currentOrder);
 }
 
 void ListView::onItemActivated(const QModelIndex& index)
@@ -93,6 +86,16 @@ void ListView::keyPressEvent(QKeyEvent* event)
         QModelIndex idx = currentIndex();
         if (idx.isValid()) {
             emit quickLookRequested(idx.data(FileSystemModel::FilePathRole).toString());
+        }
+        return;
+    }
+    if (event->key() == Qt::Key_F2) {
+        QModelIndex idx = currentIndex();
+        if (idx.isValid()) {
+            if (idx.column() != FileSystemModel::ColName && model()) {
+                idx = model()->index(idx.row(), FileSystemModel::ColName);
+            }
+            edit(idx);
         }
         return;
     }

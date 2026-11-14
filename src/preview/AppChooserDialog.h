@@ -14,6 +14,7 @@ public:
     explicit AppChooserDialog(const QString& mimeType, const QString& fileName, QWidget* parent = nullptr);
 
     [[nodiscard]] QString selectedAppId() const;
+    [[nodiscard]] QString customCommand() const;
     [[nodiscard]] bool makeDefault() const;
 
 private slots:
@@ -26,7 +27,9 @@ private:
     QString m_mimeType;
     QLineEdit* m_searchFilter{nullptr};
     QListWidget* m_appList{nullptr};
+    QLineEdit* m_customCommandEdit{nullptr};
     QCheckBox* m_alwaysUseBox{nullptr};
     QPushButton* m_openBtn{nullptr};
-    QVector<AppEntry> m_apps;
+    QVector<AppEntry> m_recommendedApps;
+    QVector<AppEntry> m_otherApps;
 };

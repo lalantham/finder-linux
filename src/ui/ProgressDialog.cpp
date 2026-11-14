@@ -20,6 +20,11 @@ ProgressDialog::ProgressDialog(QWidget* parent)
     m_titleLabel->setFont(font);
     layout->addWidget(m_titleLabel);
 
+    m_queueLabel = new QLabel(this);
+    m_queueLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
+    m_queueLabel->hide();
+    layout->addWidget(m_queueLabel);
+
     m_progressBar = new QProgressBar(this);
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
@@ -29,14 +34,19 @@ ProgressDialog::ProgressDialog(QWidget* parent)
 
     auto* bottomRow = new QHBoxLayout();
     m_detailLabel = new QLabel(this);
+    m_skipBtn = new QPushButton(QStringLiteral("Skip Task"), this);
+    m_skipBtn->setFixedWidth(80);
+    m_skipBtn->hide();
     m_cancelBtn = new QPushButton(QStringLiteral("Stop"), this);
     m_cancelBtn->setFixedWidth(70);
 
     bottomRow->addWidget(m_detailLabel);
     bottomRow->addStretch();
+    bottomRow->addWidget(m_skipBtn);
     bottomRow->addWidget(m_cancelBtn);
     layout->addLayout(bottomRow);
 
+    connect(m_skipBtn, &QPushButton::clicked, this, &ProgressDialog::skipRequested);
     connect(m_cancelBtn, &QPushButton::clicked, this, &ProgressDialog::cancelRequested);
 }
 
@@ -83,5 +93,19 @@ void ProgressDialog::updateProgress(const OperationProgress& progress)
         m_detailLabel->setText(progress.currentItem);
     } else {
         m_detailLabel->setText(FileItem::formatSize(progress.bytesProcessed));
+    }
+}
+
+void ProgressDialog::updateQueueStatus(int currentIndex, int totalCount)
+{
+    if (totalCount > 1 && currentIndex > 0) {
+        m_queueLabel->setText(QStringLiteral("Task %1 of %2 (%3 queued)").arg(currentIndex).arg(totalCount).arg(totalCount - currentIndex));
+        m_queueLabel->show();
+        m_skipBtn->show();
+        m_cancelBtn->setText(QStringLiteral("Stop All"));
+    } else {
+        m_queueLabel->hide();
+        m_skipBtn->hide();
+        m_cancelBtn->setText(QStringLiteral("Stop"));
     }
 }

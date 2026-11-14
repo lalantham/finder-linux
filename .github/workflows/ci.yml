@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed archlinux-keyring
+          pacman -S --noconfirm --needed \
+            git cmake ninja \
+            qt6-base qt6-svg qt6-multimedia \
+            libarchive poppler-qt6 kwindowsystem \
+            desktop-file-utils appstream
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Validate desktop entry
+        run: desktop-file-validate data/org.finderlinux.Finder.desktop
+
+      - name: Validate AppStream metadata
+        run: appstreamcli validate --no-net data/org.finderlinux.Finder.metainfo.xml

@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QTextEdit>
 #include <QSplitter>
+#include <QTimer>
 
 class GalleryView : public QWidget {
     Q_OBJECT
@@ -16,6 +17,7 @@ public:
     void setFileSystemModel(FileSystemModel* model);
     [[nodiscard]] QString selectedPath() const { return m_selectedPath; }
     [[nodiscard]] QStringList selectedFilePaths() const;
+    [[nodiscard]] QListView* filmstripView() const noexcept { return m_filmstrip; }
     void selectAll();
 
 signals:
@@ -31,12 +33,15 @@ protected:
 private slots:
     void onSelectionChanged();
     void onItemDoubleClicked(const QModelIndex& index);
+    void updatePendingPreview();
 
 private:
     void updateHeroPreview(const QString& path);
 
     FileSystemModel* m_model{nullptr};
     QString m_selectedPath;
+    QString m_pendingPreviewPath;
+    QTimer* m_previewTimer{nullptr};
 
     // Hero preview widgets
     QWidget* m_heroContainer{nullptr};

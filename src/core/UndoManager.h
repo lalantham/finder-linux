@@ -3,6 +3,7 @@
 #include <QString>
 #include <QVector>
 #include <QObject>
+#include <QDateTime>
 #include <functional>
 #include <memory>
 
@@ -19,6 +20,9 @@ struct UndoAction {
     QString sourcePath;
     QString targetPath;
     QString trashInfoPath;
+    bool isDirectory{false};
+    QDateTime createdModified;
+    qint64 createdSize{-1};
 };
 
 class UndoManager : public QObject {

@@ -2,12 +2,208 @@
 #include "ArchiveService.h"
 #include "XdgTrash.h"
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QPointer>
+#include <QRandomGenerator>
 #include <QtConcurrent>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <fcntl.h>
 #include <sys/stat.h>
-#include <utime.h>
+#include <sys/xattr.h>
+#include <unistd.h>
+
+namespace {
+
+QString absoluteCleanPath(const QString& path)
+{
+    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+bool samePath(const QString& a, const QString& b)
+{
+    return absoluteCleanPath(a) == absoluteCleanPath(b);
+}
+
+// Catches hard links (and bind-mount aliases) that path comparison misses.
+bool sameInode(const QString& a, const QString& b)
+{
+    struct stat sa {};
+    struct stat sb {};
+    const QByteArray pa = QFile::encodeName(a);
+    const QByteArray pb = QFile::encodeName(b);
+    if (::lstat(pa.constData(), &sa) != 0 || ::lstat(pb.constData(), &sb) != 0) {
+        return false;
+    }
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+}
+
+QString uniqueSiblingPath(const QString& directory, const QString& prefix)
+{
+    return directory + QLatin1Char('/') + prefix
+         + QString::number(::getpid()) + QLatin1Char('_')
+         + QString::number(QDateTime::currentMSecsSinceEpoch()) + QLatin1Char('_')
+         + QString::number(QRandomGenerator::global()->generate());
+}
+
+// POSIX rename, unlike QFile::rename, atomically replaces an existing file.
+bool posixRename(const QString& from, const QString& to)
+{
+    const QByteArray fromBytes = QFile::encodeName(from);
+    const QByteArray toBytes = QFile::encodeName(to);
+    return ::rename(fromBytes.constData(), toBytes.constData()) == 0;
+}
+
+void syncDirectory(const QString& directory)
+{
+    const QByteArray dirBytes = QFile::encodeName(directory);
+    const int fd = ::open(dirBytes.constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return;
+    ::fsync(fd);
+    ::close(fd);
+}
+
+// Moves a fully written temporary item into place. The previous destination is
+// never removed before the replacement is ready, and it is restored if the
+// final rename fails.
+bool installTemporary(const QString& tempPath, const QString& finalPath, QString* error)
+{
+    QFileInfo dstInfo(finalPath);
+    const bool dstExists = dstInfo.exists() || dstInfo.isSymLink();
+
+    if (!dstExists) {
+        if (posixRename(tempPath, finalPath)) {
+            syncDirectory(dstInfo.absolutePath());
+            return true;
+        }
+        if (error) *error = QString::fromLocal8Bit(std::strerror(errno));
+        return false;
+    }
+
+    if (dstInfo.isDir() && !dstInfo.isSymLink()) {
+        const QString backupPath = uniqueSiblingPath(dstInfo.absolutePath(), QStringLiteral(".finder_old_"));
+        if (!posixRename(finalPath, backupPath)) {
+            if (error) *error = QString::fromLocal8Bit(std::strerror(errno));
+            return false;
+        }
+        if (!posixRename(tempPath, finalPath)) {
+            const QString failure = QString::fromLocal8Bit(std::strerror(errno));
+            posixRename(backupPath, finalPath);
+            if (error) *error = failure;
+            return false;
+        }
+        QDir(backupPath).removeRecursively();
+        syncDirectory(dstInfo.absolutePath());
+        return true;
+    }
+
+    if (posixRename(tempPath, finalPath)) {
+        syncDirectory(dstInfo.absolutePath());
+        return true;
+    }
+    if (error) *error = QString::fromLocal8Bit(std::strerror(errno));
+    return false;
+}
+
+
+void copyExtendedAttributes(const QString& src, const QString& dst, bool symlink)
+{
+    const QByteArray srcBytes = QFile::encodeName(src);
+    const QByteArray dstBytes = QFile::encodeName(dst);
+
+    const auto readNames = [&](char* buffer, size_t size) -> ssize_t {
+        return symlink ? ::llistxattr(srcBytes.constData(), buffer, size)
+                       : ::listxattr(srcBytes.constData(), buffer, size);
+    };
+    const auto readValue = [&](const char* name, char* buffer, size_t size) -> ssize_t {
+        return symlink ? ::lgetxattr(srcBytes.constData(), name, buffer, size)
+                       : ::getxattr(srcBytes.constData(), name, buffer, size);
+    };
+    const auto writeValue = [&](const char* name, const char* value, size_t size) {
+        return symlink ? ::lsetxattr(dstBytes.constData(), name, value, size, 0)
+                       : ::setxattr(dstBytes.constData(), name, value, size, 0);
+    };
+
+    QVector<QByteArray> names;
+    const ssize_t listSize = readNames(nullptr, 0);
+    if (listSize > 0) {
+        QByteArray nameBuffer(static_cast<int>(listSize), '\0');
+        const ssize_t readSize = readNames(nameBuffer.data(), static_cast<size_t>(nameBuffer.size()));
+        if (readSize > 0) {
+            qsizetype offset = 0;
+            while (offset < readSize) {
+                const char* name = nameBuffer.constData() + offset;
+                const qsizetype length = static_cast<qsizetype>(std::strlen(name));
+                if (length == 0) {
+                    break;
+                }
+                names.append(QByteArray(name, static_cast<int>(length)));
+                offset += length + 1;
+            }
+        }
+    }
+
+    // ACLs are xattrs too; try them explicitly in case listxattr() hides them.
+    for (const char* aclName : {"system.posix_acl_access", "system.posix_acl_default"}) {
+        if (!names.contains(QByteArray(aclName))) {
+            names.append(QByteArray(aclName));
+        }
+    }
+
+    for (const QByteArray& name : names) {
+        const ssize_t valueSize = readValue(name.constData(), nullptr, 0);
+        if (valueSize < 0) {
+            continue;
+        }
+
+        QByteArray value(static_cast<int>(valueSize), '\0');
+        if (valueSize > 0) {
+            const ssize_t readSize = readValue(name.constData(), value.data(),
+                                               static_cast<size_t>(value.size()));
+            if (readSize < 0) {
+                continue;
+            }
+            value.resize(static_cast<int>(readSize));
+        }
+        writeValue(name.constData(), value.constData(), static_cast<size_t>(value.size()));
+    }
+}
+
+void copyMetadata(const QString& src, const QString& dst, const struct stat& st, bool symlink)
+{
+    const QByteArray dstBytes = QFile::encodeName(dst);
+
+    // Ownership first: chown() can clear setuid/setgid bits, so restore the
+    // mode afterwards. Only root can change ownership; for normal users the
+    // destination is already owned by the current user.
+    if (::geteuid() == 0) {
+        struct stat dstStat {};
+        if (::lstat(dstBytes.constData(), &dstStat) == 0
+            && (dstStat.st_uid != st.st_uid || dstStat.st_gid != st.st_gid)) {
+            if (symlink) {
+                ::lchown(dstBytes.constData(), st.st_uid, st.st_gid);
+            } else {
+                ::chown(dstBytes.constData(), st.st_uid, st.st_gid);
+            }
+        }
+    }
+
+    if (!symlink) {
+        ::chmod(dstBytes.constData(), st.st_mode & 07777);
+    }
+
+    copyExtendedAttributes(src, dst, symlink);
+
+    struct timespec times[2] = {st.st_atim, st.st_mtim};
+    ::utimensat(AT_FDCWD, dstBytes.constData(), times,
+                symlink ? AT_SYMLINK_NOFOLLOW : 0);
+}
+
+} // namespace
 
 FileOperationEngine::FileOperationEngine(QObject* parent)
     : QObject(parent)
@@ -17,6 +213,16 @@ FileOperationEngine::FileOperationEngine(QObject* parent)
 FileOperationEngine::~FileOperationEngine()
 {
     cancel();
+    if (m_workerThread) {
+        // Give the worker a chance to unwind (it polls m_cancelled per chunk and
+        // per entry) so no thread touches this object after destruction.
+        if (!m_workerThread->wait(10000)) {
+            m_workerThread->terminate();
+            m_workerThread->wait(2000);
+        }
+        delete m_workerThread;
+        m_workerThread = nullptr;
+    }
 }
 
 void FileOperationEngine::cancel()
@@ -24,9 +230,124 @@ void FileOperationEngine::cancel()
     m_cancelled.store(true, std::memory_order_relaxed);
 }
 
+void FileOperationEngine::cancelAll()
+{
+    cancel();
+    m_pendingJobs.clear();
+    m_currentJobIndex = 0;
+    m_totalJobsInBatch = 0;
+    emit queueStatusChanged(0, 0);
+}
+
 bool FileOperationEngine::isRunning() const
 {
     return m_running.load(std::memory_order_relaxed);
+}
+
+int FileOperationEngine::pendingJobCount() const
+{
+    return static_cast<int>(m_pendingJobs.size());
+}
+
+int FileOperationEngine::activeAndPendingJobCount() const
+{
+    return (m_running.load(std::memory_order_relaxed) ? 1 : 0) + static_cast<int>(m_pendingJobs.size());
+}
+
+bool FileOperationEngine::startWorker(const std::function<void()>& job)
+{
+    if (m_running.exchange(true)) {
+        // Another operation is running: queue this one instead of dropping it.
+        m_pendingJobs.enqueue(job);
+        m_totalJobsInBatch++;
+        emit queueStatusChanged(m_currentJobIndex, m_totalJobsInBatch);
+        return true;
+    }
+
+    if (m_totalJobsInBatch == 0) {
+        m_currentJobIndex = 1;
+        m_totalJobsInBatch = 1;
+    }
+    emit queueStatusChanged(m_currentJobIndex, m_totalJobsInBatch);
+
+    m_cancelled.store(false);
+    m_itemErrors.clear();
+    m_itemWarnings.clear();
+    m_skippedItems = 0;
+    m_failOnSkip = false;
+
+    m_workerThread = QThread::create([this, job]() {
+        job();
+        m_running.store(false);
+        QMetaObject::invokeMethod(this, [this]() { startNextQueuedJob(); }, Qt::QueuedConnection);
+    });
+
+    QPointer<QThread> thread = m_workerThread;
+    connect(thread, &QThread::finished, this, [this, thread]() {
+        if (thread && m_workerThread == thread.data()) {
+            m_workerThread = nullptr;
+        }
+        if (thread) {
+            thread->deleteLater();
+        }
+    });
+    thread->start();
+    return true;
+}
+
+void FileOperationEngine::startNextQueuedJob()
+{
+    if (m_running.load(std::memory_order_relaxed) || m_pendingJobs.isEmpty()) {
+        if (!m_running.load(std::memory_order_relaxed) && m_pendingJobs.isEmpty()) {
+            m_currentJobIndex = 0;
+            m_totalJobsInBatch = 0;
+            emit queueStatusChanged(0, 0);
+        }
+        return;
+    }
+    m_currentJobIndex++;
+    const std::function<void()> job = m_pendingJobs.dequeue();
+    startWorker(job);
+}
+
+void FileOperationEngine::recordError(const QString& path, const QString& reason)
+{
+    if (m_itemErrors.size() < 100) {
+        m_itemErrors.append(QStringLiteral("%1 — %2").arg(path, reason));
+    }
+}
+
+void FileOperationEngine::recordWarning(const QString& path, const QString& reason)
+{
+    if (m_itemWarnings.size() < 100) {
+        m_itemWarnings.append(QStringLiteral("%1 — %2").arg(path, reason));
+    }
+}
+
+void FileOperationEngine::applyCollectedIssues(OperationResult& result)
+{
+    result.skippedCount = m_skippedItems;
+    if (!m_itemWarnings.isEmpty()) {
+        result.warnings = m_itemWarnings;
+    }
+    if (m_itemErrors.isEmpty()) {
+        return;
+    }
+
+    result.success = false;
+    result.errorCount = qMax(result.errorCount, static_cast<int>(m_itemErrors.size()));
+    const int shown = qMin(8, static_cast<int>(m_itemErrors.size()));
+    QString message = QStringLiteral("%1 item(s) could not be processed:\n\n%2")
+                          .arg(m_itemErrors.size())
+                          .arg(QStringList(m_itemErrors.mid(0, shown)).join(QLatin1Char('\n')));
+    if (m_itemErrors.size() > shown) {
+        message += QStringLiteral("\n…");
+    }
+    if (result.errorMessage.isEmpty()) {
+        result.errorMessage = message;
+    } else {
+        result.errorMessage += QLatin1Char('\n') + message;
+    }
 }
 
 QString FileOperationEngine::generateDuplicateName(const QString& path)
@@ -56,57 +377,55 @@ QString FileOperationEngine::generateKeepBothName(const QString& destinationPath
     return generateDuplicateName(destinationPath);
 }
 
-void FileOperationEngine::copyItems(const QStringList& sources, const QString& destinationDir, ConflictResolution res)
+bool FileOperationEngine::copyItems(const QStringList& sources, const QString& destinationDir, ConflictResolution res)
 {
-    runAsyncOperation(OperationType::Copy, sources, destinationDir, res);
-}
-
-void FileOperationEngine::moveItems(const QStringList& sources, const QString& destinationDir, ConflictResolution res)
-{
-    runAsyncOperation(OperationType::Move, sources, destinationDir, res);
-}
-
-void FileOperationEngine::duplicateItems(const QStringList& sources)
-{
-    runAsyncOperation(OperationType::Duplicate, sources, QString(), ConflictResolution::KeepBoth);
-}
-
-void FileOperationEngine::trashItems(const QStringList& sources)
-{
-    runAsyncOperation(OperationType::Trash, sources, QString(), ConflictResolution::Skip);
-}
-
-void FileOperationEngine::deletePermanently(const QStringList& sources)
-{
-    runAsyncOperation(OperationType::Delete, sources, QString(), ConflictResolution::Skip);
-}
-
-void FileOperationEngine::compressItems(const QStringList& sources, const QString& destinationArchive)
-{
-    if (m_running.load()) return;
-    m_cancelled.store(false);
-    m_running.store(true);
-
-    QThread* thread = QThread::create([this, sources, destinationArchive]() {
-        executeCompress(sources, destinationArchive);
-        m_running.store(false);
+    return startWorker([this, sources, destinationDir, res]() {
+        executeCopyOrMove(OperationType::Copy, sources, destinationDir, res);
     });
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
 }
 
-void FileOperationEngine::extractArchive(const QString& archivePath, const QString& destinationDir)
+bool FileOperationEngine::moveItems(const QStringList& sources, const QString& destinationDir, ConflictResolution res)
 {
-    if (m_running.load()) return;
-    m_cancelled.store(false);
-    m_running.store(true);
-
-    QThread* thread = QThread::create([this, archivePath, destinationDir]() {
-        executeExtract(archivePath, destinationDir);
-        m_running.store(false);
+    return startWorker([this, sources, destinationDir, res]() {
+        executeCopyOrMove(OperationType::Move, sources, destinationDir, res);
     });
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
+}
+
+bool FileOperationEngine::duplicateItems(const QStringList& sources)
+{
+    return startWorker([this, sources]() {
+        executeDuplicate(sources);
+    });
+}
+
+bool FileOperationEngine::trashItems(const QStringList& sources)
+{
+    return startWorker([this, sources]() {
+        executeTrash(sources);
+    });
+}
+
+bool FileOperationEngine::deletePermanently(const QStringList& sources)
+{
+    return startWorker([this, sources]() {
+        executeDelete(sources);
+    });
+}
+
+bool FileOperationEngine::compressItems(const QStringList& sources, const QString& destinationArchive,
+                                        int compressionLevel, const QString& passphrase)
+{
+    return startWorker([this, sources, destinationArchive, compressionLevel, passphrase]() {
+        executeCompress(sources, destinationArchive, compressionLevel, passphrase);
+    });
+}
+
+bool FileOperationEngine::extractArchive(const QString& archivePath, const QString& destinationDir,
+                                         const QString& passphrase)
+{
+    return startWorker([this, archivePath, destinationDir, passphrase]() {
+        executeExtract(archivePath, destinationDir, passphrase);
+    });
 }
 
 bool FileOperationEngine::createFolder(const QString& parentDir, const QString& folderName, QString* createdPath, QString* error)
@@ -134,7 +453,7 @@ bool FileOperationEngine::createFile(const QString& parentDir, const QString& fi
         return false;
     }
     QFile file(newPath);
-    if (!file.open(QIODevice::WriteOnly)) {
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
         if (error) *error = file.errorString();
         return false;
     }
@@ -146,12 +465,12 @@ bool FileOperationEngine::createFile(const QString& parentDir, const QString& fi
 bool FileOperationEngine::renameItem(const QString& sourcePath, const QString& newName, QString* renamedPath, QString* error)
 {
     QFileInfo fi(sourcePath);
-    if (!fi.exists()) {
+    if (!fi.exists() && !fi.isSymLink()) {
         if (error) *error = QStringLiteral("Source item does not exist.");
         return false;
     }
     QString destPath = fi.dir().filePath(newName);
-    if (QFile::exists(destPath)) {
+    if (QFile::exists(destPath) || QFileInfo(destPath).isSymLink()) {
         if (error) *error = QStringLiteral("Destination item already exists.");
         return false;
     }
@@ -165,7 +484,7 @@ bool FileOperationEngine::renameItem(const QString& sourcePath, const QString& n
 
 bool FileOperationEngine::createSymlink(const QString& target, const QString& linkPath, QString* error)
 {
-    if (QFile::exists(linkPath)) {
+    if (QFile::exists(linkPath) || QFileInfo(linkPath).isSymLink()) {
         if (error) *error = QStringLiteral("Link path already exists.");
         return false;
     }
@@ -174,40 +493,6 @@ bool FileOperationEngine::createSymlink(const QString& target, const QString& li
         return false;
     }
     return true;
-}
-
-void FileOperationEngine::runAsyncOperation(OperationType type, const QStringList& sources, const QString& destDir, ConflictResolution defaultRes)
-{
-    if (m_running.load()) {
-        return; // already running an operation
-    }
-
-    m_cancelled.store(false);
-    m_running.store(true);
-
-    QThread* thread = QThread::create([this, type, sources, destDir, defaultRes]() {
-        switch (type) {
-        case OperationType::Copy:
-        case OperationType::Move:
-            executeCopyOrMove(type, sources, destDir, defaultRes);
-            break;
-        case OperationType::Duplicate:
-            executeDuplicate(sources);
-            break;
-        case OperationType::Trash:
-            executeTrash(sources);
-            break;
-        case OperationType::Delete:
-            executeDelete(sources);
-            break;
-        default:
-            break;
-        }
-        m_running.store(false);
-    });
-
-    connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
 }
 
 void FileOperationEngine::executeCopyOrMove(OperationType type, const QStringList& sources, const QString& destDir, ConflictResolution defaultRes)
@@ -243,10 +528,8 @@ void FileOperationEngine::executeCopyOrMove(OperationType type, const QStringLis
     bool applyToAll = (defaultRes != ConflictResolution::Ask);
 
     OperationResult result;
+    result.type = type;
     QDir targetDir(destDir);
-
-    QElapsedTimer timer;
-    timer.start();
 
     for (const auto& src : sources) {
         if (m_cancelled.load(std::memory_order_relaxed)) {
@@ -255,40 +538,83 @@ void FileOperationEngine::executeCopyOrMove(OperationType type, const QStringLis
             break;
         }
 
-        QFileInfo srcInfo(src);
-        QString destPath = targetDir.filePath(srcInfo.fileName());
+        QString cleanSrc = QDir::cleanPath(src);
+        QString cleanDestDir = QDir::cleanPath(destDir);
+        QFileInfo srcInfo(cleanSrc);
 
-        bool opSuccess = false;
-        if (type == OperationType::Copy) {
-            if (srcInfo.isDir()) {
-                opSuccess = copyDirectoryRecursive(src, destPath, appliedResolution, applyToAll);
-            } else {
-                opSuccess = copySingleFile(src, destPath, appliedResolution, applyToAll);
-            }
-        } else { // Move
-            opSuccess = moveSingleItem(src, destPath, appliedResolution, applyToAll);
+        // Prevent copying or moving a directory into itself or its own subdirectories
+        if ((srcInfo.isDir() && !srcInfo.isSymLink()) &&
+            (cleanDestDir == cleanSrc || cleanDestDir.startsWith(cleanSrc + QLatin1Char('/')))) {
+            recordError(src, QStringLiteral("cannot %1 a folder into itself or a subfolder of itself")
+                                 .arg(type == OperationType::Copy ? QStringLiteral("copy") : QStringLiteral("move")));
+            continue;
         }
 
-        if (opSuccess) {
+        QString destPath = targetDir.filePath(srcInfo.fileName());
+
+        ItemOutcome outcome = ItemOutcome::Failed;
+        if (type == OperationType::Copy) {
+            if (srcInfo.isDir() && !srcInfo.isSymLink()) {
+                outcome = copyDirectoryRecursive(src, destPath, appliedResolution, applyToAll);
+            } else {
+                outcome = copySingleFile(src, destPath, appliedResolution, applyToAll);
+            }
+        } else { // Move
+            outcome = moveSingleItem(src, destPath, appliedResolution, applyToAll);
+        }
+
+        if (outcome == ItemOutcome::Done) {
             result.processedCount++;
             result.createdPaths.append(destPath);
-        } else {
+            if (type == OperationType::Move) {
+                result.movedPairs.append(qMakePair(src, destPath));
+            }
+        } else if (outcome == ItemOutcome::Failed) {
             result.errorCount++;
+            // Skipped items are deliberately not reported as created or moved:
+            // undo must never act on a path that was left untouched.
         }
     }
 
+    if (m_cancelled.load(std::memory_order_relaxed) && result.errorMessage.isEmpty()) {
+        result.success = false;
+        result.errorMessage = QStringLiteral("Operation cancelled by user.");
+    }
+    if (result.errorCount > 0) {
+        result.success = false;
+    }
+    applyCollectedIssues(result);
     emit operationFinished(result);
 }
 
-bool FileOperationEngine::copySingleFile(const QString& src, const QString& dst, ConflictResolution& appliedRes, bool& applyToAll)
+FileOperationEngine::ItemOutcome FileOperationEngine::copySingleFile(const QString& src, const QString& dst,
+                                                                     ConflictResolution& appliedRes, bool& applyToAll)
 {
+    QFileInfo srcFi(src);
+    if (!srcFi.exists() && !srcFi.isSymLink()) {
+        recordError(src, QStringLiteral("source no longer exists"));
+        return ItemOutcome::Failed;
+    }
+
+    if (samePath(src, dst) || sameInode(src, dst)) {
+        recordWarning(src, QStringLiteral("source and destination are the same item; skipped"));
+        m_skippedItems++;
+        return ItemOutcome::Skipped;
+    }
+
+    struct stat st {};
+    const QByteArray srcBytes = QFile::encodeName(src);
+    if (::lstat(srcBytes.constData(), &st) != 0) {
+        recordError(src, QString::fromLocal8Bit(std::strerror(errno)));
+        return ItemOutcome::Failed;
+    }
+
     QString finalDst = dst;
-    if (QFile::exists(finalDst)) {
+    if (QFile::exists(finalDst) || QFileInfo(finalDst).isSymLink()) {
         if (!applyToAll || appliedRes == ConflictResolution::Ask) {
             OperationConflict conflict;
             conflict.sourcePath = src;
             conflict.destinationPath = finalDst;
-            QFileInfo srcFi(src);
             QFileInfo dstFi(finalDst);
             conflict.sourceSize = srcFi.size();
             conflict.destinationSize = dstFi.size();
@@ -303,28 +629,80 @@ bool FileOperationEngine::copySingleFile(const QString& src, const QString& dst,
 
         if (appliedRes == ConflictResolution::Cancel) {
             cancel();
-            return false;
+            return ItemOutcome::Failed;
         } else if (appliedRes == ConflictResolution::Skip) {
-            return true;
+            m_skippedItems++;
+            return ItemOutcome::Skipped;
         } else if (appliedRes == ConflictResolution::KeepBoth) {
             finalDst = generateKeepBothName(finalDst);
-        } else if (appliedRes == ConflictResolution::Replace) {
-            QFile::remove(finalDst);
         }
+        // Replace is handled by installTemporary(): the existing destination is
+        // not removed until the replacement has been written and verified.
     }
 
-    // Perform safe chunked copy
+    const QFileInfo dstInfo(finalDst);
+    const QString tempPath = uniqueSiblingPath(dstInfo.absolutePath(), QStringLiteral(".finder_tmp_"));
+    QString installError;
+
+    if (S_ISLNK(st.st_mode)) {
+        const QByteArray target = QFile::encodeName(srcFi.symLinkTarget());
+        const QByteArray tempBytes = QFile::encodeName(tempPath);
+        if (::symlink(target.constData(), tempBytes.constData()) != 0) {
+            recordError(src, QString::fromLocal8Bit(std::strerror(errno)));
+            return ItemOutcome::Failed;
+        }
+        copyMetadata(src, tempPath, st, true);
+        if (!installTemporary(tempPath, finalDst, &installError)) {
+            QFile::remove(tempPath);
+            recordError(finalDst, installError);
+            return ItemOutcome::Failed;
+        }
+        m_currentProgress.itemsProcessed++;
+        emit progress(m_currentProgress);
+        return ItemOutcome::Done;
+    }
+
+    if (S_ISFIFO(st.st_mode)) {
+        const QByteArray tempBytes = QFile::encodeName(tempPath);
+        if (::mkfifo(tempBytes.constData(), st.st_mode & 07777) != 0) {
+            recordError(src, QString::fromLocal8Bit(std::strerror(errno)));
+            return ItemOutcome::Failed;
+        }
+        copyMetadata(src, tempPath, st, false);
+        if (!installTemporary(tempPath, finalDst, &installError)) {
+            QFile::remove(tempPath);
+            recordError(finalDst, installError);
+            return ItemOutcome::Failed;
+        }
+        m_currentProgress.itemsProcessed++;
+        emit progress(m_currentProgress);
+        return ItemOutcome::Done;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        // Never open sockets or device nodes: open() may block forever or
+        // produce an endless stream of data.
+        const QString reason = QStringLiteral("skipped special file (socket or device)");
+        if (m_failOnSkip) {
+            recordError(src, reason);
+            return ItemOutcome::Failed;
+        }
+        recordWarning(src, reason);
+        m_skippedItems++;
+        return ItemOutcome::Skipped;
+    }
+
     QFile srcFile(src);
     if (!srcFile.open(QIODevice::ReadOnly)) {
-        return false;
+        recordError(src, srcFile.errorString());
+        return ItemOutcome::Failed;
     }
 
-    // Write to a temporary file in the destination directory first
-    QFileInfo dstFi(finalDst);
-    QString tempDst = dstFi.absolutePath() + QStringLiteral("/.finder_tmp_%1").arg(QDateTime::currentMSecsSinceEpoch());
-    QFile dstFile(tempDst);
+    // Write to a uniquely named temporary file in the destination directory.
+    QFile dstFile(tempPath);
     if (!dstFile.open(QIODevice::WriteOnly)) {
-        return false;
+        recordError(finalDst, dstFile.errorString());
+        return ItemOutcome::Failed;
     }
 
     constexpr qint64 ChunkSize = 64 * 1024; // 64 KB
@@ -333,85 +711,158 @@ bool FileOperationEngine::copySingleFile(const QString& src, const QString& dst,
     while (!srcFile.atEnd()) {
         if (m_cancelled.load(std::memory_order_relaxed)) {
             dstFile.close();
-            QFile::remove(tempDst);
-            return false;
+            QFile::remove(tempPath);
+            return ItemOutcome::Failed;
         }
 
         qint64 bytesRead = srcFile.read(buffer.data(), ChunkSize);
         if (bytesRead > 0) {
-            dstFile.write(buffer.data(), bytesRead);
+            qint64 bytesWritten = dstFile.write(buffer.data(), bytesRead);
+            if (bytesWritten != bytesRead) {
+                const QString reason = dstFile.errorString();
+                dstFile.close();
+                QFile::remove(tempPath);
+                recordError(finalDst, reason);
+                return ItemOutcome::Failed;
+            }
             m_currentProgress.bytesProcessed += bytesRead;
 
             m_currentProgress.percent = m_currentProgress.totalBytes > 0
                 ? static_cast<int>((m_currentProgress.bytesProcessed * 100) / m_currentProgress.totalBytes)
                 : 100;
-            m_currentProgress.currentItem = dstFi.fileName();
+            m_currentProgress.currentItem = dstInfo.fileName();
             emit progress(m_currentProgress);
         }
     }
 
     dstFile.flush();
+    if (dstFile.error() != QFileDevice::NoError) {
+        const QString reason = dstFile.errorString();
+        dstFile.close();
+        QFile::remove(tempPath);
+        recordError(finalDst, reason);
+        return ItemOutcome::Failed;
+    }
+    // Durability barrier before the rename, so a power loss cannot leave a
+    // zero-length file where the original used to be.
+    if (dstFile.handle() >= 0) {
+        ::fsync(dstFile.handle());
+    }
     dstFile.close();
     srcFile.close();
 
-    // Preserve permissions
-    dstFile.setPermissions(srcFile.permissions());
-
-    // Rename temp into place
-    if (QFile::exists(finalDst)) {
-        QFile::remove(finalDst);
+    // Verify temp destination size matches source
+    if (QFileInfo(tempPath).size() != static_cast<qint64>(st.st_size)) {
+        QFile::remove(tempPath);
+        recordError(finalDst, QStringLiteral("size verification failed"));
+        return ItemOutcome::Failed;
     }
-    if (!QFile::rename(tempDst, finalDst)) {
-        QFile::remove(tempDst);
-        return false;
+
+    // Preserve permissions, ownership, ACLs/xattrs, and timestamps.
+    copyMetadata(src, tempPath, st, false);
+
+    if (!installTemporary(tempPath, finalDst, &installError)) {
+        QFile::remove(tempPath);
+        recordError(finalDst, installError);
+        return ItemOutcome::Failed;
+    }
+
+    // Verify final destination exists and size matches
+    QFileInfo verifyFi(finalDst);
+    if (!verifyFi.exists() || verifyFi.size() != static_cast<qint64>(st.st_size)) {
+        recordError(finalDst, QStringLiteral("size verification failed after copy"));
+        return ItemOutcome::Failed;
     }
 
     m_currentProgress.itemsProcessed++;
-    return true;
+    emit progress(m_currentProgress);
+    return ItemOutcome::Done;
 }
 
-bool FileOperationEngine::copyDirectoryRecursive(const QString& src, const QString& dst, ConflictResolution& appliedRes, bool& applyToAll)
+FileOperationEngine::ItemOutcome FileOperationEngine::copyDirectoryRecursive(const QString& src, const QString& dst,
+                                                                             ConflictResolution& appliedRes, bool& applyToAll)
 {
+    const QString cleanSrc = QDir::cleanPath(src);
+    const QString cleanDst = QDir::cleanPath(dst);
+    if (cleanDst == cleanSrc || cleanDst.startsWith(cleanSrc + QLatin1Char('/'))) {
+        recordError(src, QStringLiteral("cannot copy a folder into itself or a subfolder"));
+        return ItemOutcome::Failed;
+    }
+
+    struct stat st {};
+    if (::lstat(QFile::encodeName(src).constData(), &st) != 0) {
+        recordError(src, QString::fromLocal8Bit(std::strerror(errno)));
+        return ItemOutcome::Failed;
+    }
+
     QDir srcDir(src);
     if (!QDir().mkpath(dst)) {
-        return false;
+        recordError(dst, QStringLiteral("could not create destination folder"));
+        return ItemOutcome::Failed;
     }
 
     for (const auto& entry : srcDir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System)) {
         if (m_cancelled.load(std::memory_order_relaxed)) {
-            return false;
+            return ItemOutcome::Failed;
         }
 
-        QString srcItem = entry.absoluteFilePath();
-        QString dstItem = dst + QStringLiteral("/") + entry.fileName();
+        const QString srcItem = entry.absoluteFilePath();
+        const QString dstItem = dst + QLatin1Char('/') + entry.fileName();
 
-        if (entry.isDir()) {
-            if (!copyDirectoryRecursive(srcItem, dstItem, appliedRes, applyToAll)) {
-                return false;
-            }
+        ItemOutcome outcome = ItemOutcome::Failed;
+        if (entry.isDir() && !entry.isSymLink()) {
+            outcome = copyDirectoryRecursive(srcItem, dstItem, appliedRes, applyToAll);
         } else {
-            if (!copySingleFile(srcItem, dstItem, appliedRes, applyToAll)) {
-                return false;
-            }
+            outcome = copySingleFile(srcItem, dstItem, appliedRes, applyToAll);
+        }
+
+        if (outcome == ItemOutcome::Failed) {
+            return ItemOutcome::Failed;
         }
     }
 
-    return true;
+    // mkpath() applies the process umask; restore the source permissions and
+    // metadata so private folders and ACLs survive a copy.
+    copyMetadata(src, dst, st, false);
+
+    return ItemOutcome::Done;
 }
 
-bool FileOperationEngine::moveSingleItem(const QString& src, const QString& dst, ConflictResolution& appliedRes, bool& applyToAll)
+FileOperationEngine::ItemOutcome FileOperationEngine::moveSingleItem(const QString& src, const QString& dst,
+                                                                     ConflictResolution& appliedRes, bool& applyToAll)
 {
+    QFileInfo srcInfo(src);
+    if (!srcInfo.exists() && !srcInfo.isSymLink()) {
+        recordError(src, QStringLiteral("source no longer exists"));
+        return ItemOutcome::Failed;
+    }
+
+    QString cleanSrc = QDir::cleanPath(src);
+    QString cleanDst = QDir::cleanPath(dst);
+
+    // Prevent moving directory into itself
+    if (srcInfo.isDir() && !srcInfo.isSymLink() &&
+        (cleanDst == cleanSrc || cleanDst.startsWith(cleanSrc + QLatin1Char('/')))) {
+        recordError(src, QStringLiteral("cannot move a folder into itself or a subfolder"));
+        return ItemOutcome::Failed;
+    }
+
+    if (samePath(src, dst) || sameInode(src, dst)) {
+        recordWarning(src, QStringLiteral("source and destination are the same item; skipped"));
+        m_skippedItems++;
+        return ItemOutcome::Skipped;
+    }
+
     QString finalDst = dst;
-    if (QFile::exists(finalDst)) {
+    if (QFile::exists(finalDst) || QFileInfo(finalDst).isSymLink()) {
         if (!applyToAll || appliedRes == ConflictResolution::Ask) {
             OperationConflict conflict;
             conflict.sourcePath = src;
             conflict.destinationPath = finalDst;
-            QFileInfo srcFi(src);
             QFileInfo dstFi(finalDst);
-            conflict.sourceSize = srcFi.size();
+            conflict.sourceSize = srcInfo.size();
             conflict.destinationSize = dstFi.size();
-            conflict.sourceModified = srcFi.lastModified();
+            conflict.sourceModified = srcInfo.lastModified();
             conflict.destinationModified = dstFi.lastModified();
 
             QMetaObject::invokeMethod(this, [this, conflict, &appliedRes, &applyToAll]() {
@@ -421,50 +872,118 @@ bool FileOperationEngine::moveSingleItem(const QString& src, const QString& dst,
 
         if (appliedRes == ConflictResolution::Cancel) {
             cancel();
-            return false;
+            return ItemOutcome::Failed;
         } else if (appliedRes == ConflictResolution::Skip) {
-            return true;
+            m_skippedItems++;
+            return ItemOutcome::Skipped;
         } else if (appliedRes == ConflictResolution::KeepBoth) {
             finalDst = generateKeepBothName(finalDst);
-        } else if (appliedRes == ConflictResolution::Replace) {
-            QFileInfo dstInfo(finalDst);
-            if (dstInfo.isDir()) {
-                QDir(finalDst).removeRecursively();
-            } else {
-                QFile::remove(finalDst);
-            }
         }
+        // Replace: the destination is swapped aside only once the incoming item
+        // is ready (rename replaces files atomically by itself).
     }
 
-    // Try atomic rename first
-    if (QFile::rename(src, finalDst)) {
+    errno = 0;
+    if (posixRename(src, finalDst)) {
+        syncDirectory(QFileInfo(finalDst).absolutePath());
         m_currentProgress.itemsProcessed++;
         emit progress(m_currentProgress);
-        return true;
+        return ItemOutcome::Done;
+    }
+    const int renameError = errno;
+
+    if (m_cancelled.load(std::memory_order_relaxed)) {
+        return ItemOutcome::Failed;
     }
 
-    // Cross-filesystem move fallback: copy safely, then delete source
-    QFileInfo srcInfo(src);
-    bool copySuccess = false;
+    // Destination is an existing directory: swap it aside first so a failure
+    // can restore it instead of leaving the user with neither item.
+    QFileInfo dstInfo(finalDst);
+    if (dstInfo.exists() && dstInfo.isDir() && !dstInfo.isSymLink()) {
+        const QString backupPath = uniqueSiblingPath(dstInfo.absolutePath(), QStringLiteral(".finder_old_"));
+        if (!posixRename(finalDst, backupPath)) {
+            recordError(finalDst, QString::fromLocal8Bit(std::strerror(errno)));
+            return ItemOutcome::Failed;
+        }
+        if (posixRename(src, finalDst)) {
+            QDir(backupPath).removeRecursively();
+            syncDirectory(dstInfo.absolutePath());
+            m_currentProgress.itemsProcessed++;
+            emit progress(m_currentProgress);
+            return ItemOutcome::Done;
+        }
+        const QString failure = QString::fromLocal8Bit(std::strerror(errno));
+        posixRename(backupPath, finalDst);
+        recordError(finalDst, failure);
+        return ItemOutcome::Failed;
+    }
+
+    if (renameError != EXDEV) {
+        recordError(src, QString::fromLocal8Bit(std::strerror(renameError)));
+        return ItemOutcome::Failed;
+    }
+
+    // Cross-filesystem move: copy and verify first, delete the source only
+    // after every item has been transferred successfully.
+    m_failOnSkip = true;
+    ItemOutcome copyOutcome = ItemOutcome::Failed;
+    if (srcInfo.isDir() && !srcInfo.isSymLink()) {
+        copyOutcome = copyDirectoryRecursive(src, finalDst, appliedRes, applyToAll);
+    } else {
+        copyOutcome = copySingleFile(src, finalDst, appliedRes, applyToAll);
+    }
+    m_failOnSkip = false;
+
+    if (copyOutcome != ItemOutcome::Done || m_cancelled.load(std::memory_order_relaxed)) {
+        // Anything less than a complete, verified copy leaves the source intact.
+        if (copyOutcome == ItemOutcome::Skipped) {
+            recordWarning(src, QStringLiteral("was not moved because the conflict was skipped"));
+        } else if (!m_cancelled.load(std::memory_order_relaxed) && m_itemErrors.isEmpty()) {
+            recordError(src, QStringLiteral("cross-filesystem move failed; the source was kept"));
+        }
+        return ItemOutcome::Failed;
+    }
+
+    QFileInfo copied(finalDst);
     if (srcInfo.isDir()) {
-        copySuccess = copyDirectoryRecursive(src, finalDst, appliedRes, applyToAll);
-        if (copySuccess) {
-            QDir(src).removeRecursively();
+        if (!copied.isDir()) {
+            recordError(finalDst, QStringLiteral("copy verification failed"));
+            return ItemOutcome::Failed;
+        }
+        if (!QDir(src).removeRecursively()) {
+            recordError(src, QStringLiteral("copied, but the source folder could not be removed"));
+            return ItemOutcome::Failed;
+        }
+    } else if (srcInfo.isSymLink()) {
+        if (!copied.isSymLink()) {
+            recordError(finalDst, QStringLiteral("symlink verification failed"));
+            return ItemOutcome::Failed;
+        }
+        if (!QFile::remove(src)) {
+            recordError(src, QStringLiteral("copied, but the source link could not be removed"));
+            return ItemOutcome::Failed;
         }
     } else {
-        copySuccess = copySingleFile(src, finalDst, appliedRes, applyToAll);
-        if (copySuccess) {
-            QFile::remove(src);
+        if (!copied.exists() || copied.size() != srcInfo.size()) {
+            recordError(finalDst, QStringLiteral("size verification failed"));
+            return ItemOutcome::Failed;
+        }
+        if (!QFile::remove(src)) {
+            recordError(src, QStringLiteral("copied, but the source file could not be removed"));
+            return ItemOutcome::Failed;
         }
     }
 
-    return copySuccess;
+    m_currentProgress.itemsProcessed++;
+    emit progress(m_currentProgress);
+    return ItemOutcome::Done;
 }
 
 void FileOperationEngine::executeDuplicate(const QStringList& sources)
 {
     emit operationStarted(OperationType::Duplicate, static_cast<int>(sources.size()), 0);
     OperationResult result;
+    result.type = OperationType::Duplicate;
     ConflictResolution res = ConflictResolution::KeepBoth;
     bool applyAll = true;
 
@@ -472,19 +991,27 @@ void FileOperationEngine::executeDuplicate(const QStringList& sources)
         if (m_cancelled.load(std::memory_order_relaxed)) break;
         QString dst = generateDuplicateName(src);
         QFileInfo fi(src);
-        bool ok = false;
-        if (fi.isDir()) {
-            ok = copyDirectoryRecursive(src, dst, res, applyAll);
+        ItemOutcome outcome = ItemOutcome::Failed;
+        if (fi.isDir() && !fi.isSymLink()) {
+            outcome = copyDirectoryRecursive(src, dst, res, applyAll);
         } else {
-            ok = copySingleFile(src, dst, res, applyAll);
+            outcome = copySingleFile(src, dst, res, applyAll);
         }
-        if (ok) {
+        if (outcome == ItemOutcome::Done) {
             result.processedCount++;
             result.createdPaths.append(dst);
-        } else {
+        } else if (outcome == ItemOutcome::Failed) {
             result.errorCount++;
         }
     }
+    if (m_cancelled.load(std::memory_order_relaxed) && result.errorMessage.isEmpty()) {
+        result.success = false;
+        result.errorMessage = QStringLiteral("Operation cancelled by user.");
+    }
+    if (result.errorCount > 0) {
+        result.success = false;
+    }
+    applyCollectedIssues(result);
     emit operationFinished(result);
 }
 
@@ -492,16 +1019,28 @@ void FileOperationEngine::executeTrash(const QStringList& sources)
 {
     emit operationStarted(OperationType::Trash, static_cast<int>(sources.size()), 0);
     OperationResult result;
+    result.type = OperationType::Trash;
     for (const auto& src : sources) {
         if (m_cancelled.load(std::memory_order_relaxed)) break;
         QString error;
-        if (XdgTrash::moveToTrash(src, &error)) {
+        QString trashedFile;
+        if (XdgTrash::moveToTrash(src, &error, &trashedFile)) {
             result.processedCount++;
+            result.createdPaths.append(src);
+            result.trashedPairs.append(qMakePair(src, trashedFile));
         } else {
             result.errorCount++;
-            result.errorMessage = error;
+            recordError(src, error.isEmpty() ? QStringLiteral("could not be moved to Trash") : error);
         }
     }
+    if (m_cancelled.load(std::memory_order_relaxed) && result.errorMessage.isEmpty()) {
+        result.success = false;
+        result.errorMessage = QStringLiteral("Operation cancelled by user.");
+    }
+    if (result.errorCount > 0) {
+        result.success = false;
+    }
+    applyCollectedIssues(result);
     emit operationFinished(result);
 }
 
@@ -509,25 +1048,41 @@ void FileOperationEngine::executeDelete(const QStringList& sources)
 {
     emit operationStarted(OperationType::Delete, static_cast<int>(sources.size()), 0);
     OperationResult result;
+    result.type = OperationType::Delete;
     for (const auto& src : sources) {
         if (m_cancelled.load(std::memory_order_relaxed)) break;
         QFileInfo fi(src);
         bool ok = false;
-        if (fi.isDir()) {
+        if (fi.isDir() && !fi.isSymLink()) {
             ok = QDir(src).removeRecursively();
         } else {
             ok = QFile::remove(src);
         }
         if (ok) {
             result.processedCount++;
+            // Deleting an item that lives inside the Trash must also remove its
+            // metadata, otherwise it is never listed again and leaks forever.
+            const QString trashFiles = QDir::cleanPath(XdgTrash::trashFilesDirectory());
+            const QString clean = QDir::cleanPath(src);
+            if (clean.startsWith(trashFiles + QLatin1Char('/'))) {
+                QFile::remove(XdgTrash::trashInfoDirectory() + QLatin1Char('/')
+                              + fi.fileName() + QStringLiteral(".trashinfo"));
+            }
         } else {
             result.errorCount++;
+            recordError(src, QStringLiteral("could not be permanently deleted"));
         }
     }
+    if (m_cancelled.load(std::memory_order_relaxed) && result.errorMessage.isEmpty()) {
+        result.success = false;
+        result.errorMessage = QStringLiteral("Operation cancelled by user.");
+    }
+    applyCollectedIssues(result);
     emit operationFinished(result);
 }
 
-void FileOperationEngine::executeCompress(const QStringList& sources, const QString& destinationArchive)
+void FileOperationEngine::executeCompress(const QStringList& sources, const QString& destinationArchive,
+                                          int compressionLevel, const QString& passphrase)
 {
     emit operationStarted(OperationType::Compress, static_cast<int>(sources.size()), 0);
 
@@ -565,10 +1120,13 @@ void FileOperationEngine::executeCompress(const QStringList& sources, const QStr
             }
         },
         &m_cancelled,
-        &errorMsg
+        &errorMsg,
+        compressionLevel,
+        passphrase
     );
 
     OperationResult result;
+    result.type = OperationType::Compress;
     result.success = success && !m_cancelled.load();
     if (!result.success) {
         result.errorMessage = errorMsg.isEmpty() ? QStringLiteral("Compression cancelled or failed.") : errorMsg;
@@ -581,7 +1139,8 @@ void FileOperationEngine::executeCompress(const QStringList& sources, const QStr
     emit operationFinished(result);
 }
 
-void FileOperationEngine::executeExtract(const QString& archivePath, const QString& destinationDir)
+void FileOperationEngine::executeExtract(const QString& archivePath, const QString& destinationDir,
+                                         const QString& passphrase)
 {
     qint64 archiveSize = QFileInfo(archivePath).size();
     emit operationStarted(OperationType::Extract, 1, archiveSize);
@@ -598,6 +1157,7 @@ void FileOperationEngine::executeExtract(const QString& archivePath, const QStri
     prog.totalBytes = archiveSize;
 
     QString errorMsg;
+    QString warningMsg;
     bool success = ArchiveService::extract(
         archivePath,
         destinationDir,
@@ -622,10 +1182,13 @@ void FileOperationEngine::executeExtract(const QString& archivePath, const QStri
             }
         },
         &m_cancelled,
-        &errorMsg
+        &errorMsg,
+        &warningMsg,
+        passphrase
     );
 
     OperationResult result;
+    result.type = OperationType::Extract;
     result.success = success && !m_cancelled.load();
     if (!result.success) {
         result.errorMessage = errorMsg.isEmpty() ? QStringLiteral("Extraction cancelled or failed.") : errorMsg;
@@ -633,6 +1196,9 @@ void FileOperationEngine::executeExtract(const QString& archivePath, const QStri
     } else {
         result.processedCount = 1;
         result.createdPaths.append(destinationDir);
+        if (!warningMsg.isEmpty()) {
+            result.warnings.append(warningMsg);
+        }
     }
 
     emit operationFinished(result);

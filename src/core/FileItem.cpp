@@ -1,10 +1,81 @@
 #include "FileItem.h"
 #include "TagManager.h"
 #include <QFileIconProvider>
+#include <QHash>
 #include <QLocale>
+#include <QMutex>
 #include <QDir>
 #include <QStandardPaths>
 #include <cmath>
+
+namespace {
+
+QMimeDatabase& sharedMimeDatabase()
+{
+    // Directory scans run on worker threads; give each thread its own database.
+    thread_local QMimeDatabase database;
+    return database;
+}
+
+QString userName(uid_t uid)
+{
+    static QMutex mutex;
+    static QHash<uid_t, QString> cache;
+    QMutexLocker locker(&mutex);
+
+    const auto cached = cache.constFind(uid);
+    if (cached != cache.cend()) {
+        return *cached;
+    }
+
+    QString name = QString::number(uid);
+    if (struct passwd* pw = getpwuid(uid); pw && pw->pw_name) {
+        name = QString::fromLocal8Bit(pw->pw_name);
+    }
+    cache.insert(uid, name);
+    return name;
+}
+
+QString groupName(gid_t gid)
+{
+    static QMutex mutex;
+    static QHash<gid_t, QString> cache;
+    QMutexLocker locker(&mutex);
+
+    const auto cached = cache.constFind(gid);
+    if (cached != cache.cend()) {
+        return *cached;
+    }
+
+    QString name = QString::number(gid);
+    if (struct group* gr = getgrgid(gid); gr && gr->gr_name) {
+        name = QString::fromLocal8Bit(gr->gr_name);
+    }
+    cache.insert(gid, name);
+    return name;
+}
+
+QHash<QString, QString> buildSpecialDirIcons()
+{
+    QHash<QString, QString> map;
+    auto add = [&map](QStandardPaths::StandardLocation location, const QString& icon) {
+        const QString path = QStandardPaths::writableLocation(location);
+        if (!path.isEmpty()) {
+            map.insert(QDir::cleanPath(path), icon);
+        }
+    };
+
+    map.insert(QDir::cleanPath(QDir::homePath()), QStringLiteral("user-home"));
+    add(QStandardPaths::DesktopLocation, QStringLiteral("user-desktop"));
+    add(QStandardPaths::DocumentsLocation, QStringLiteral("folder-documents"));
+    add(QStandardPaths::DownloadLocation, QStringLiteral("folder-download"));
+    add(QStandardPaths::PicturesLocation, QStringLiteral("folder-pictures"));
+    add(QStandardPaths::MusicLocation, QStringLiteral("folder-music"));
+    add(QStandardPaths::MoviesLocation, QStringLiteral("folder-videos"));
+    return map;
+}
+
+} // namespace
 
 FileItem::FileItem(const QString& absolutePath)
     : m_path(absolutePath)
@@ -59,21 +130,12 @@ void FileItem::initFromInfo(const QFileInfo& info)
     if (lstat(localPath.constData(), &st) == 0) {
         m_posixMode = st.st_mode;
         m_diskUsage = static_cast<qint64>(st.st_blocks) * 512;
+        m_inode = static_cast<quint64>(st.st_ino);
+        m_deviceId = static_cast<quint64>(st.st_dev);
+        m_hardLinks = static_cast<quint64>(st.st_nlink);
         m_permissionsString = formatPermissions(st.st_mode);
-
-        struct passwd* pw = getpwuid(st.st_uid);
-        if (pw && pw->pw_name) {
-            m_owner = QString::fromLatin1(pw->pw_name);
-        } else {
-            m_owner = QString::number(st.st_uid);
-        }
-
-        struct group* gr = getgrgid(st.st_gid);
-        if (gr && gr->gr_name) {
-            m_group = QString::fromLatin1(gr->gr_name);
-        } else {
-            m_group = QString::number(st.st_gid);
-        }
+        m_owner = userName(st.st_uid);
+        m_group = groupName(st.st_gid);
     } else {
         m_posixMode = 0;
         m_diskUsage = m_size;
@@ -82,8 +144,6 @@ void FileItem::initFromInfo(const QFileInfo& info)
         m_group = QStringLiteral("unknown");
     }
 
-    QMimeDatabase mimeDb;
-    QMimeType mimeType;
     if (m_isDir) {
         m_kind = QStringLiteral("Folder");
         m_mimeTypeName = QStringLiteral("inode/directory");
@@ -91,7 +151,8 @@ void FileItem::initFromInfo(const QFileInfo& info)
         m_kind = QStringLiteral("Alias / Symlink");
         m_mimeTypeName = QStringLiteral("inode/symlink");
     } else {
-        mimeType = mimeDb.mimeTypeForFile(info);
+        // Extension-only matching avoids opening every file just to list a folder.
+        QMimeType mimeType = sharedMimeDatabase().mimeTypeForFile(info, QMimeDatabase::MatchExtension);
         m_mimeTypeName = mimeType.name();
         m_kind = mimeType.comment();
         if (m_kind.isEmpty()) {
@@ -99,54 +160,66 @@ void FileItem::initFromInfo(const QFileInfo& info)
         }
     }
 
-    m_tags = TagManager::instance().tagsForFile(m_path);
+    // Tags are loaded lazily: getxattr() is expensive and only visible rows need it.
+    m_tags.clear();
+    m_tagsLoaded = false;
 }
 
-#include <QStandardPaths>
+void FileItem::setCalculatedFolderSize(qint64 size, int itemCount)
+{
+    m_size = size;
+    m_formattedSize = (itemCount >= 0)
+        ? QStringLiteral("%1 (%2)").arg(formatSize(size)).arg(itemCount == 1 ? QStringLiteral("1 item") : QStringLiteral("%1 items").arg(itemCount))
+        : formatSize(size);
+}
+
+const QStringList& FileItem::tags() const
+{
+    if (!m_tagsLoaded) {
+        m_tags = TagManager::instance().tagsForFile(m_path);
+        m_tagsLoaded = true;
+    }
+    return m_tags;
+}
 
 QIcon FileItem::icon() const
 {
-    QFileInfo info(m_path);
     if (m_isDir) {
-        QString clean = QDir::cleanPath(m_path);
-        if (clean == QDir::homePath()) {
-            return QIcon::fromTheme(QStringLiteral("user-home"),
-                   QIcon::fromTheme(QStringLiteral("folder")));
-        }
-        if (clean == QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)) {
-            return QIcon::fromTheme(QStringLiteral("user-desktop"),
-                   QIcon::fromTheme(QStringLiteral("folder")));
-        }
-        if (clean == QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)) {
-            return QIcon::fromTheme(QStringLiteral("folder-documents"),
-                   QIcon::fromTheme(QStringLiteral("folder")));
-        }
-        if (clean == QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)) {
-            return QIcon::fromTheme(QStringLiteral("folder-download"),
-                   QIcon::fromTheme(QStringLiteral("folder")));
-        }
-        if (clean == QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)) {
-            return QIcon::fromTheme(QStringLiteral("folder-pictures"),
-                   QIcon::fromTheme(QStringLiteral("folder")));
-        }
-        if (clean == QStandardPaths::writableLocation(QStandardPaths::MusicLocation)) {
-            return QIcon::fromTheme(QStringLiteral("folder-music"),
-                   QIcon::fromTheme(QStringLiteral("folder")));
-        }
-        if (clean == QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)) {
-            return QIcon::fromTheme(QStringLiteral("folder-videos"),
-                   QIcon::fromTheme(QStringLiteral("folder-movies"),
-                   QIcon::fromTheme(QStringLiteral("folder"))));
-        }
+        static const QHash<QString, QString> specialDirs = buildSpecialDirIcons();
+        const auto special = specialDirs.constFind(QDir::cleanPath(m_path));
+        const QString iconName = special != specialDirs.cend()
+            ? *special
+            : QStringLiteral("folder");
 
-        QIcon icon = QIcon::fromTheme(QStringLiteral("folder"));
-        if (!icon.isNull()) {
-            return icon;
+        static QHash<QString, QIcon> directoryIcons;
+        const auto cached = directoryIcons.constFind(iconName);
+        if (cached != directoryIcons.cend()) {
+            return *cached;
         }
+        QIcon icon = QIcon::fromTheme(iconName, QIcon::fromTheme(QStringLiteral("folder")));
+        directoryIcons.insert(iconName, icon);
+        return icon;
     }
 
-    static QFileIconProvider iconProvider;
-    return iconProvider.icon(info);
+    // Cache by suffix: icon lookup (theme + MIME) happens once per extension.
+    static QHash<QString, QIcon> fileIcons;
+    const QString key = m_suffix.toLower();
+    const auto cached = fileIcons.constFind(key);
+    if (cached != fileIcons.cend()) {
+        return *cached;
+    }
+
+    QIcon icon;
+    if (!m_suffix.isEmpty()) {
+        const QMimeType mime = sharedMimeDatabase().mimeTypeForFile(m_path, QMimeDatabase::MatchExtension);
+        icon = QIcon::fromTheme(mime.iconName());
+    }
+    if (icon.isNull()) {
+        static QFileIconProvider provider;
+        icon = provider.icon(QFileIconProvider::File);
+    }
+    fileIcons.insert(key, icon);
+    return icon;
 }
 
 QString FileItem::formatSize(qint64 bytes)
