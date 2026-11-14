@@ -570,6 +570,58 @@ void FileSystemModel::exitSearchResults() {
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
 }
 
+namespace {
+
+int naturalCompare(const QString& a, const QString& b, QCollator& collator) {
+    int i = 0;
+    int j = 0;
+    while (i < a.size() && j < b.size()) {
+        if (a.at(i).isDigit() && b.at(j).isDigit()) {
+            const int startA = i;
+            const int startB = j;
+            while (i < a.size() && a.at(i).isDigit())
+                ++i;
+            while (j < b.size() && b.at(j).isDigit())
+                ++j;
+
+            QString digitsA = a.mid(startA, i - startA);
+            QString digitsB = b.mid(startB, j - startB);
+            while (digitsA.size() > 1 && digitsA.startsWith(QLatin1Char('0')))
+                digitsA.remove(0, 1);
+            while (digitsB.size() > 1 && digitsB.startsWith(QLatin1Char('0')))
+                digitsB.remove(0, 1);
+
+            if (digitsA.size() != digitsB.size()) {
+                return digitsA.size() < digitsB.size() ? -1 : 1;
+            }
+            const int comparison = QString::compare(digitsA, digitsB, Qt::CaseSensitive);
+            if (comparison != 0) {
+                return comparison < 0 ? -1 : 1;
+            }
+        } else {
+            const int startA = i;
+            const int startB = j;
+            while (i < a.size() && !a.at(i).isDigit())
+                ++i;
+            while (j < b.size() && !b.at(j).isDigit())
+                ++j;
+            const int comparison =
+                collator.compare(a.mid(startA, i - startA), b.mid(startB, j - startB));
+            if (comparison != 0) {
+                return comparison < 0 ? -1 : 1;
+            }
+        }
+    }
+
+    if (i < a.size())
+        return 1;
+    if (j < b.size())
+        return -1;
+    return 0;
+}
+
+} // namespace
+
 void FileSystemModel::sortInternal() {
     if (m_items.size() < 2)
         return;
@@ -667,13 +719,13 @@ void FileSystemModel::sortInternal() {
                 break;
             case ColName:
             default:
-                comparison = collator.compare(a.name, b.name);
+                comparison = naturalCompare(a.name, b.name, collator);
                 break;
             }
 
             // Deterministic tie-break: equal keys fall back to name.
             if (comparison == 0 && sortColumn != ColName) {
-                comparison = collator.compare(a.name, b.name);
+                comparison = naturalCompare(a.name, b.name, collator);
             }
 
             return ascending ? comparison < 0 : comparison > 0;
