@@ -14,6 +14,27 @@ All notable changes to File Manager for Linux are documented here.
 - Added active-filter summaries and a Save Search action to the search bar.
 - `F5` re-runs an active search to pick up filesystem changes.
 
+### Preview pane and richer Preview
+- Added a docked preview pane for icon, list, and gallery views (`Ctrl+Shift+P`).
+- Added preview pane metadata, tags, and Preview/Properties actions.
+- Added full-screen Preview (`F11`).
+- Images now open fitted to the preview window, with optional zoom, fit/reset, rotate, and Ctrl+wheel zoom.
+- Added slideshow playback for multi-item previews (`S`).
+- Added PDF and converted Office document page navigation.
+- Preview pane visibility persists across sessions.
+
+### Document previews
+- Added on-demand Office document previews through LibreOffice headless conversion to cached PDFs.
+- Supported formats include DOC/DOCX, XLS/XLSX, PPT/PPTX, ODT/ODS/ODP, RTF, and related extensions.
+- Previews are asynchronous; the first conversion may take a few seconds and subsequent views use the cache.
+
+### File operation controls
+- Added explicit folder **Merge** behavior for copy and move, with Replace/KeepBoth/Skip/Cancel.
+- Added separate **Apply to all folder conflicts** and **Apply to all file conflicts** handling.
+- Added pause/resume for copy, move, duplicate, Trash, and delete operations.
+- Added **Skip File** for the current file without cancelling the whole task.
+- Added live speed, current-file display, elapsed time, and estimated time remaining.
+
 ### View options and list columns
 - Added a per-folder **Show View Options** dialog (`Ctrl+J`) for icon size, text size,
   label position, grid spacing, item info, icon previews, and manual icon arrangement.

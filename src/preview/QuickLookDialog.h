@@ -2,14 +2,17 @@
 
 #include "FileItem.h"
 #include <QDialog>
-#include <QLabel>
-#include <QTextEdit>
-#include <QScrollArea>
-#include <QPushButton>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QPixmap>
+#include <QPushButton>
+#include <QScrollArea>
 #include <QStringList>
+#include <QTextEdit>
 
 class QSlider;
+class QTimer;
+class QWheelEvent;
 #ifdef HAVE_QT_MULTIMEDIA
 class QMediaPlayer;
 class QAudioOutput;
@@ -27,21 +30,46 @@ public:
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void showNext();
     void showPrevious();
+    void showNextPage();
+    void showPreviousPage();
+    void toggleSlideshow();
+    void onOfficePreviewReady(const QString& sourcePath, const QString& pdfPath,
+                              const QString& error);
 
 private:
     void updateContent();
     void stopMediaPlayback();
+    void stopSlideshow();
+    void displayPdfPage();
+    void applyImageTransform();
+    void fitImageToView();
+    void resetPdfState();
 
     QStringList m_files;
     int m_currentIndex{0};
 
     QLabel* m_titleLabel{nullptr};
     QLabel* m_subtitleLabel{nullptr};
+    QLabel* m_pageLabel{nullptr};
+    QPushButton* m_prevPageBtn{nullptr};
+    QPushButton* m_nextPageBtn{nullptr};
+    QTimer* m_slideshowTimer{nullptr};
+    bool m_slideshow{false};
+
     QLabel* m_imageLabel{nullptr};
+    QPixmap m_imageBase;
+    qreal m_zoom{1.0};
+    int m_rotation{0};
+    bool m_fitImage{true};
+    QString m_pdfPath;
+    int m_pdfPage{0};
+    int m_pdfPageCount{0};
     QTextEdit* m_textViewer{nullptr};
     QScrollArea* m_imageScrollArea{nullptr};
     QWidget* m_fallbackWidget{nullptr};

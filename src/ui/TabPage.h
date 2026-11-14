@@ -14,6 +14,8 @@
 #include <QWidget>
 
 class QAbstractItemView;
+class QSplitter;
+class PreviewPane;
 
 class TabPage : public QWidget {
     Q_OBJECT
@@ -60,6 +62,10 @@ public:
     void setShowHidden(bool show);
     void setCalculateFolderSizes(bool enabled);
     void setFilterQuery(const QString& query);
+    void setPreviewPaneVisible(bool visible);
+    [[nodiscard]] bool isPreviewPaneVisible() const noexcept {
+        return m_previewPaneVisible;
+    }
 
     [[nodiscard]] FileSystemModel* model() const noexcept {
         return m_model;
@@ -107,6 +113,8 @@ protected:
 private:
     void updateStatus();
     [[nodiscard]] QAbstractItemView* currentView() const;
+    void updatePreviewPane();
+    void applyPreviewPaneVisibility();
     [[nodiscard]] SearchFilter buildSearchFilter() const;
     void clearSmartFolderState();
 
@@ -130,7 +138,10 @@ private:
     SmartFolder m_activeSmartFolder;
     bool m_isSmartFolderView{false};
 
+    QSplitter* m_viewSplitter{nullptr};
     QStackedWidget* m_viewStack{nullptr};
+    PreviewPane* m_previewPane{nullptr};
+    bool m_previewPaneVisible{false};
     IconView* m_iconView{nullptr};
     ListView* m_listView{nullptr};
     ColumnView* m_columnView{nullptr};

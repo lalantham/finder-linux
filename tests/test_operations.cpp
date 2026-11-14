@@ -1,12 +1,12 @@
-#include <QTest>
-#include <QTemporaryDir>
-#include <QFile>
+#include "FileOperationEngine.h"
 #include <QDir>
+#include <QFile>
 #include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTest>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
-#include <fcntl.h>
-#include "FileOperationEngine.h"
 
 class TestOperations : public QObject {
     Q_OBJECT
@@ -26,16 +26,19 @@ private slots:
     void testCopyPreservesDirectoryMode();
     void testCopyPreservesFileMetadata();
     void testOperationsAreQueued();
+    void testCopyFolderMerge();
+    void testMoveFolderMerge();
+    void testPauseAndResumeState();
 };
 
-void TestOperations::testCreateFolderAndFile()
-{
+void TestOperations::testCreateFolderAndFile() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
     FileOperationEngine engine;
     QString createdFolder, error;
-    bool ok = engine.createFolder(tempDir.path(), QStringLiteral("MyFolder"), &createdFolder, &error);
+    bool ok =
+        engine.createFolder(tempDir.path(), QStringLiteral("MyFolder"), &createdFolder, &error);
     QVERIFY2(ok, qPrintable(error));
     QVERIFY(QDir(createdFolder).exists());
 
@@ -45,8 +48,7 @@ void TestOperations::testCreateFolderAndFile()
     QVERIFY(QFile::exists(createdFile));
 }
 
-void TestOperations::testRenameItem()
-{
+void TestOperations::testRenameItem() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -64,8 +66,7 @@ void TestOperations::testRenameItem()
     QVERIFY(QFile::exists(renamedPath));
 }
 
-void TestOperations::testCopyFile()
-{
+void TestOperations::testCopyFile() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -87,8 +88,7 @@ void TestOperations::testCopyFile()
     QVERIFY(QFile::exists(srcFile)); // Source intact
 }
 
-void TestOperations::testMoveFile()
-{
+void TestOperations::testMoveFile() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -110,8 +110,7 @@ void TestOperations::testMoveFile()
     QVERIFY(!QFile::exists(srcFile)); // Source removed
 }
 
-void TestOperations::testDirectoryContainmentGuard()
-{
+void TestOperations::testDirectoryContainmentGuard() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -138,8 +137,7 @@ void TestOperations::testDirectoryContainmentGuard()
     QVERIFY(!res.success);
 }
 
-void TestOperations::testBrokenSymlinkOperations()
-{
+void TestOperations::testBrokenSymlinkOperations() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -152,7 +150,8 @@ void TestOperations::testBrokenSymlinkOperations()
     // Rename broken symlink
     FileOperationEngine engine;
     QString renamedLink, error;
-    bool ok = engine.renameItem(linkPath, QStringLiteral("broken_link_renamed"), &renamedLink, &error);
+    bool ok =
+        engine.renameItem(linkPath, QStringLiteral("broken_link_renamed"), &renamedLink, &error);
     QVERIFY2(ok, qPrintable(error));
     QVERIFY(QFileInfo(renamedLink).isSymLink());
     QCOMPARE(QFileInfo(renamedLink).symLinkTarget(), brokenTarget);
@@ -170,8 +169,7 @@ void TestOperations::testBrokenSymlinkOperations()
     QCOMPARE(QFileInfo(movedLink).symLinkTarget(), brokenTarget);
 }
 
-static OperationResult waitForOperation(FileOperationEngine& engine, QSignalSpy& spy)
-{
+static OperationResult waitForOperation(FileOperationEngine& engine, QSignalSpy& spy) {
     if (spy.isEmpty()) {
         spy.wait(5000);
     }
@@ -181,23 +179,21 @@ static OperationResult waitForOperation(FileOperationEngine& engine, QSignalSpy&
     return qvariant_cast<OperationResult>(spy.takeFirst().at(0));
 }
 
-static void writeFile(const QString& path, const QByteArray& content)
-{
+static void writeFile(const QString& path, const QByteArray& content) {
     QFile f(path);
     QVERIFY(f.open(QIODevice::WriteOnly));
     f.write(content);
     f.close();
 }
 
-static QByteArray readFile(const QString& path)
-{
+static QByteArray readFile(const QString& path) {
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly)) return {};
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
     return f.readAll();
 }
 
-void TestOperations::testCopyOntoSelfKeepsSource()
-{
+void TestOperations::testCopyOntoSelfKeepsSource() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString file = dir.filePath(QStringLiteral("same.txt"));
@@ -213,8 +209,7 @@ void TestOperations::testCopyOntoSelfKeepsSource()
     QVERIFY(res.skippedCount >= 1);
 }
 
-void TestOperations::testMoveOntoSelfKeepsSource()
-{
+void TestOperations::testMoveOntoSelfKeepsSource() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString file = dir.filePath(QStringLiteral("same.txt"));
@@ -231,8 +226,7 @@ void TestOperations::testMoveOntoSelfKeepsSource()
     QVERIFY(res.movedPairs.isEmpty());
 }
 
-void TestOperations::testReplaceExistingFileIsComplete()
-{
+void TestOperations::testReplaceExistingFileIsComplete() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -251,12 +245,13 @@ void TestOperations::testReplaceExistingFileIsComplete()
     QVERIFY(QFile::exists(src));
     QCOMPARE(readFile(dst), QByteArray("new content"));
 
-    const auto leftovers = QDir(dstDir.path()).entryList({QStringLiteral(".finder_tmp_*")}, QDir::Files | QDir::Hidden);
+    const auto leftovers =
+        QDir(dstDir.path())
+            .entryList({QStringLiteral(".finder_tmp_*")}, QDir::Files | QDir::Hidden);
     QVERIFY2(leftovers.isEmpty(), "temporary copy files must be cleaned up");
 }
 
-void TestOperations::testSkipIsNotReportedAsMoved()
-{
+void TestOperations::testSkipIsNotReportedAsMoved() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -288,8 +283,7 @@ void TestOperations::testSkipIsNotReportedAsMoved()
     QCOMPARE(readFile(moveDst), QByteArray("existing"));
 }
 
-void TestOperations::testCopyFifoDoesNotHang()
-{
+void TestOperations::testCopyFifoDoesNotHang() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -310,13 +304,13 @@ void TestOperations::testCopyFifoDoesNotHang()
     QVERIFY2(res.success, qPrintable(res.errorMessage));
     QVERIFY(QFile::exists(dstDir.path() + QStringLiteral("/tree/plain.txt")));
 
-    struct stat st {};
-    QVERIFY(::lstat(QFile::encodeName(dstDir.path() + QStringLiteral("/tree/pipe")).constData(), &st) == 0);
+    struct stat st{};
+    QVERIFY(::lstat(QFile::encodeName(dstDir.path() + QStringLiteral("/tree/pipe")).constData(),
+                    &st) == 0);
     QVERIFY2(S_ISFIFO(st.st_mode), "FIFO must be recreated, not opened and streamed");
 }
 
-void TestOperations::testCopyPreservesDirectoryMode()
-{
+void TestOperations::testCopyPreservesDirectoryMode() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -332,13 +326,13 @@ void TestOperations::testCopyPreservesDirectoryMode()
     const OperationResult res = waitForOperation(engine, spy);
     QVERIFY2(res.success, qPrintable(res.errorMessage));
 
-    struct stat st {};
-    QVERIFY(::lstat(QFile::encodeName(dstDir.path() + QStringLiteral("/private")).constData(), &st) == 0);
+    struct stat st{};
+    QVERIFY(::lstat(QFile::encodeName(dstDir.path() + QStringLiteral("/private")).constData(),
+                    &st) == 0);
     QCOMPARE(static_cast<int>(st.st_mode & 0777), 0700);
 }
 
-void TestOperations::testCopyPreservesFileMetadata()
-{
+void TestOperations::testCopyPreservesFileMetadata() {
     QTemporaryDir srcDir;
     QTemporaryDir dstDir;
     QVERIFY(srcDir.isValid() && dstDir.isValid());
@@ -349,20 +343,18 @@ void TestOperations::testCopyPreservesFileMetadata()
     file.write("metadata payload");
     file.close();
 
-    QVERIFY(QFile::setPermissions(srcFile,
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup));
+    QVERIFY(QFile::setPermissions(srcFile, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                               QFileDevice::ReadGroup));
 
-    const struct timespec times[2] = {
-        {1600000000, 123000000},
-        {1600000000, 456000000}
-    };
+    const struct timespec times[2] = {{1600000000, 123000000}, {1600000000, 456000000}};
     QVERIFY(::utimensat(AT_FDCWD, QFile::encodeName(srcFile).constData(), times, 0) == 0);
 
     const QByteArray xattrName = QByteArrayLiteral("user.finder.test");
     const QByteArray xattrValue = QByteArrayLiteral("metadata-value");
     const QByteArray srcBytes = QFile::encodeName(srcFile);
-    const bool xattrSet = ::setxattr(srcBytes.constData(), xattrName.constData(),
-                                     xattrValue.constData(), static_cast<size_t>(xattrValue.size()), 0) == 0;
+    const bool xattrSet =
+        ::setxattr(srcBytes.constData(), xattrName.constData(), xattrValue.constData(),
+                   static_cast<size_t>(xattrValue.size()), 0) == 0;
 
     FileOperationEngine engine;
     QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
@@ -372,8 +364,8 @@ void TestOperations::testCopyPreservesFileMetadata()
     const QString dstFile = dstDir.filePath(QStringLiteral("metadata.txt"));
     QVERIFY(QFile::exists(dstFile));
 
-    struct stat srcStat {};
-    struct stat dstStat {};
+    struct stat srcStat{};
+    struct stat dstStat{};
     QVERIFY(::stat(QFile::encodeName(srcFile).constData(), &srcStat) == 0);
     QVERIFY(::stat(QFile::encodeName(dstFile).constData(), &dstStat) == 0);
     QCOMPARE(dstStat.st_mode & 07777, srcStat.st_mode & 07777);
@@ -389,8 +381,7 @@ void TestOperations::testCopyPreservesFileMetadata()
     }
 }
 
-void TestOperations::testOperationsAreQueued()
-{
+void TestOperations::testOperationsAreQueued() {
     QTemporaryDir firstSrc;
     QTemporaryDir secondSrc;
     QTemporaryDir dstDir;
@@ -416,6 +407,94 @@ void TestOperations::testOperationsAreQueued()
 
     QVERIFY(QFile::exists(dstDir.path() + QStringLiteral("/first.txt")));
     QVERIFY(QFile::exists(dstDir.path() + QStringLiteral("/second.txt")));
+}
+
+void TestOperations::testCopyFolderMerge() {
+    QTemporaryDir srcRoot;
+    QTemporaryDir dstRoot;
+    QVERIFY(srcRoot.isValid() && dstRoot.isValid());
+
+    const QString source = srcRoot.filePath(QStringLiteral("project"));
+    const QString destination = dstRoot.filePath(QStringLiteral("project"));
+    QVERIFY(QDir().mkpath(source + QStringLiteral("/sub")));
+    QVERIFY(QDir().mkpath(destination));
+    writeFile(source + QStringLiteral("/new.txt"), "new");
+    writeFile(source + QStringLiteral("/sub/nested.txt"), "nested");
+    writeFile(destination + QStringLiteral("/keep.txt"), "keep");
+    writeFile(destination + QStringLiteral("/new.txt"), "old");
+
+    FileOperationEngine engine;
+    int folderConflicts = 0;
+    int fileConflicts = 0;
+    connect(
+        &engine, &FileOperationEngine::conflictEncountered, &engine,
+        [&](const OperationConflict& conflict, ConflictResolution& resolution, bool& applyToAll) {
+            if (conflict.isFolderConflict()) {
+                ++folderConflicts;
+                resolution = ConflictResolution::Merge;
+                applyToAll = true;
+            } else {
+                ++fileConflicts;
+                resolution = ConflictResolution::Replace;
+                applyToAll = true;
+            }
+        });
+
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems({source}, dstRoot.path(), ConflictResolution::Ask));
+    const OperationResult result = waitForOperation(engine, spy);
+
+    QVERIFY(result.success);
+    QCOMPARE(folderConflicts, 1);
+    QCOMPARE(fileConflicts, 1);
+    QCOMPARE(readFile(destination + QStringLiteral("/keep.txt")), QByteArray("keep"));
+    QCOMPARE(readFile(destination + QStringLiteral("/new.txt")), QByteArray("new"));
+    QCOMPARE(readFile(destination + QStringLiteral("/sub/nested.txt")), QByteArray("nested"));
+    QVERIFY(QDir(source).exists());
+}
+
+void TestOperations::testMoveFolderMerge() {
+    QTemporaryDir srcRoot;
+    QTemporaryDir dstRoot;
+    QVERIFY(srcRoot.isValid() && dstRoot.isValid());
+
+    const QString source = srcRoot.filePath(QStringLiteral("project"));
+    const QString destination = dstRoot.filePath(QStringLiteral("project"));
+    QVERIFY(QDir().mkpath(source));
+    QVERIFY(QDir().mkpath(destination));
+    writeFile(source + QStringLiteral("/new.txt"), "new");
+    writeFile(destination + QStringLiteral("/keep.txt"), "keep");
+
+    FileOperationEngine engine;
+    int folderConflicts = 0;
+    connect(
+        &engine, &FileOperationEngine::conflictEncountered, &engine,
+        [&](const OperationConflict& conflict, ConflictResolution& resolution, bool& applyToAll) {
+            if (conflict.isFolderConflict()) {
+                ++folderConflicts;
+                resolution = ConflictResolution::Merge;
+                applyToAll = true;
+            }
+        });
+
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.moveItems({source}, dstRoot.path(), ConflictResolution::Ask));
+    const OperationResult result = waitForOperation(engine, spy);
+
+    QVERIFY(result.success);
+    QCOMPARE(folderConflicts, 1);
+    QCOMPARE(readFile(destination + QStringLiteral("/keep.txt")), QByteArray("keep"));
+    QCOMPARE(readFile(destination + QStringLiteral("/new.txt")), QByteArray("new"));
+    QVERIFY(!QDir(source).exists());
+}
+
+void TestOperations::testPauseAndResumeState() {
+    FileOperationEngine engine;
+    QVERIFY(!engine.isPaused());
+    engine.pause();
+    QVERIFY(engine.isPaused());
+    engine.resume();
+    QVERIFY(!engine.isPaused());
 }
 
 QTEST_MAIN(TestOperations)

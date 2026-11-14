@@ -42,7 +42,8 @@ Designed as a native desktop application with genuine filesystem operations, res
   - Show item info (size and item count) and icon preview thumbnails.
   - Manual icon arrangement with **Clean Up** and **Align to Grid**.
   - “Use as Defaults” applies the current options to folders without their own overrides.
-* **View chrome controls**: show/hide the sidebar, toolbar, path bar, and status bar; all states persist.
+* **View chrome controls**: show/hide the sidebar, toolbar, path bar, status bar, and preview pane; all states persist.
+* **Preview Pane (`Ctrl+Shift+P`)**: docked preview for icon, list, and gallery views with image, text, PDF, Office, video, and audio metadata.
 * **Full-screen mode (`F11`)**.
 
 ### Search & Smart Folders
@@ -64,8 +65,13 @@ Designed as a native desktop application with genuine filesystem operations, res
 ### 2. Preview (`Space`)
 * Dedicated floating HUD overlay.
 * Instant inspection of images, source code, text files, and multi-page PDFs (via `Poppler-Qt6`).
+* Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, and related formats) are converted on demand through LibreOffice and rendered from a cached PDF. The first preview can take a few seconds; later previews are fast.
 * Video playback and audio playback with play/pause, seek slider, and elapsed/total time (Qt Multimedia, when available).
 * Previous (`◀`) and Next (`▶`) navigation arrows to flip through selected items.
+* PDF/Office page navigation with page count.
+* Images open fitted to the preview window; zoom (`+` / `-`), fit/reset (`0`), rotate (`R`), and Ctrl+wheel zoom are available when needed.
+* Slideshow toggle (`S`) for multi-item previews.
+* Full-screen mode (`F11`).
 * Dismissible instantly with `Space` or `Esc`.
 
 ### 3. File Operations & Data Integrity Engine
@@ -73,12 +79,18 @@ Designed as a native desktop application with genuine filesystem operations, res
 * **Safe Chunked Streams**: Operations stream data in 64 KB buffers, allowing instant cancellation and real-time progress calculations (speed, transferred bytes, item counts).
 * **Temporary File Strategy**: Data is written to hidden temporary files first and then atomically renamed into place upon completion to prevent corrupted partial files.
 * **Cross-Filesystem Moves**: When moving across distinct mount points, atomic renames fall back to verified recursive copying and source cleanup. Sources are never deleted if destination transfers fail.
-* **Conflict Resolution**: When a destination file collision occurs, users are prompted with an interactive conflict dialog:
+* **Conflict Resolution**: When a destination collision occurs, users are prompted with an interactive conflict dialog:
+  - *Merge* for folders (keeps existing contents and merges the incoming tree)
   - *Replace*
   - *Keep Both* (auto-renames, e.g. `document copy.txt`)
   - *Skip*
   - *Cancel*
-  - *Apply to all* option
+  - Separate *Apply to all folder conflicts* and *Apply to all file conflicts* options
+* **Operation Controls**:
+  - Pause / Resume long-running copy, move, duplicate, Trash, and delete operations
+  - Skip the current file without stopping the whole task
+  - Live speed, elapsed progress, current file, and estimated time remaining
+  - Queue-aware *Skip Task* and *Stop All* controls
 * **Undo & Redo (`Ctrl+Z` / `Ctrl+Shift+Z`)**: Reversible operations (Folder creation, Renaming, Moving, and Trashing) are tracked on an bounded undo stack.
 
 ### 4. Freedesktop.org XDG Trash Specification
@@ -114,7 +126,7 @@ Designed as a native desktop application with genuine filesystem operations, res
 - **Build System**: CMake 3.22+ and Ninja.
 - **Qt Framework**: Qt 6.4+ (`QtCore`, `QtGui`, `QtWidgets`, `QtConcurrent`, `QtSvg`, `QtTest`).
 - **Required**: `libarchive`.
-- **Optional**: `poppler-qt6` (PDF preview), `qt6-multimedia` (Preview video/audio), and `kwindowsystem` (KF6, reliable window activation on KDE Plasma Wayland).
+- **Optional**: `poppler-qt6` (PDF preview), `qt6-multimedia` (Preview video/audio), `libreoffice` (Office document previews), and `kwindowsystem` (KF6, reliable window activation on KDE Plasma Wayland).
 
 ### Installing Dependencies on Arch / Manjaro / CachyOS:
 ```bash

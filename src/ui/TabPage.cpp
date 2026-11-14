@@ -1,11 +1,14 @@
 #include "TabPage.h"
+#include "PreviewPane.h"
 #include <QAbstractItemView>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
 #include <QItemSelection>
+#include <QItemSelectionModel>
 #include <QMouseEvent>
 #include <QRegularExpression>
+#include <QSplitter>
 #include <QStyle>
 #include <QVBoxLayout>
 
@@ -49,7 +52,29 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     m_searchScopeBar->hide();
     layout->addWidget(m_searchScopeBar);
 
-    layout->addWidget(m_viewStack);
+    m_viewSplitter = new QSplitter(Qt::Horizontal, this);
+    m_viewSplitter->setHandleWidth(1);
+    m_viewSplitter->addWidget(m_viewStack);
+
+    m_previewPane = new PreviewPane(m_viewSplitter);
+    m_previewPane->setMinimumWidth(220);
+    m_viewSplitter->addWidget(m_previewPane);
+    m_viewSplitter->setStretchFactor(0, 1);
+    m_viewSplitter->setStretchFactor(1, 0);
+    layout->addWidget(m_viewSplitter, 1);
+
+    connect(m_previewPane, &PreviewPane::previewRequested, this, &TabPage::quickLookRequested);
+    connect(m_previewPane, &PreviewPane::propertiesRequested, this, &TabPage::getInfoRequested);
+
+    auto connectPreviewSelection = [this](QAbstractItemView* view) {
+        if (view && view->selectionModel()) {
+            connect(view->selectionModel(), &QItemSelectionModel::currentChanged, this,
+                    [this](const QModelIndex&, const QModelIndex&) { updatePreviewPane(); });
+        }
+    };
+    connectPreviewSelection(m_iconView);
+    connectPreviewSelection(m_listView);
+    connectPreviewSelection(m_galleryView->filmstripView());
 
     m_searchEngine = new SearchEngine(this);
     connect(m_searchEngine, &SearchEngine::itemsFound, this, &TabPage::onSearchItemsFound);
@@ -142,6 +167,7 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     m_galleryView->installEventFilter(this);
 
     setViewMode(AppSettings::instance().viewMode());
+    setPreviewPaneVisible(AppSettings::instance().showPreviewPane());
     navigateTo(initialPath, false);
     applyViewOptions();
 }
@@ -216,6 +242,8 @@ void TabPage::navigateTo(const QString& path, bool recordHistory) {
     }
 
     m_currentPath = cleanPath;
+    if (m_previewPane)
+        m_previewPane->clear();
 
     if (AppSettings::instance().rememberFolderViewModes()) {
         auto savedMode = AppSettings::instance().folderViewMode(m_currentPath);
@@ -358,6 +386,8 @@ void TabPage::setViewMode(ViewMode mode) {
         m_model->setRootPath(m_currentPath);
     }
     applyViewOptions();
+    applyPreviewPaneVisibility();
+    updatePreviewPane();
 }
 
 void TabPage::setShowHidden(bool show) {
@@ -422,6 +452,37 @@ void TabPage::cleanUpIconView() {
 void TabPage::setCalculateFolderSizes(bool enabled) {
     if (m_model) {
         m_model->setCalculateFolderSizes(enabled);
+    }
+}
+
+void TabPage::setPreviewPaneVisible(bool visible) {
+    m_previewPaneVisible = visible;
+    applyPreviewPaneVisibility();
+    updatePreviewPane();
+}
+
+void TabPage::applyPreviewPaneVisibility() {
+    if (!m_previewPane)
+        return;
+    const bool visible = m_previewPaneVisible && m_viewMode != ViewMode::Column;
+    m_previewPane->setVisible(visible);
+    if (visible && m_viewSplitter) {
+        const int total = m_viewSplitter->width();
+        if (total > 320) {
+            m_viewSplitter->setSizes({qMax(200, total - 280), 280});
+        }
+    }
+}
+
+void TabPage::updatePreviewPane() {
+    if (!m_previewPane || !m_previewPaneVisible || m_viewMode == ViewMode::Column) {
+        return;
+    }
+    const QString path = selectedFilePath();
+    if (path.isEmpty()) {
+        m_previewPane->clear();
+    } else {
+        m_previewPane->setFile(path);
     }
 }
 

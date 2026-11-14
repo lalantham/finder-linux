@@ -5,6 +5,8 @@
 #include "GalleryView.h"
 #include "IconView.h"
 #include "ListView.h"
+#include "PreviewManager.h"
+#include "PreviewPane.h"
 #include "TabManager.h"
 #include "TabPage.h"
 #include "TagManager.h"
@@ -13,7 +15,9 @@
 #include <QDir>
 #include <QFile>
 #include <QLineEdit>
+#include <QProcess>
 #include <QSignalSpy>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -42,6 +46,9 @@ private slots:
     void testIconViewViewOptions();
     void testManualIconPositions();
     void testTabPageSmartFolder();
+    void testPreviewPaneToggle();
+    void testOfficePreviewDetection();
+    void testOfficePreviewConversion();
     void testAppChooserDialog();
 
 private:
@@ -724,6 +731,92 @@ void TestSelection::testTabPageSmartFolder() {
 
     page.navigateTo(searchDirectory.path());
     QVERIFY(!page.currentPath().startsWith(QStringLiteral("smart://")));
+}
+
+void TestSelection::testPreviewPaneToggle() {
+    TabPage page(m_tempDir.path());
+    auto* pane = page.findChild<PreviewPane*>();
+    QVERIFY(pane);
+    page.setViewMode(ViewMode::List);
+
+    page.setPreviewPaneVisible(false);
+    QVERIFY(!page.isPreviewPaneVisible());
+    QVERIFY(pane->isHidden());
+
+    page.setPreviewPaneVisible(true);
+    QVERIFY(page.isPreviewPaneVisible());
+    QVERIFY(!pane->isHidden());
+
+    page.setViewMode(ViewMode::Column);
+    QVERIFY(pane->isHidden());
+
+    page.setViewMode(ViewMode::List);
+    QVERIFY(!pane->isHidden());
+}
+
+void TestSelection::testOfficePreviewDetection() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString docx = dir.filePath(QStringLiteral("report.docx"));
+    const QString odt = dir.filePath(QStringLiteral("notes.odt"));
+    const QString text = dir.filePath(QStringLiteral("notes.txt"));
+    for (const QString& path : {docx, odt, text}) {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+        f.close();
+    }
+
+    auto& previews = PreviewManager::instance();
+    QVERIFY(previews.isOffice(docx));
+    QVERIFY(previews.isOffice(odt));
+    QVERIFY(!previews.isOffice(text));
+}
+
+void TestSelection::testOfficePreviewConversion() {
+    const QString program = QStandardPaths::findExecutable(QStringLiteral("libreoffice"));
+    if (program.isEmpty()) {
+        QSKIP("LibreOffice is not installed");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString source = dir.filePath(QStringLiteral("office-source.txt"));
+    QFile sourceFile(source);
+    QVERIFY(sourceFile.open(QIODevice::WriteOnly));
+    sourceFile.write("Office preview conversion test");
+    sourceFile.close();
+
+    QProcess convert;
+    convert.start(program,
+                  {QStringLiteral("--headless"), QStringLiteral("--norestore"),
+                   QStringLiteral("--nofirststartwizard"), QStringLiteral("--convert-to"),
+                   QStringLiteral("docx"), QStringLiteral("--outdir"), dir.path(), source});
+    if (!convert.waitForFinished(20000) || convert.exitCode() != 0) {
+        QSKIP("LibreOffice could not create a test document");
+    }
+
+    const QString docx = dir.filePath(QStringLiteral("office-source.docx"));
+    QVERIFY2(QFileInfo(docx).size() > 0, "test document was not created");
+
+    auto& previews = PreviewManager::instance();
+    QString error;
+    const QString pdf = previews.officePdfPath(docx, &error);
+    QVERIFY2(!pdf.isEmpty(), qPrintable(error));
+    QVERIFY(QFileInfo(pdf).size() > 0);
+    QVERIFY(QFile::exists(pdf));
+
+    QVERIFY(previews.pdfPageCount(pdf) >= 1);
+    const QPixmap rendered = previews.getPdfPreview(pdf, QSize(320, 240), 0);
+    QVERIFY(!rendered.isNull());
+
+    // The UI path requests conversion asynchronously.
+    QSignalSpy readySpy(&previews, &PreviewManager::officePreviewReady);
+    previews.requestOfficePreview(docx);
+    QVERIFY(readySpy.wait(20000));
+    QCOMPARE(readySpy.at(0).at(0).toString(), docx);
+    QVERIFY(QFile::exists(readySpy.at(0).at(1).toString()));
 }
 
 void TestSelection::testAppChooserDialog() {

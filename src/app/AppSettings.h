@@ -157,6 +157,12 @@ public:
     void setShowStatusBar(bool show) {
         m_showStatusBar = show;
     }
+    [[nodiscard]] bool showPreviewPane() const noexcept {
+        return m_showPreviewPane;
+    }
+    void setShowPreviewPane(bool show) {
+        m_showPreviewPane = show;
+    }
 
     [[nodiscard]] AppTheme theme() const noexcept {
         return m_theme;
@@ -289,6 +295,7 @@ private:
     bool m_showToolbar{true};
     bool m_showPathBar{true};
     bool m_showStatusBar{true};
+    bool m_showPreviewPane{false};
     AppTheme m_theme{AppTheme::System};
     QString m_defaultPath;
     QStringList m_customFavorites;

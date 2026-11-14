@@ -1,8 +1,8 @@
 #pragma once
 
+#include <QDateTime>
 #include <QString>
 #include <QStringList>
-#include <QDateTime>
 
 enum class OperationType {
     Copy,
@@ -18,13 +18,7 @@ enum class OperationType {
     Extract
 };
 
-enum class ConflictResolution {
-    Ask,
-    Replace,
-    Skip,
-    KeepBoth,
-    Cancel
-};
+enum class ConflictResolution { Ask, Merge, Replace, Skip, KeepBoth, Cancel };
 
 struct OperationConflict {
     QString sourcePath;
@@ -33,6 +27,12 @@ struct OperationConflict {
     qint64 destinationSize{0};
     QDateTime sourceModified;
     QDateTime destinationModified;
+    bool sourceIsDir{false};
+    bool destinationIsDir{false};
+
+    [[nodiscard]] bool isFolderConflict() const {
+        return sourceIsDir && destinationIsDir;
+    }
 };
 
 struct OperationProgress {
@@ -43,6 +43,8 @@ struct OperationProgress {
     int itemsProcessed{0};
     int totalItems{0};
     double speedBytesPerSec{0.0};
+    qint64 elapsedMs{0};
+    qint64 remainingMs{-1};
     int percent{0};
 };
 

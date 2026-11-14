@@ -155,6 +155,7 @@ private:
     QAction* m_showToolbarAction{nullptr};
     QAction* m_showPathBarAction{nullptr};
     QAction* m_showStatusBarAction{nullptr};
+    QAction* m_showPreviewPaneAction{nullptr};
     QAction* m_fullScreenAction{nullptr};
 
     QStringList m_clipboardPaths;

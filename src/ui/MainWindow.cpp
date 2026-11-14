@@ -220,6 +220,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &FileOperationEngine::cancelAll);
     connect(m_progressDialog, &ProgressDialog::skipRequested, m_opEngine,
             &FileOperationEngine::cancel);
+    connect(m_progressDialog, &ProgressDialog::skipCurrentFileRequested, m_opEngine,
+            &FileOperationEngine::skipCurrentFile);
+    connect(m_progressDialog, &ProgressDialog::pauseRequested, this, [this]() {
+        m_opEngine->pause();
+        m_progressDialog->setPaused(true);
+    });
+    connect(m_progressDialog, &ProgressDialog::resumeRequested, this, [this]() {
+        m_opEngine->resume();
+        m_progressDialog->setPaused(false);
+    });
 
     qApp->installEventFilter(this);
 
@@ -820,6 +830,23 @@ void MainWindow::setupMenusAndShortcuts() {
         AppSettings::instance().setShowPathBar(checked);
         AppSettings::instance().save();
         m_toolbar->setPathBarVisible(checked);
+    });
+
+    m_showPreviewPaneAction = viewMenu->addAction(QStringLiteral("Show Preview Pane"));
+    m_showPreviewPaneAction->setCheckable(true);
+    m_showPreviewPaneAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+    m_showPreviewPaneAction->setChecked(AppSettings::instance().showPreviewPane());
+    connect(m_showPreviewPaneAction, &QAction::toggled, this, [this](bool checked) {
+        AppSettings::instance().setShowPreviewPane(checked);
+        AppSettings::instance().save();
+        for (int i = 0; i < m_tabManager->count(); ++i) {
+            if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
+                if (split->primaryPage())
+                    split->primaryPage()->setPreviewPaneVisible(checked);
+                if (split->secondaryPage())
+                    split->secondaryPage()->setPreviewPaneVisible(checked);
+            }
+        }
     });
 
     m_showStatusBarAction = viewMenu->addAction(QStringLiteral("Show Status Bar"));
@@ -2505,6 +2532,7 @@ void MainWindow::onSearchTextChanged(const QString& query) {
 
 void MainWindow::onOperationStarted(OperationType type, int totalItems, qint64 totalBytes) {
     m_operationStartTime = QDateTime::currentMSecsSinceEpoch();
+    m_opEngine->resume();
     m_progressDialog->setOperation(type, totalItems, totalBytes);
 }
 

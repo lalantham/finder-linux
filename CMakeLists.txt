@@ -93,6 +93,8 @@ set(FINDER_UI_SOURCES
     src/ui/SidebarSettingsDialog.h
     src/ui/ViewOptionsDialog.cpp
     src/ui/ViewOptionsDialog.h
+    src/ui/PreviewPane.cpp
+    src/ui/PreviewPane.h
     src/ui/SmartFolderDialog.cpp
     src/ui/SmartFolderDialog.h
     src/ui/TabPage.cpp

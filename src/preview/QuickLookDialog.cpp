@@ -1,25 +1,28 @@
 #include "QuickLookDialog.h"
 #include "PreviewManager.h"
 #include "TagManager.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QFileInfo>
-#include <QScreen>
 #include <QGuiApplication>
-#include <QUrl>
+#include <QHBoxLayout>
 #include <QIcon>
+#include <QResizeEvent>
+#include <QScreen>
+#include <QTimer>
+#include <QTransform>
+#include <QUrl>
+#include <QVBoxLayout>
+#include <QWheelEvent>
 #include <limits>
 
 #ifdef HAVE_QT_MULTIMEDIA
-#include <QMediaPlayer>
 #include <QAudioOutput>
-#include <QVideoWidget>
+#include <QMediaPlayer>
 #include <QSlider>
+#include <QVideoWidget>
 #endif
 
 QuickLookDialog::QuickLookDialog(QWidget* parent)
-    : QDialog(parent, Qt::Window | Qt::FramelessWindowHint)
-{
+    : QDialog(parent, Qt::Window | Qt::FramelessWindowHint) {
     setAttribute(Qt::WA_TranslucentBackground, false);
     resize(720, 540);
 
@@ -68,6 +71,21 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
     headerLayout->addSpacing(8);
     headerLayout->addLayout(titleContainer);
     headerLayout->addStretch();
+
+    m_prevPageBtn = new QPushButton(QStringLiteral("‹"), this);
+    m_prevPageBtn->setFixedSize(26, 26);
+    m_prevPageBtn->setFocusPolicy(Qt::NoFocus);
+    m_pageLabel = new QLabel(this);
+    m_pageLabel->setStyleSheet(QStringLiteral("color: #aaaaaa; font-size: 11px;"));
+    m_nextPageBtn = new QPushButton(QStringLiteral("›"), this);
+    m_nextPageBtn->setFixedSize(26, 26);
+    m_nextPageBtn->setFocusPolicy(Qt::NoFocus);
+    m_prevPageBtn->hide();
+    m_pageLabel->hide();
+    m_nextPageBtn->hide();
+    headerLayout->addWidget(m_prevPageBtn);
+    headerLayout->addWidget(m_pageLabel);
+    headerLayout->addWidget(m_nextPageBtn);
     headerLayout->addWidget(closeBtn);
     mainLayout->addLayout(headerLayout);
 
@@ -142,22 +160,19 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
                 .arg(minutes, 2, 10, QLatin1Char('0'))
                 .arg(seconds, 2, 10, QLatin1Char('0'));
         }
-        return QStringLiteral("%1:%2")
-            .arg(minutes)
-            .arg(seconds, 2, 10, QLatin1Char('0'));
+        return QStringLiteral("%1:%2").arg(minutes).arg(seconds, 2, 10, QLatin1Char('0'));
     };
 
     connect(m_playPauseBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_player) return;
+        if (!m_player)
+            return;
         if (m_player->playbackState() == QMediaPlayer::PlayingState) {
             m_player->pause();
         } else {
             m_player->play();
         }
     });
-    connect(m_positionSlider, &QSlider::sliderPressed, this, [this]() {
-        m_seekDragging = true;
-    });
+    connect(m_positionSlider, &QSlider::sliderPressed, this, [this]() { m_seekDragging = true; });
     connect(m_positionSlider, &QSlider::sliderReleased, this, [this]() {
         m_seekDragging = false;
         if (m_player) {
@@ -171,35 +186,31 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
         m_positionLabel->setText(formatTime(position));
     });
     connect(m_player, &QMediaPlayer::durationChanged, this, [this, formatTime](qint64 duration) {
-        const int bounded = static_cast<int>(qMin<qint64>(duration,
-            std::numeric_limits<int>::max()));
+        const int bounded =
+            static_cast<int>(qMin<qint64>(duration, std::numeric_limits<int>::max()));
         m_positionSlider->setRange(0, bounded);
         m_durationLabel->setText(formatTime(duration));
     });
     connect(m_player, &QMediaPlayer::playbackStateChanged, this,
-        [this](QMediaPlayer::PlaybackState state) {
-            m_playPauseBtn->setText(
-                state == QMediaPlayer::PlayingState ? QStringLiteral("⏸")
-                                                    : QStringLiteral("▶"));
-        });
-    connect(m_player, &QMediaPlayer::errorOccurred, this,
-        [this](QMediaPlayer::Error error) {
-            if (error == QMediaPlayer::NoError) {
-                return;
-            }
-            const QString failedSource = m_player->source().toLocalFile();
-            if (!m_files.isEmpty() && failedSource != m_files.value(m_currentIndex)) {
-                return;
-            }
-            stopMediaPlayback();
-            m_fallbackIconLabel->setPixmap(
-                QIcon::fromTheme(QStringLiteral("dialog-error")).pixmap(96, 96));
-            m_fallbackTextLabel->setText(QStringLiteral("Playback failed"));
-            m_fallbackWidget->show();
-        });
-    connect(this, &QDialog::finished, this, [this]() {
+            [this](QMediaPlayer::PlaybackState state) {
+                m_playPauseBtn->setText(state == QMediaPlayer::PlayingState ? QStringLiteral("⏸")
+                                                                            : QStringLiteral("▶"));
+            });
+    connect(m_player, &QMediaPlayer::errorOccurred, this, [this](QMediaPlayer::Error error) {
+        if (error == QMediaPlayer::NoError) {
+            return;
+        }
+        const QString failedSource = m_player->source().toLocalFile();
+        if (!m_files.isEmpty() && failedSource != m_files.value(m_currentIndex)) {
+            return;
+        }
         stopMediaPlayback();
+        m_fallbackIconLabel->setPixmap(
+            QIcon::fromTheme(QStringLiteral("dialog-error")).pixmap(96, 96));
+        m_fallbackTextLabel->setText(QStringLiteral("Playback failed"));
+        m_fallbackWidget->show();
     });
+    connect(this, &QDialog::finished, this, [this]() { stopMediaPlayback(); });
 #endif
 
     // Fallback view
@@ -217,43 +228,42 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
 
     connect(m_prevBtn, &QPushButton::clicked, this, &QuickLookDialog::showPrevious);
     connect(m_nextBtn, &QPushButton::clicked, this, &QuickLookDialog::showNext);
+    connect(&PreviewManager::instance(), &PreviewManager::officePreviewReady, this,
+            &QuickLookDialog::onOfficePreviewReady);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     // Apply preview HUD styling
-    setStyleSheet(QStringLiteral(
-        "QuickLookDialog {"
-        "  background-color: #242528;"
-        "  color: #f0f0f0;"
-        "  border: 1px solid #3c3d40;"
-        "  border-radius: 12px;"
-        "}"
-        "QLabel { color: #f0f0f0; }"
-        "QPushButton {"
-        "  background: rgba(255, 255, 255, 0.12);"
-        "  color: #ffffff;"
-        "  border: 1px solid rgba(255, 255, 255, 0.18);"
-        "  border-radius: 6px;"
-        "  font-size: 11px;"
-        "}"
-        "QPushButton:hover {"
-        "  background: rgba(255, 255, 255, 0.22);"
-        "}"
-        "QTextEdit {"
-        "  background-color: #1a1a1c;"
-        "  color: #dcdcdc;"
-        "  border: 1px solid #3c3d40;"
-        "  border-radius: 8px;"
-        "  padding: 8px;"
-        "}"
-        "QScrollArea {"
-        "  border: none;"
-        "  background-color: transparent;"
-        "}"
-    ));
+    setStyleSheet(QStringLiteral("QuickLookDialog {"
+                                 "  background-color: #242528;"
+                                 "  color: #f0f0f0;"
+                                 "  border: 1px solid #3c3d40;"
+                                 "  border-radius: 12px;"
+                                 "}"
+                                 "QLabel { color: #f0f0f0; }"
+                                 "QPushButton {"
+                                 "  background: rgba(255, 255, 255, 0.12);"
+                                 "  color: #ffffff;"
+                                 "  border: 1px solid rgba(255, 255, 255, 0.18);"
+                                 "  border-radius: 6px;"
+                                 "  font-size: 11px;"
+                                 "}"
+                                 "QPushButton:hover {"
+                                 "  background: rgba(255, 255, 255, 0.22);"
+                                 "}"
+                                 "QTextEdit {"
+                                 "  background-color: #1a1a1c;"
+                                 "  color: #dcdcdc;"
+                                 "  border: 1px solid #3c3d40;"
+                                 "  border-radius: 8px;"
+                                 "  padding: 8px;"
+                                 "}"
+                                 "QScrollArea {"
+                                 "  border: none;"
+                                 "  background-color: transparent;"
+                                 "}"));
 }
 
-void QuickLookDialog::stopMediaPlayback()
-{
+void QuickLookDialog::stopMediaPlayback() {
 #ifdef HAVE_QT_MULTIMEDIA
     if (m_player) {
         m_player->stop();
@@ -282,37 +292,149 @@ void QuickLookDialog::stopMediaPlayback()
 #endif
 }
 
-void QuickLookDialog::setFiles(const QStringList& filePaths, int currentIndex)
-{
+void QuickLookDialog::stopSlideshow() {
+    m_slideshow = false;
+    if (m_slideshowTimer) {
+        m_slideshowTimer->stop();
+    }
+}
+
+void QuickLookDialog::resetPdfState() {
+    m_pdfPath.clear();
+    m_pdfPage = 0;
+    m_pdfPageCount = 0;
+    if (m_pageLabel)
+        m_pageLabel->hide();
+    if (m_prevPageBtn)
+        m_prevPageBtn->hide();
+    if (m_nextPageBtn)
+        m_nextPageBtn->hide();
+}
+
+void QuickLookDialog::displayPdfPage() {
+    if (m_pdfPath.isEmpty()) {
+        return;
+    }
+    const QPixmap pix =
+        PreviewManager::instance().getPdfPreview(m_pdfPath, QSize(680, 440), m_pdfPage);
+    if (pix.isNull()) {
+        m_fallbackIconLabel->setPixmap(
+            QIcon::fromTheme(QStringLiteral("dialog-error")).pixmap(96, 96));
+        m_fallbackTextLabel->setText(QStringLiteral("Could not render this document page."));
+        m_fallbackWidget->show();
+        m_imageScrollArea->hide();
+        m_textViewer->hide();
+        return;
+    }
+
+    m_imageBase = pix;
+    m_zoom = 1.0;
+    m_rotation = 0;
+    m_fitImage = true;
+    fitImageToView();
+    QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
+    m_imageScrollArea->show();
+    m_fallbackWidget->hide();
+    m_textViewer->hide();
+
+    const bool multipage = m_pdfPageCount > 1;
+    m_pageLabel->setText(QStringLiteral("Page %1 of %2").arg(m_pdfPage + 1).arg(m_pdfPageCount));
+    m_pageLabel->setVisible(multipage);
+    m_prevPageBtn->setVisible(multipage);
+    m_nextPageBtn->setVisible(multipage);
+    m_prevPageBtn->setEnabled(m_pdfPage > 0);
+    m_nextPageBtn->setEnabled(m_pdfPage + 1 < m_pdfPageCount);
+}
+
+void QuickLookDialog::applyImageTransform() {
+    if (m_imageBase.isNull()) {
+        return;
+    }
+    QPixmap pix = m_imageBase;
+    if (m_rotation != 0) {
+        pix = pix.transformed(QTransform().rotate(m_rotation), Qt::SmoothTransformation);
+    }
+    if (!qFuzzyCompare(m_zoom, 1.0)) {
+        pix = pix.scaled(pix.size() * m_zoom, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    m_imageLabel->setPixmap(pix);
+}
+
+void QuickLookDialog::fitImageToView() {
+    if (m_imageBase.isNull() || !m_imageScrollArea) {
+        return;
+    }
+    QSize baseSize = m_imageBase.size();
+    if (m_rotation == 90 || m_rotation == 270) {
+        baseSize.transpose();
+    }
+    const QSize viewport = m_imageScrollArea->viewport()->size();
+    if (baseSize.isEmpty() || viewport.width() <= 8 || viewport.height() <= 8) {
+        return;
+    }
+
+    const qreal widthScale =
+        static_cast<qreal>(viewport.width() - 8) / static_cast<qreal>(baseSize.width());
+    const qreal heightScale =
+        static_cast<qreal>(viewport.height() - 8) / static_cast<qreal>(baseSize.height());
+    // Fit large images down to the window, but do not upscale small images.
+    m_zoom = qBound<qreal>(0.1, qMin<qreal>(1.0, qMin(widthScale, heightScale)), 4.0);
+    applyImageTransform();
+}
+
+void QuickLookDialog::showNextPage() {
+    if (m_pdfPath.isEmpty() || m_pdfPage + 1 >= m_pdfPageCount)
+        return;
+    ++m_pdfPage;
+    displayPdfPage();
+}
+
+void QuickLookDialog::showPreviousPage() {
+    if (m_pdfPath.isEmpty() || m_pdfPage <= 0)
+        return;
+    --m_pdfPage;
+    displayPdfPage();
+}
+
+void QuickLookDialog::toggleSlideshow() {
+    if (m_slideshow) {
+        stopSlideshow();
+        return;
+    }
+    if (m_files.size() < 2)
+        return;
+    m_slideshow = true;
+    m_slideshowTimer->start();
+}
+
+void QuickLookDialog::setFiles(const QStringList& filePaths, int currentIndex) {
     m_files = filePaths;
     m_currentIndex = (currentIndex >= 0 && currentIndex < m_files.size()) ? currentIndex : 0;
     updateContent();
 }
 
-void QuickLookDialog::showFile(const QString& filePath)
-{
+void QuickLookDialog::showFile(const QString& filePath) {
     m_files = QStringList{filePath};
     m_currentIndex = 0;
     updateContent();
 }
 
-void QuickLookDialog::showNext()
-{
-    if (m_files.isEmpty()) return;
+void QuickLookDialog::showNext() {
+    if (m_files.isEmpty())
+        return;
     m_currentIndex = static_cast<int>((m_currentIndex + 1) % m_files.size());
     updateContent();
 }
 
-void QuickLookDialog::showPrevious()
-{
-    if (m_files.isEmpty()) return;
+void QuickLookDialog::showPrevious() {
+    if (m_files.isEmpty())
+        return;
     int sz = static_cast<int>(m_files.size());
     m_currentIndex = (m_currentIndex - 1 + sz) % sz;
     updateContent();
 }
 
-void QuickLookDialog::updateContent()
-{
+void QuickLookDialog::updateContent() {
     stopMediaPlayback();
 
     if (m_files.isEmpty() || m_currentIndex < 0 || m_currentIndex >= m_files.size()) {
@@ -329,7 +451,8 @@ void QuickLookDialog::updateContent()
 
     m_titleLabel->setText(item.fileName());
     QString sub = QStringLiteral("%1 — %2 — Modified %3")
-        .arg(item.kind(), item.formattedSize(), item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm")));
+                      .arg(item.kind(), item.formattedSize(),
+                           item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm")));
     if (!item.tags().isEmpty()) {
         sub += QStringLiteral(" — Tags: %1").arg(item.tags().join(QStringLiteral(", ")));
     }
@@ -341,18 +464,21 @@ void QuickLookDialog::updateContent()
     auto& pm = PreviewManager::instance();
 
     if (pm.isImage(currentPath)) {
-        QPixmap pix = pm.getThumbnail(currentPath, QSize(680, 440));
-        m_imageLabel->setPixmap(pix);
+        m_imageBase = pm.getThumbnail(currentPath, QSize(1200, 900));
+        m_zoom = 1.0;
+        m_rotation = 0;
+        m_fitImage = true;
+        fitImageToView();
+        QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
         m_imageScrollArea->show();
         m_textViewer->hide();
         m_fallbackWidget->hide();
     } else if (pm.isPdf(currentPath)) {
-        QPixmap pix = pm.getPdfPreview(currentPath, QSize(680, 440));
-        if (!pix.isNull()) {
-            m_imageLabel->setPixmap(pix);
-            m_imageScrollArea->show();
-            m_textViewer->hide();
-            m_fallbackWidget->hide();
+        m_pdfPath = currentPath;
+        m_pdfPage = 0;
+        m_pdfPageCount = pm.pdfPageCount(currentPath);
+        if (m_pdfPageCount > 0) {
+            displayPdfPage();
         } else {
             m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
             m_fallbackTextLabel->setText(QStringLiteral("PDF Preview unavailable"));
@@ -360,6 +486,14 @@ void QuickLookDialog::updateContent()
             m_imageScrollArea->hide();
             m_textViewer->hide();
         }
+    } else if (pm.isOffice(currentPath)) {
+        m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
+        m_fallbackTextLabel->setText(
+            QStringLiteral("<b>%1</b><br>Converting document…").arg(item.fileName()));
+        m_fallbackWidget->show();
+        m_imageScrollArea->hide();
+        m_textViewer->hide();
+        pm.requestOfficePreview(currentPath);
     } else if (pm.isVideo(currentPath)) {
 #ifdef HAVE_QT_MULTIMEDIA
         if (m_player && m_videoWidget) {
@@ -374,16 +508,22 @@ void QuickLookDialog::updateContent()
         } else
 #endif
         {
-            QPixmap pix = pm.getThumbnail(currentPath, QSize(680, 440));
+            QPixmap pix = pm.getThumbnail(currentPath, QSize(1200, 900));
             if (!pix.isNull()) {
-                m_imageLabel->setPixmap(pix);
+                m_imageBase = pix;
+                m_zoom = 1.0;
+                m_rotation = 0;
+                m_fitImage = true;
+                fitImageToView();
+                QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
                 m_imageScrollArea->show();
                 m_textViewer->hide();
                 m_fallbackWidget->hide();
             } else {
                 m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
-                m_fallbackTextLabel->setText(QStringLiteral("<b>%1</b><br>%2<br>%3")
-                    .arg(item.fileName(), item.kind(), item.formattedSize()));
+                m_fallbackTextLabel->setText(
+                    QStringLiteral("<b>%1</b><br>%2<br>%3")
+                        .arg(item.fileName(), item.kind(), item.formattedSize()));
                 m_fallbackWidget->show();
                 m_imageScrollArea->hide();
                 m_textViewer->hide();
@@ -405,8 +545,9 @@ void QuickLookDialog::updateContent()
 #endif
         {
             m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
-            m_fallbackTextLabel->setText(QStringLiteral("<b>%1</b><br>%2<br>%3")
-                .arg(item.fileName(), item.kind(), item.formattedSize()));
+            m_fallbackTextLabel->setText(
+                QStringLiteral("<b>%1</b><br>%2<br>%3")
+                    .arg(item.fileName(), item.kind(), item.formattedSize()));
             m_fallbackWidget->show();
             m_imageScrollArea->hide();
             m_textViewer->hide();
@@ -419,17 +560,59 @@ void QuickLookDialog::updateContent()
     } else {
         m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
         m_fallbackTextLabel->setText(QStringLiteral("<b>%1</b><br>%2<br>%3")
-            .arg(item.fileName(), item.kind(), item.formattedSize()));
+                                         .arg(item.fileName(), item.kind(), item.formattedSize()));
         m_fallbackWidget->show();
         m_imageScrollArea->hide();
         m_textViewer->hide();
     }
 }
 
-void QuickLookDialog::keyPressEvent(QKeyEvent* event)
-{
+void QuickLookDialog::onOfficePreviewReady(const QString& sourcePath, const QString& pdfPath,
+                                           const QString& error) {
+    if (m_files.isEmpty() || m_currentIndex < 0 || m_currentIndex >= m_files.size()) {
+        return;
+    }
+    if (m_files.at(m_currentIndex) != sourcePath) {
+        return;
+    }
+
+    if (pdfPath.isEmpty() || !error.isEmpty()) {
+        m_fallbackIconLabel->setPixmap(
+            QIcon::fromTheme(QStringLiteral("dialog-error")).pixmap(96, 96));
+        m_fallbackTextLabel->setText(
+            QStringLiteral("<b>Office preview unavailable</b><br>%1")
+                .arg(error.isEmpty() ? QStringLiteral("Could not convert this document.")
+                                     : error.toHtmlEscaped()));
+        m_fallbackWidget->show();
+        m_imageScrollArea->hide();
+        m_textViewer->hide();
+        return;
+    }
+
+    m_pdfPath = pdfPath;
+    m_pdfPage = 0;
+    m_pdfPageCount = PreviewManager::instance().pdfPageCount(pdfPath);
+    displayPdfPage();
+}
+
+void QuickLookDialog::resizeEvent(QResizeEvent* event) {
+    QDialog::resizeEvent(event);
+    if (m_fitImage && !m_imageBase.isNull()) {
+        QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
+    }
+}
+
+void QuickLookDialog::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Space || event->key() == Qt::Key_Escape) {
         accept();
+        return;
+    }
+    if (event->key() == Qt::Key_F11) {
+        if (isFullScreen()) {
+            showNormal();
+        } else {
+            showFullScreen();
+        }
         return;
     }
     if (event->key() == Qt::Key_Left) {
@@ -440,5 +623,56 @@ void QuickLookDialog::keyPressEvent(QKeyEvent* event)
         showNext();
         return;
     }
+    if (event->key() == Qt::Key_PageUp) {
+        showPreviousPage();
+        return;
+    }
+    if (event->key() == Qt::Key_PageDown) {
+        showNextPage();
+        return;
+    }
+    if (event->key() == Qt::Key_S) {
+        toggleSlideshow();
+        return;
+    }
+    if (event->key() == Qt::Key_R) {
+        m_rotation = (m_rotation + 90) % 360;
+        if (m_fitImage) {
+            fitImageToView();
+        } else {
+            applyImageTransform();
+        }
+        return;
+    }
+    if (event->key() == Qt::Key_Plus || event->key() == Qt::Key_Equal) {
+        m_fitImage = false;
+        m_zoom = qMin<qreal>(4.0, m_zoom * 1.2);
+        applyImageTransform();
+        return;
+    }
+    if (event->key() == Qt::Key_Minus) {
+        m_fitImage = false;
+        m_zoom = qMax<qreal>(0.1, m_zoom / 1.2);
+        applyImageTransform();
+        return;
+    }
+    if (event->key() == Qt::Key_0) {
+        m_rotation = 0;
+        m_fitImage = true;
+        fitImageToView();
+        return;
+    }
     QDialog::keyPressEvent(event);
+}
+
+void QuickLookDialog::wheelEvent(QWheelEvent* event) {
+    if (!m_imageBase.isNull() && (event->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier))) {
+        const qreal factor = event->angleDelta().y() > 0 ? 1.1 : 0.9;
+        m_fitImage = false;
+        m_zoom = qBound<qreal>(0.1, m_zoom * factor, 4.0);
+        applyImageTransform();
+        event->accept();
+        return;
+    }
+    QDialog::wheelEvent(event);
 }
