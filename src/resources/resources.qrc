@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/finder-linux.svg</file>
+        <file>icons/chevron-down.svg</file>
     </qresource>
 </RCC>

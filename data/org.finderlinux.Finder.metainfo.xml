@@ -17,7 +17,7 @@
     <p>Features include:</p>
     <ul>
       <li>Icon, list, column, and gallery views</li>
-      <li>Preview support for images, text, PDF, video, and audio</li>
+      <li>Quick Look previews for images, text, PDF, video, and audio</li>
       <li>Split-pane browsing with synchronized folders and pane-to-pane copy/move</li>
       <li>XDG Trash support with restore, conflict handling, and optional auto-purge</li>
       <li>Archive creation and extraction, including optional ZIP AES encryption</li>

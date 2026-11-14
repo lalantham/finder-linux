@@ -3,6 +3,7 @@
 #include "ColumnView.h"
 #include "FileSystemModel.h"
 #include "GalleryView.h"
+#include "GetInfoDialog.h"
 #include "IconView.h"
 #include "ListView.h"
 #include "PreviewManager.h"
@@ -11,6 +12,7 @@
 #include "TabPage.h"
 #include "TagManager.h"
 #include "TearOffTabBar.h"
+#include "Toolbar.h"
 #include <QApplication>
 #include <QDir>
 #include <QFile>
@@ -18,6 +20,7 @@
 #include <QProcess>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -47,6 +50,8 @@ private slots:
     void testManualIconPositions();
     void testTabPageSmartFolder();
     void testPreviewPaneToggle();
+    void testMultiItemGetInfo();
+    void testToolbarSearchToggle();
     void testOfficePreviewDetection();
     void testOfficePreviewConversion();
     void testAppChooserDialog();
@@ -752,6 +757,47 @@ void TestSelection::testPreviewPaneToggle() {
 
     page.setViewMode(ViewMode::List);
     QVERIFY(!pane->isHidden());
+}
+
+void TestSelection::testMultiItemGetInfo() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString first = dir.filePath(QStringLiteral("first.txt"));
+    const QString second = dir.filePath(QStringLiteral("second.txt"));
+    for (const QString& path : {first, second}) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        file.close();
+    }
+
+    GetInfoDialog dialog({first, second});
+    QVERIFY(dialog.windowTitle().contains(QStringLiteral("2 Items")));
+    QVERIFY(!dialog.findChildren<QCheckBox*>().isEmpty());
+    QVERIFY(!dialog.findChildren<QLineEdit*>().isEmpty());
+
+    auto* tabs = dialog.findChild<QTabWidget*>();
+    QVERIFY(tabs);
+    QCOMPARE(tabs->count(), 2);
+    QCOMPARE(tabs->tabText(0), QStringLiteral("General"));
+    QCOMPARE(tabs->tabText(1), QStringLiteral("Permissions"));
+}
+
+void TestSelection::testToolbarSearchToggle() {
+    Toolbar toolbar;
+    auto* capsule = toolbar.findChild<QWidget*>(QStringLiteral("pathCapsule"));
+    QVERIFY(capsule);
+    QCOMPARE(toolbar.breadcrumbBar()->parentWidget(), capsule);
+    QVERIFY(!toolbar.isSearchVisible());
+
+    toolbar.focusSearch();
+    QVERIFY(toolbar.isSearchVisible());
+
+    toolbar.setSearchText(QStringLiteral("kind:image"));
+    QCOMPARE(toolbar.searchQuery(), QStringLiteral("kind:image"));
+
+    toolbar.setSearchVisible(false);
+    QVERIFY(!toolbar.isSearchVisible());
 }
 
 void TestSelection::testOfficePreviewDetection() {

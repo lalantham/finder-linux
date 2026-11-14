@@ -14,10 +14,27 @@ All notable changes to File Manager for Linux are documented here.
 - Added active-filter summaries and a Save Search action to the search bar.
 - `F5` re-runs an active search to pick up filesystem changes.
 
-### Preview pane and richer Preview
+### Desktop-style UI polish
+- Restyled the toolbar and sidebar with rounded surfaces and spacing.
+- Combined back/forward controls and the breadcrumb path into one rounded path capsule.
+- Replaced glyph-only toolbar controls with theme icons and fallbacks.
+- Renamed sidebar sections to **Favorites** and **Locations**.
+- Moved search behind a magnifier button; the search field opens on demand and still supports `Ctrl+F`.
+- Moved secondary actions into the More menu and added compact Tag and View Options buttons.
+
+### Multi-item Get Info and permissions
+- Reorganized Get Info into **General**, **Permissions**, **Open With**, and **Checksums** tabs.
+- Added aggregate Get Info for multiple selected items with combined size, kinds, locations, permissions, and tags.
+- Multi-item permission, tag, ownership, and lock changes apply to all selected items.
+- Added editable owner and group fields with recursive ownership support for folders.
+- Added immutable/locked file support through filesystem flags.
+- Added an ACL editor using `getfacl` / `setfacl`.
+- Permissions can be applied recursively across multiple selected folders.
+
+### Preview pane and richer Quick Look
 - Added a docked preview pane for icon, list, and gallery views (`Ctrl+Shift+P`).
-- Added preview pane metadata, tags, and Preview/Properties actions.
-- Added full-screen Preview (`F11`).
+- Added preview pane metadata, tags, and Quick Look/Get Info actions.
+- Added full-screen Quick Look (`F11`).
 - Images now open fitted to the preview window, with optional zoom, fit/reset, rotate, and Ctrl+wheel zoom.
 - Added slideshow playback for multi-item previews (`S`).
 - Added PDF and converted Office document page navigation.
@@ -77,8 +94,8 @@ All notable changes to File Manager for Linux are documented here.
 
 ### UI
 - Added active-pane highlighting in split view.
-- Added Preview video/audio playback via Qt Multimedia.
-- Added filesystem metadata and checksum sections to Properties.
+- Added Quick Look video/audio playback via Qt Multimedia.
+- Added filesystem metadata and checksum sections to Get Info.
 - Added Filelight and Plasma wallpaper integration.
 
 ### Packaging

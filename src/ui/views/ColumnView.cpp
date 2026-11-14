@@ -612,7 +612,7 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent) : QWidget(parent) {
 
     layout->addSpacing(12);
 
-    m_qlBtn = new QPushButton(QStringLiteral("Preview"), this);
+    m_qlBtn = new QPushButton(QStringLiteral("Quick Look"), this);
     connect(m_qlBtn, &QPushButton::clicked, this, [this]() {
         if (!m_currentPath.isEmpty())
             emit quickLookRequested(m_currentPath);

@@ -62,7 +62,7 @@ Designed as a native desktop application with genuine filesystem operations, res
   Saved searches appear in the sidebar and can be opened, edited, renamed, or deleted.
 * Active filters are summarized below the search controls; `F5` re-runs the current search.
 
-### 2. Preview (`Space`)
+### 2. Quick Look (`Space`)
 * Dedicated floating HUD overlay.
 * Instant inspection of images, source code, text files, and multi-page PDFs (via `Poppler-Qt6`).
 * Office documents (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`, `.rtf`, and related formats) are converted on demand through LibreOffice and rendered from a cached PDF. The first preview can take a few seconds; later previews are fast.
@@ -101,9 +101,14 @@ Designed as a native desktop application with genuine filesystem operations, res
 * Confirmation dialog before permanent deletion or emptying the trash.
 
 ### 5. Native UI Design & Theming
-* Segmented pill buttons: `[ ‹ | › ]` navigation and `[ ⊞ | ☰ | ☷ | ▣ ]` view switcher.
+* Rounded, desktop-style toolbar and sidebar surfaces.
+* Back/forward controls and the breadcrumb path share one rounded path capsule.
+* Theme icon toolbar buttons for navigation, views, tag actions, view options, more actions, and search.
+* Secondary actions such as New Folder, Quick Look, Get Info, hidden files, and terminal live in the More menu to keep the toolbar compact.
+* A compact **search icon** that opens the search field only when needed.
+* Segmented pill buttons for navigation and the four view modes.
 * Interactive Breadcrumb path bar with direct segment navigation and `Ctrl+L` editable path mode.
-* Sidebar divided into **Favorites** (Home, Desktop, Documents, Downloads, custom pinned folders) and **Locations** (Mounted drives, Root drive, Trash).
+* Rounded sidebar divided into **Favorites** (Home, Desktop, Documents, Downloads, custom pinned folders), **Locations** (Mounted drives, Root drive, Trash), Smart Folders, and Tags.
 * Dynamic **Light** and **Dark** themes following modern desktop design conventions.
 
 ### 6. Desktop Integration & Tabs
@@ -126,7 +131,7 @@ Designed as a native desktop application with genuine filesystem operations, res
 - **Build System**: CMake 3.22+ and Ninja.
 - **Qt Framework**: Qt 6.4+ (`QtCore`, `QtGui`, `QtWidgets`, `QtConcurrent`, `QtSvg`, `QtTest`).
 - **Required**: `libarchive`.
-- **Optional**: `poppler-qt6` (PDF preview), `qt6-multimedia` (Preview video/audio), `libreoffice` (Office document previews), and `kwindowsystem` (KF6, reliable window activation on KDE Plasma Wayland).
+- **Optional**: `poppler-qt6` (PDF preview), `qt6-multimedia` (Quick Look video/audio), `libreoffice` (Office document previews), and `kwindowsystem` (KF6, reliable window activation on KDE Plasma Wayland).
 
 ### Installing Dependencies on Arch / Manjaro / CachyOS:
 ```bash
@@ -211,7 +216,7 @@ AppStream metadata, man page, and Bash/Zsh/Fish completions.
 
 | Shortcut | Action |
 | :--- | :--- |
-| `Space` | Preview |
+| `Space` | Quick Look |
 | `Ctrl + 1` | Icon View |
 | `Ctrl + 2` | List View |
 | `Ctrl + 3` | Column View (Miller Columns) |
@@ -229,7 +234,7 @@ AppStream metadata, man page, and Bash/Zsh/Fish completions.
 | `Delete` | Move to Trash |
 | `Shift + Delete` | Permanently delete |
 | `Ctrl + F` | Focus Search |
-| `Ctrl + I` | Properties (Properties) |
+| `Ctrl + I` | Get Info |
 | `Ctrl + J` | Show View Options |
 | `F11` | Toggle Full Screen |
 | `Ctrl + Alt + S` | Show / Hide Sidebar |
@@ -328,18 +333,24 @@ File Manager for Linux provides a dependable, responsive daily alternative to KD
   - Background recursive size computation across folder entries without freezing the UI.
   - Formats folder rows in List and Column views with total bytes and enclosed item counts.
   - Easily toggleable via the View menu or Preferences dialog.
-* **Properties & Metadata**:
+* **Get Info & Metadata**:
+  - Tabbed Get Info window: **General**, **Permissions**, **Open With**, and **Checksums**.
   - Shows inode, device, hard-link count, and on-disk usage.
   - Lists extended attributes, POSIX ACL presence, and SELinux context.
   - On-demand SHA-256 checksum with a one-click copy button.
   - "Show Disk Usage" via Filelight and "Set as Wallpaper" for image files when the helper tools are installed.
 * **Symlink Management & Relinking**:
-  - Detects broken symlinks with distinct visual indicators in Properties.
+  - Detects broken symlinks with distinct visual indicators in Get Info.
   - Direct interactive target relinking without command line intervention.
 * **Advanced Permissions Management**:
+  - Multi-item Get Info with combined size, kind, location, tags, and permission state.
   - Interactive octal notation (`0755`, `0644`) synchronized with visual read/write/execute checkboxes.
+  - Edit owner and group names, with recursive ownership changes for folders.
+  - Immutable "Locked" flag support via filesystem flags.
+  - ACL editor powered by `getfacl` / `setfacl` when available.
   - "Apply to Enclosed Items..." recursively updates permissions across directory trees while intelligently preserving directory traversal bits.
-* **Thumbnail Generation & Preview Previews**:
+  - Tag changes from a multi-item Get Info window apply to every selected item.
+* **Thumbnail Generation & Quick Look Previews**:
   - Full Freedesktop XDG thumbnail cache integration (`~/.cache/thumbnails/`) for images, PDFs, and video files.
   - Video thumbnail generation powered by `ffmpegthumbnailer` across all video formats (MP4, MKV, AVI, MOV, WebM, FLV, TS).
   - Preview (`Spacebar`) provides instant preview overlay for video thumbnails, images, and text files.

@@ -491,6 +491,29 @@ void MainWindow::setupUi() {
     connect(m_toolbar, &Toolbar::toggleHiddenRequested, this, &MainWindow::onToggleHidden);
     connect(m_toolbar, &Toolbar::openTerminalRequested, this, &MainWindow::toggleTerminalPanel);
     connect(m_toolbar, &Toolbar::searchTextChanged, this, &MainWindow::onSearchTextChanged);
+    connect(m_toolbar, &Toolbar::viewOptionsRequested, this, &MainWindow::onViewOptions);
+    connect(m_toolbar, &Toolbar::tagRequested, this, [this](const QString& tag) {
+        if (TabPage* page = m_tabManager->currentPage()) {
+            const QStringList paths = page->selectedFilePaths();
+            for (const QString& path : paths) {
+                TagManager::instance().addTag(path, tag);
+            }
+            if (!paths.isEmpty())
+                page->refresh();
+        }
+    });
+    connect(m_toolbar, &Toolbar::clearTagsRequested, this, [this]() {
+        if (TabPage* page = m_tabManager->currentPage()) {
+            const QStringList paths = page->selectedFilePaths();
+            for (const QString& path : paths) {
+                for (const auto& tag : TagManager::standardTags()) {
+                    TagManager::instance().removeTag(path, tag.name);
+                }
+            }
+            if (!paths.isEmpty())
+                page->refresh();
+        }
+    });
 
     // Splitter: Sidebar + TabManager
     m_mainSplitter = new QSplitter(Qt::Horizontal, this);
@@ -693,9 +716,9 @@ void MainWindow::setupMenusAndShortcuts() {
                         [this]() { m_tabManager->reopenLastClosedTab(); });
 
     fileMenu->addSeparator();
-    fileMenu->addAction(QStringLiteral("Properties"), QKeySequence(Qt::CTRL | Qt::Key_I), this,
+    fileMenu->addAction(QStringLiteral("Get Info"), QKeySequence(Qt::CTRL | Qt::Key_I), this,
                         &MainWindow::onGetInfo);
-    fileMenu->addAction(QStringLiteral("Preview"), QKeySequence(Qt::Key_Space), this,
+    fileMenu->addAction(QStringLiteral("Quick Look"), QKeySequence(Qt::Key_Space), this,
                         &MainWindow::onQuickLook);
     fileMenu->addAction(QStringLiteral("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D), this,
                         &MainWindow::onDuplicate);
@@ -1136,29 +1159,26 @@ void MainWindow::showItems(const QStringList& paths) {
 }
 
 void MainWindow::showItemProperties(const QStringList& paths) {
-    bool shownAny = false;
+    QStringList validPaths;
     for (const QString& item : paths) {
         if (item.isEmpty())
             continue;
-
         const QUrl url(item);
         const QString path = url.isLocalFile() ? url.toLocalFile() : item;
         const QFileInfo info(path);
-        if (!info.exists() && !info.isSymLink() && !info.isDir()) {
+        if (!info.exists() && !info.isSymLink() && !info.isDir())
             continue;
-        }
-
-        auto* dlg = new GetInfoDialog(info.absoluteFilePath(), this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->show();
-        shownAny = true;
+        validPaths.append(info.absoluteFilePath());
     }
 
-    if (!shownAny) {
+    if (validPaths.isEmpty()) {
         onGetInfo();
         return;
     }
 
+    auto* dlg = new GetInfoDialog(validPaths, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
     activateFromDesktop();
 }
 
@@ -2465,12 +2485,17 @@ void MainWindow::onGetInfo() {
     if (!page)
         return;
 
-    QString path = page->selectedFilePath();
-    if (path.isEmpty()) {
-        path = page->currentPath();
+    QStringList paths = page->selectedFilePaths();
+    if (paths.isEmpty()) {
+        const QString path = page->selectedFilePath();
+        if (!path.isEmpty())
+            paths.append(path);
+    }
+    if (paths.isEmpty()) {
+        paths.append(page->currentPath());
     }
 
-    auto* dlg = new GetInfoDialog(path, this);
+    auto* dlg = new GetInfoDialog(paths, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
@@ -2725,16 +2750,14 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             restoreAct->setFont(rf);
 
             menu.addSeparator();
-            menu.addAction(QStringLiteral("Preview"), this, &MainWindow::onQuickLook);
+            menu.addAction(QStringLiteral("Quick Look"), this, &MainWindow::onQuickLook);
 
-            if (single) {
-                menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")),
-                               QStringLiteral("Properties"), this, [this, primaryPath]() {
-                                   auto* dlg = new GetInfoDialog(primaryPath, this);
-                                   dlg->setAttribute(Qt::WA_DeleteOnClose);
-                                   dlg->show();
-                               });
-            }
+            menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")),
+                           QStringLiteral("Get Info"), this, [this, selectedPaths]() {
+                               auto* dlg = new GetInfoDialog(selectedPaths, this);
+                               dlg->setAttribute(Qt::WA_DeleteOnClose);
+                               dlg->show();
+                           });
 
             menu.addAction(QStringLiteral("Copy Path"), this, &MainWindow::onCopyPath);
             menu.addSeparator();
@@ -3014,18 +3037,18 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
             }
         }
 
-        // Preview
-        menu.addAction(QStringLiteral("Preview"), this, &MainWindow::onQuickLook);
+        // Quick Look
+        menu.addAction(QStringLiteral("Quick Look"), this, &MainWindow::onQuickLook);
 
         // KDE service menu actions (Dolphin-compatible)
         addServiceMenuActions(&menu, selectedPaths);
 
         menu.addSeparator();
 
-        // Properties
+        // Get Info
         menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")),
-                       QStringLiteral("Properties"), this, [this, primaryPath]() {
-                           auto* dlg = new GetInfoDialog(primaryPath, this);
+                       QStringLiteral("Get Info"), this, [this, selectedPaths]() {
+                           auto* dlg = new GetInfoDialog(selectedPaths, this);
                            dlg->setAttribute(Qt::WA_DeleteOnClose);
                            dlg->show();
                        });
@@ -3316,9 +3339,9 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
 
         menu.addSeparator();
 
-        // Properties for current directory
+        // Get Info for current directory
         menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")),
-                       QStringLiteral("Properties"), this, [this, currentDir]() {
+                       QStringLiteral("Get Info"), this, [this, currentDir]() {
                            auto* dlg = new GetInfoDialog(currentDir, this);
                            dlg->setAttribute(Qt::WA_DeleteOnClose);
                            dlg->show();

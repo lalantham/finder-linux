@@ -28,7 +28,7 @@ public:
     void openRemoteLocation(const QString& uri);
 
     // Used by the org.freedesktop.FileManager1 D-Bus service (browsers call
-    // these for "Show in folder" and "Properties").
+    // these for "Show in folder" and "Get Info").
     void showItems(const QStringList& paths);
     void showItemProperties(const QStringList& paths);
 

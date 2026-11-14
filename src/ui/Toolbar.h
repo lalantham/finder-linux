@@ -24,12 +24,17 @@ public:
     void focusSearch();
     void clearSearch();
     void setSearchText(const QString& text);
+    void setSearchVisible(bool visible);
+    [[nodiscard]] bool isSearchVisible() const;
     void setPathBarVisible(bool visible);
     [[nodiscard]] QString searchQuery() const;
 
     [[nodiscard]] BreadcrumbBar* breadcrumbBar() const noexcept {
         return m_breadcrumb;
     }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 signals:
     void backRequested();
@@ -42,10 +47,16 @@ signals:
     void getInfoRequested();
     void toggleHiddenRequested();
     void openTerminalRequested();
+    void viewOptionsRequested();
+    void tagRequested(const QString& tag);
+    void clearTagsRequested();
     void searchTextChanged(const QString& query);
 
 private slots:
     void onViewButtonClicked(int id);
+    void toggleSearch();
+    void openSearch();
+    void closeSearch();
 
 private:
     void setupNavigationControls();
@@ -54,10 +65,11 @@ private:
     void setupSearch();
 
     // Navigation
+    QWidget* m_pathCapsule{nullptr};
+    QWidget* m_navWidget{nullptr};
     QToolButton* m_backBtn{nullptr};
     QToolButton* m_fwdBtn{nullptr};
     BreadcrumbBar* m_breadcrumb{nullptr};
-    QAction* m_breadcrumbAction{nullptr};
 
     // View Switcher
     QButtonGroup* m_viewGroup{nullptr};
@@ -67,12 +79,15 @@ private:
     QToolButton* m_galViewBtn{nullptr};
 
     // Action buttons
-    QToolButton* m_newFolderBtn{nullptr};
-    QToolButton* m_quickLookBtn{nullptr};
-    QToolButton* m_getInfoBtn{nullptr};
-    QToolButton* m_hiddenBtn{nullptr};
+    QToolButton* m_viewOptionsBtn{nullptr};
+    QToolButton* m_tagBtn{nullptr};
     QToolButton* m_moreBtn{nullptr};
+    QAction* m_hiddenAction{nullptr};
 
     // Search
+    QToolButton* m_searchBtn{nullptr};
     QLineEdit* m_searchEdit{nullptr};
+    QAction* m_searchBtnAction{nullptr};
+    QAction* m_searchEditAction{nullptr};
+    bool m_searchHasText{false};
 };

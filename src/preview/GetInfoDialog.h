@@ -1,16 +1,18 @@
 #pragma once
 
-#include "FileItem.h"
 #include "DesktopAppsManager.h"
-#include <QDialog>
-#include <QVBoxLayout>
-#include <QLabel>
-#include <QComboBox>
-#include <QPushButton>
+#include "FileItem.h"
 #include <QCheckBox>
-#include <QThread>
+#include <QComboBox>
+#include <QDialog>
 #include <QFutureWatcher>
+#include <QLabel>
+#include <QPushButton>
+#include <QThread>
+#include <QVBoxLayout>
+#include <QVector>
 #include <atomic>
+#include <functional>
 
 class FolderSizeWorker : public QObject {
     Q_OBJECT
@@ -35,6 +37,7 @@ class GetInfoDialog : public QDialog {
 
 public:
     explicit GetInfoDialog(const QString& path, QWidget* parent = nullptr);
+    explicit GetInfoDialog(const QStringList& paths, QWidget* parent = nullptr);
     ~GetInfoDialog() override;
 
 private slots:
@@ -44,17 +47,30 @@ private slots:
     void onOctalEdited(const QString& text);
     void onApplyRecursivePermissions();
     void onRelinkClicked();
+    void onApplyOwnership();
+    void onApplyRecursiveOwnership();
+    void onLockToggled(bool locked);
+    void onEditAcl();
 
 private:
     void setupGeneralSection(QVBoxLayout* layout, const FileItem& item);
     void setupMetadataSection(QVBoxLayout* layout, const FileItem& item);
     void setupChecksumSection(QVBoxLayout* layout, const FileItem& item);
-    void setupTagsSection(QVBoxLayout* layout, const QString& path);
+    void setupTagsSection(QVBoxLayout* layout, const QStringList& paths);
     void setupOpenWithSection(QVBoxLayout* layout, const FileItem& item);
     void setupPermissionsSection(QVBoxLayout* layout, const FileItem& item);
+    void refreshPermissionUi();
+    void applyModeToAll(mode_t mode);
+    [[nodiscard]] Qt::CheckState
+    commonCheckState(const std::function<bool(const FileItem&)>& predicate) const;
 
     QString m_path;
     FileItem m_item;
+    QStringList m_paths;
+    QVector<FileItem> m_items;
+    bool m_isMulti{false};
+    mode_t m_commonMode{0};
+    bool m_hasCommonMode{false};
 
     QLabel* m_sizeValueLabel{nullptr};
     QComboBox* m_appCombo{nullptr};
@@ -64,10 +80,17 @@ private:
     QPushButton* m_applyRecursiveBtn{nullptr};
     QLabel* m_symlinkStatusLabel{nullptr};
     QPushButton* m_relinkBtn{nullptr};
+    QLineEdit* m_ownerEdit{nullptr};
+    QLineEdit* m_groupEdit{nullptr};
+    QPushButton* m_applyOwnershipBtn{nullptr};
+    QPushButton* m_recursiveOwnershipBtn{nullptr};
+    QCheckBox* m_lockedCheck{nullptr};
+    QPushButton* m_editAclBtn{nullptr};
     QLineEdit* m_checksumEdit{nullptr};
     QPushButton* m_checksumBtn{nullptr};
     QPushButton* m_checksumCopyBtn{nullptr};
     QFutureWatcher<QString>* m_checksumWatcher{nullptr};
+    QFutureWatcher<QPair<qint64, int>>* m_multiSizeWatcher{nullptr};
     bool m_updatingPermissions{false};
 
     // Permission checkboxes

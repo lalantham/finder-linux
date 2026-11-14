@@ -199,7 +199,7 @@ Sidebar::Sidebar(QWidget* parent) : QTreeWidget(parent) {
     setHeaderHidden(true);
     setRootIsDecorated(false);
     setIndentation(0);
-    setIconSize(QSize(16, 16));
+    setIconSize(QSize(18, 18));
     m_delegate = new SidebarItemDelegate(this);
     setItemDelegate(m_delegate);
     setAnimated(true);
@@ -312,7 +312,7 @@ void Sidebar::requestVolumeScan(bool force) {
 
 void Sidebar::populateFavorites() {
     m_favoritesHeader = new QTreeWidgetItem(this);
-    m_favoritesHeader->setText(0, QStringLiteral("Places"));
+    m_favoritesHeader->setText(0, QStringLiteral("Favorites"));
     m_favoritesHeader->setData(0, HeaderTypeRole, 1);
     QFont hf = m_favoritesHeader->font(0);
     hf.setBold(true);
@@ -377,7 +377,7 @@ void Sidebar::populateFavorites() {
         }
     }
 
-    // Add Trash to Places right after standard items if not hidden
+    // Add Trash to Favorites right after standard items if not hidden
     bool trashHidden = AppSettings::instance().isLocationHidden(QStringLiteral("Trash")) ||
                        AppSettings::instance().isLocationHidden(trashPath) ||
                        AppSettings::instance().isFavoriteHidden(QStringLiteral("Trash"));
@@ -430,7 +430,7 @@ void Sidebar::populateSmartFolders() {
 
 void Sidebar::populateLocations() {
     m_locationsHeader = new QTreeWidgetItem(this);
-    m_locationsHeader->setText(0, QStringLiteral("Devices"));
+    m_locationsHeader->setText(0, QStringLiteral("Locations"));
     m_locationsHeader->setData(0, HeaderTypeRole, 2);
     QFont hf = m_locationsHeader->font(0);
     hf.setBold(true);
@@ -970,11 +970,11 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event) {
             });
         }
 
-        // Properties
+        // Get Info
         if (!path.isEmpty()) {
             menu.addSeparator();
             menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")),
-                           QStringLiteral("Properties"), this,
+                           QStringLiteral("Get Info"), this,
                            [this, path]() { emit getInfoRequested(path); });
         }
 

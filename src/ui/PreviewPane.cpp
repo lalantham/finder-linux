@@ -78,8 +78,8 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
 
     auto* buttons = new QHBoxLayout();
     buttons->setSpacing(6);
-    m_previewBtn = new QPushButton(QStringLiteral("Preview"), this);
-    m_propertiesBtn = new QPushButton(QStringLiteral("Properties"), this);
+    m_previewBtn = new QPushButton(QStringLiteral("Quick Look"), this);
+    m_propertiesBtn = new QPushButton(QStringLiteral("Get Info"), this);
     buttons->addWidget(m_previewBtn);
     buttons->addWidget(m_propertiesBtn);
     buttons->addStretch();
