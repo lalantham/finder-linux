@@ -15,7 +15,7 @@ class RecentFilesManager {
 public:
     static QList<RecentFile> list(int limit = 20);
     static bool add(const QString& path, const QString& mimeType = QString(),
-                    const QString& appName = QStringLiteral("Finder"));
+                    const QString& appName = QStringLiteral("File Manager"));
     static void clear();
     static QString storagePath();
     static void setStoragePathForTesting(const QString& path);

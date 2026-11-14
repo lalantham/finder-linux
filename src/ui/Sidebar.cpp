@@ -1,36 +1,36 @@
 #include "Sidebar.h"
-#include "SidebarSettingsDialog.h"
 #include "AppSettings.h"
-#include "ThemeManager.h"
-#include "XdgTrash.h"
-#include "TagManager.h"
 #include "DesktopAppsManager.h"
 #include "FileItem.h"
+#include "SidebarSettingsDialog.h"
+#include "TagManager.h"
+#include "ThemeManager.h"
+#include "XdgTrash.h"
 #include <QApplication>
 #include <QClipboard>
+#include <QContextMenuEvent>
+#include <QDBusConnection>
+#include <QDir>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QFileDialog>
+#include <QFileIconProvider>
+#include <QFileInfo>
+#include <QFutureWatcher>
+#include <QHeaderView>
+#include <QHelpEvent>
+#include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
+#include <QPainter>
 #include <QProcess>
 #include <QStandardPaths>
-#include <QDir>
-#include <QFileIconProvider>
-#include <QHeaderView>
-#include <QContextMenuEvent>
-#include <QMenu>
-#include <QDragEnterEvent>
-#include <QMimeData>
-#include <QUrl>
-#include <QFileDialog>
-#include <QFileInfo>
-#include <QHelpEvent>
 #include <QStorageInfo>
-#include <QDrag>
-#include <QPainter>
 #include <QTimer>
-#include <QFutureWatcher>
+#include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
-#include <QDBusConnection>
-#include <QDragMoveEvent>
-#include <QDragLeaveEvent>
 
 static constexpr int PathRole = Qt::UserRole + 10;
 static constexpr int IsCustomFavRole = Qt::UserRole + 11;
@@ -45,25 +45,25 @@ static constexpr int AvailableBytesRole = Qt::UserRole + 19;
 static constexpr int DeviceRole = Qt::UserRole + 20;
 static constexpr int IsMountedRole = Qt::UserRole + 21;
 static constexpr int IsUsbRole = Qt::UserRole + 22;
+static constexpr int IsSmartFolderRole = Qt::UserRole + 23;
+static constexpr int SmartFolderNameRole = Qt::UserRole + 24;
 
 namespace {
 
-QString volumeToolTip(const QString& name, const QString& device,
-                      qint64 totalBytes, qint64 availableBytes, bool isMounted)
-{
+QString volumeToolTip(const QString& name, const QString& device, qint64 totalBytes,
+                      qint64 availableBytes, bool isMounted) {
     const QString safeName = name.toHtmlEscaped();
     if (!isMounted || totalBytes <= 0) {
         return QStringLiteral("%1 (Unmounted — click to open)").arg(safeName);
     }
 
     const qint64 usedBytes = qMax<qint64>(0, totalBytes - availableBytes);
-    const double usedPercent = static_cast<double>(usedBytes) * 100.0
-        / static_cast<double>(totalBytes);
+    const double usedPercent =
+        static_cast<double>(usedBytes) * 100.0 / static_cast<double>(totalBytes);
 
     QString tip = QStringLiteral("<b>%1</b><br/>").arg(safeName);
     tip += QStringLiteral("Used: %1 of %2 (%3%)<br/>")
-               .arg(FileItem::formatSize(usedBytes),
-                    FileItem::formatSize(totalBytes),
+               .arg(FileItem::formatSize(usedBytes), FileItem::formatSize(totalBytes),
                     QString::number(usedPercent, 'f', 1));
     tip += QStringLiteral("Free: %1").arg(FileItem::formatSize(availableBytes));
     if (!device.isEmpty()) {
@@ -74,13 +74,10 @@ QString volumeToolTip(const QString& name, const QString& device,
 
 } // namespace
 
-SidebarItemDelegate::SidebarItemDelegate(QObject* parent)
-    : QStyledItemDelegate(parent)
-{
-}
+SidebarItemDelegate::SidebarItemDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
 
-QSize SidebarItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
-{
+QSize SidebarItemDelegate::sizeHint(const QStyleOptionViewItem& option,
+                                    const QModelIndex& index) const {
     int headerType = index.data(HeaderTypeRole).toInt();
     if (headerType > 0) {
         return QSize(option.rect.width(), 26);
@@ -92,8 +89,8 @@ QSize SidebarItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QM
     return QSize(option.rect.width(), 24);
 }
 
-void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
-{
+void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
+                                const QModelIndex& index) const {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
 
@@ -126,7 +123,8 @@ void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
         painter->drawRoundedRect(itemRect, 4, 4);
     } else if (isSelected) {
         painter->setPen(Qt::NoPen);
-        QColor selBg = c.isDark ? QColor(c.accent.red(), c.accent.green(), c.accent.blue(), 90) : c.accent;
+        QColor selBg =
+            c.isDark ? QColor(c.accent.red(), c.accent.green(), c.accent.blue(), 90) : c.accent;
         painter->setBrush(selBg);
         painter->drawRoundedRect(itemRect, 4, 4);
     } else if (isHovered) {
@@ -148,13 +146,17 @@ void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
     QString text = index.data(Qt::DisplayRole).toString();
     qint64 totalBytes = index.data(TotalBytesRole).toLongLong();
     qint64 availBytes = index.data(AvailableBytesRole).toLongLong();
-    bool isMounted = index.data(IsMountedRole).isValid() ? index.data(IsMountedRole).toBool() : true;
+    bool isMounted =
+        index.data(IsMountedRole).isValid() ? index.data(IsMountedRole).toBool() : true;
     bool hasDiskBar = isMounted && (totalBytes > 0);
 
     QFont font = option.font;
     font.setPointSize(10);
     painter->setFont(font);
-    painter->setPen(isSelected ? Qt::white : (isMounted ? c.text : QColor(c.text.red(), c.text.green(), c.text.blue(), 170)));
+    painter->setPen(
+        isSelected
+            ? Qt::white
+            : (isMounted ? c.text : QColor(c.text.red(), c.text.green(), c.text.blue(), 170)));
 
     int textX = iconX + 22;
     int textW = itemRect.right() - textX - 6;
@@ -174,7 +176,8 @@ void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
         painter->setBrush(c.isDark ? QColor(58, 62, 68) : QColor(200, 203, 207));
         painter->drawRoundedRect(barBgRect, 1, 1);
 
-        double usedRatio = qBound(0.0, 1.0 - static_cast<double>(availBytes) / static_cast<double>(totalBytes), 1.0);
+        double usedRatio = qBound(
+            0.0, 1.0 - static_cast<double>(availBytes) / static_cast<double>(totalBytes), 1.0);
         int usedW = static_cast<int>(barW * usedRatio);
         if (usedW > 0) {
             QRect usedRect(textX, barY, usedW, barH);
@@ -191,9 +194,7 @@ void SidebarItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& o
     painter->restore();
 }
 
-Sidebar::Sidebar(QWidget* parent)
-    : QTreeWidget(parent)
-{
+Sidebar::Sidebar(QWidget* parent) : QTreeWidget(parent) {
     setObjectName(QStringLiteral("sidebar"));
     setHeaderHidden(true);
     setRootIsDecorated(false);
@@ -248,33 +249,26 @@ Sidebar::Sidebar(QWidget* parent)
 
     if (QDBusConnection::systemBus().isConnected()) {
         QDBusConnection::systemBus().connect(
-            QStringLiteral("org.freedesktop.UDisks2"),
-            QStringLiteral("/org/freedesktop/UDisks2"),
-            QStringLiteral("org.freedesktop.DBus.ObjectManager"),
-            QStringLiteral("InterfacesAdded"),
-            this,
-            SLOT(onUdisksInterfacesAdded(QDBusObjectPath,QVariantMap)));
+            QStringLiteral("org.freedesktop.UDisks2"), QStringLiteral("/org/freedesktop/UDisks2"),
+            QStringLiteral("org.freedesktop.DBus.ObjectManager"), QStringLiteral("InterfacesAdded"),
+            this, SLOT(onUdisksInterfacesAdded(QDBusObjectPath, QVariantMap)));
         QDBusConnection::systemBus().connect(
-            QStringLiteral("org.freedesktop.UDisks2"),
-            QStringLiteral("/org/freedesktop/UDisks2"),
+            QStringLiteral("org.freedesktop.UDisks2"), QStringLiteral("/org/freedesktop/UDisks2"),
             QStringLiteral("org.freedesktop.DBus.ObjectManager"),
-            QStringLiteral("InterfacesRemoved"),
-            this,
-            SLOT(onUdisksInterfacesRemoved(QDBusObjectPath,QStringList)));
+            QStringLiteral("InterfacesRemoved"), this,
+            SLOT(onUdisksInterfacesRemoved(QDBusObjectPath, QStringList)));
     }
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
     connect(this, &QTreeWidget::itemActivated, this, &Sidebar::onItemClicked);
     connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
-    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, [this]() {
-        viewport()->update();
-    });
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            [this]() { viewport()->update(); });
 
     refresh();
 }
 
-void Sidebar::refresh()
-{
+void Sidebar::refresh() {
     QString currentSelected;
     QTreeWidgetItem* curr = currentItem();
     if (curr) {
@@ -284,6 +278,7 @@ void Sidebar::refresh()
     clear();
 
     populateFavorites();
+    populateSmartFolders();
     populateLocations();
     populateTags();
     requestVolumeScan();
@@ -295,13 +290,11 @@ void Sidebar::refresh()
     }
 }
 
-void Sidebar::requestVolumeScan(bool force)
-{
+void Sidebar::requestVolumeScan(bool force) {
     if (m_volumeScanRunning) {
         return;
     }
-    if (!force && m_volumeScanTimestamp.isValid()
-        && m_volumeScanTimestamp.elapsed() < 10000) {
+    if (!force && m_volumeScanTimestamp.isValid() && m_volumeScanTimestamp.elapsed() < 10000) {
         return;
     }
 
@@ -314,13 +307,10 @@ void Sidebar::requestVolumeScan(bool force)
         m_volumeScanTimestamp.start();
         refresh();
     });
-    watcher->setFuture(QtConcurrent::run([]() {
-        return VolumeManager::mountedVolumes();
-    }));
+    watcher->setFuture(QtConcurrent::run([]() { return VolumeManager::mountedVolumes(); }));
 }
 
-void Sidebar::populateFavorites()
-{
+void Sidebar::populateFavorites() {
     m_favoritesHeader = new QTreeWidgetItem(this);
     m_favoritesHeader->setText(0, QStringLiteral("Places"));
     m_favoritesHeader->setData(0, HeaderTypeRole, 1);
@@ -331,8 +321,10 @@ void Sidebar::populateFavorites()
     m_favoritesHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
     m_favoritesHeader->setFlags(Qt::ItemIsEnabled);
 
-    auto addFavItem = [this](const QString& name, const QString& path, const QString& themeIconName, bool isCustom) {
-        if (!QDir(path).exists()) return;
+    auto addFavItem = [this](const QString& name, const QString& path, const QString& themeIconName,
+                             bool isCustom) {
+        if (!QDir(path).exists())
+            return;
 
         auto* item = new QTreeWidgetItem(m_favoritesHeader);
         item->setText(0, name);
@@ -341,9 +333,9 @@ void Sidebar::populateFavorites()
         item->setData(0, IsStandardFavRole, !isCustom);
 
         QFileIconProvider iconProv;
-        QIcon icon = QIcon::fromTheme(themeIconName,
-                     QIcon::fromTheme(QStringLiteral("folder"),
-                     iconProv.icon(QFileIconProvider::Folder)));
+        QIcon icon = QIcon::fromTheme(
+            themeIconName,
+            QIcon::fromTheme(QStringLiteral("folder"), iconProv.icon(QFileIconProvider::Folder)));
         item->setIcon(0, icon);
     };
 
@@ -358,15 +350,18 @@ void Sidebar::populateFavorites()
     const QString trashPath = XdgTrash::trashFilesDirectory();
 
     for (const auto& path : orderedFavs) {
-        if (!QDir(path).exists()) continue;
-        if (AppSettings::instance().isFavoriteHidden(path)) continue;
+        if (!QDir(path).exists())
+            continue;
+        if (AppSettings::instance().isFavoriteHidden(path))
+            continue;
 
         if (path == homePath) {
             addFavItem(QStringLiteral("Home"), path, QStringLiteral("user-home"), false);
         } else if (path == desktopPath) {
             addFavItem(QStringLiteral("Desktop"), path, QStringLiteral("user-desktop"), false);
         } else if (path == docsPath) {
-            addFavItem(QStringLiteral("Documents"), path, QStringLiteral("folder-documents"), false);
+            addFavItem(QStringLiteral("Documents"), path, QStringLiteral("folder-documents"),
+                       false);
         } else if (path == downPath) {
             addFavItem(QStringLiteral("Downloads"), path, QStringLiteral("folder-download"), false);
         } else if (path == picsPath) {
@@ -377,7 +372,8 @@ void Sidebar::populateFavorites()
             addFavItem(QStringLiteral("Videos"), path, QStringLiteral("folder-videos"), false);
         } else {
             QFileInfo fi(path);
-            addFavItem(fi.fileName().isEmpty() ? path : fi.fileName(), path, QStringLiteral("folder"), true);
+            addFavItem(fi.fileName().isEmpty() ? path : fi.fileName(), path,
+                       QStringLiteral("folder"), true);
         }
     }
 
@@ -392,15 +388,47 @@ void Sidebar::populateFavorites()
         item->setData(0, PathRole, trashPath);
         item->setData(0, IsTrashRole, true);
         item->setData(0, IsStandardFavRole, true);
-        item->setIcon(0, QIcon::fromTheme(QStringLiteral("user-trash"),
-                         QIcon::fromTheme(QStringLiteral("trash-empty"),
-                         QIcon::fromTheme(QStringLiteral("edit-delete"),
-                         iconProv.icon(QFileIconProvider::Trashcan)))));
+        item->setIcon(
+            0, QIcon::fromTheme(
+                   QStringLiteral("user-trash"),
+                   QIcon::fromTheme(QStringLiteral("trash-empty"),
+                                    QIcon::fromTheme(QStringLiteral("edit-delete"),
+                                                     iconProv.icon(QFileIconProvider::Trashcan)))));
     }
 }
 
-void Sidebar::populateLocations()
-{
+void Sidebar::populateSmartFolders() {
+    m_smartFoldersHeader = nullptr;
+    const QList<SmartFolder> folders = AppSettings::instance().smartFolders();
+    if (folders.isEmpty()) {
+        return;
+    }
+
+    m_smartFoldersHeader = new QTreeWidgetItem(this);
+    m_smartFoldersHeader->setText(0, QStringLiteral("Smart Folders"));
+    m_smartFoldersHeader->setData(0, HeaderTypeRole, 4);
+    QFont hf = m_smartFoldersHeader->font(0);
+    hf.setBold(true);
+    hf.setPointSize(9);
+    m_smartFoldersHeader->setFont(0, hf);
+    m_smartFoldersHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
+    m_smartFoldersHeader->setFlags(Qt::ItemIsEnabled);
+
+    for (const SmartFolder& folder : folders) {
+        auto* item = new QTreeWidgetItem(m_smartFoldersHeader);
+        item->setText(0, folder.name);
+        item->setData(0, PathRole, QStringLiteral("smart://") + folder.name);
+        item->setData(0, IsSmartFolderRole, true);
+        item->setData(0, SmartFolderNameRole, folder.name);
+        item->setIcon(0, QIcon::fromTheme(QStringLiteral("folder-search"),
+                                          QIcon::fromTheme(QStringLiteral("edit-find"))));
+        item->setToolTip(0, folder.filter.query.isEmpty()
+                                ? QStringLiteral("Smart Folder")
+                                : QStringLiteral("Search: %1").arg(folder.filter.query));
+    }
+}
+
+void Sidebar::populateLocations() {
     m_locationsHeader = new QTreeWidgetItem(this);
     m_locationsHeader->setText(0, QStringLiteral("Devices"));
     m_locationsHeader->setData(0, HeaderTypeRole, 2);
@@ -425,14 +453,17 @@ void Sidebar::populateLocations()
     };
     QMap<QString, LocData> map;
     for (const auto& vol : volumes) {
-        map[vol.path] = {vol.name, vol.icon, vol.totalBytes, vol.availableBytes, vol.device, vol.isMounted, vol.isUsb};
+        map[vol.path] = {vol.name,   vol.icon,      vol.totalBytes, vol.availableBytes,
+                         vol.device, vol.isMounted, vol.isUsb};
     }
 
     QSet<QString> addedPaths;
     const QStringList orderedLocs = AppSettings::instance().locationOrder();
     for (const auto& path : orderedLocs) {
-        if (!map.contains(path)) continue;
-        if (AppSettings::instance().isLocationHidden(path)) continue;
+        if (!map.contains(path))
+            continue;
+        if (AppSettings::instance().isLocationHidden(path))
+            continue;
 
         const auto& data = map[path];
         auto* item = new QTreeWidgetItem(m_locationsHeader);
@@ -452,8 +483,10 @@ void Sidebar::populateLocations()
 
     // Add any newly connected or unmounted volumes not yet in orderedLocs
     for (const auto& vol : volumes) {
-        if (addedPaths.contains(vol.path)) continue;
-        if (AppSettings::instance().isLocationHidden(vol.path)) continue;
+        if (addedPaths.contains(vol.path))
+            continue;
+        if (AppSettings::instance().isLocationHidden(vol.path))
+            continue;
 
         auto* item = new QTreeWidgetItem(m_locationsHeader);
         item->setText(0, vol.name);
@@ -465,14 +498,13 @@ void Sidebar::populateLocations()
         item->setData(0, TotalBytesRole, vol.totalBytes);
         item->setData(0, AvailableBytesRole, vol.availableBytes);
         item->setIcon(0, vol.icon);
-        item->setToolTip(0, volumeToolTip(vol.name, vol.device, vol.totalBytes,
-                                          vol.availableBytes, vol.isMounted));
+        item->setToolTip(0, volumeToolTip(vol.name, vol.device, vol.totalBytes, vol.availableBytes,
+                                          vol.isMounted));
         addedPaths.insert(vol.path);
     }
 }
 
-void Sidebar::populateTags()
-{
+void Sidebar::populateTags() {
     m_tagsHeader = new QTreeWidgetItem(this);
     m_tagsHeader->setText(0, QStringLiteral("Tags"));
     m_tagsHeader->setData(0, HeaderTypeRole, 3);
@@ -503,10 +535,9 @@ struct VolumeTaskResult {
     QString error;
     bool ok{false};
 };
-}
+} // namespace
 
-void Sidebar::mountDeviceAsync(const QString& device)
-{
+void Sidebar::mountDeviceAsync(const QString& device) {
     QApplication::setOverrideCursor(Qt::WaitCursor);
     auto* watcher = new QFutureWatcher<VolumeTaskResult>(this);
     connect(watcher, &QFutureWatcher<VolumeTaskResult>::finished, this, [this, watcher, device]() {
@@ -519,7 +550,9 @@ void Sidebar::mountDeviceAsync(const QString& device)
             emit pathSelected(result.path);
         } else {
             QMessageBox::warning(this, QStringLiteral("Cannot Mount Device"),
-                result.error.isEmpty() ? QStringLiteral("Failed to mount %1").arg(device) : result.error);
+                                 result.error.isEmpty()
+                                     ? QStringLiteral("Failed to mount %1").arg(device)
+                                     : result.error);
         }
     });
     watcher->setFuture(QtConcurrent::run([device]() {
@@ -530,8 +563,7 @@ void Sidebar::mountDeviceAsync(const QString& device)
     }));
 }
 
-void Sidebar::ejectVolumeAsync(const QString& path)
-{
+void Sidebar::ejectVolumeAsync(const QString& path) {
     QApplication::setOverrideCursor(Qt::WaitCursor);
     auto* watcher = new QFutureWatcher<VolumeTaskResult>(this);
     connect(watcher, &QFutureWatcher<VolumeTaskResult>::finished, this, [this, watcher, path]() {
@@ -544,7 +576,9 @@ void Sidebar::ejectVolumeAsync(const QString& path)
             refresh();
         } else {
             QMessageBox::warning(this, QStringLiteral("Cannot Eject"),
-                result.error.isEmpty() ? QStringLiteral("Failed to eject %1").arg(path) : result.error);
+                                 result.error.isEmpty()
+                                     ? QStringLiteral("Failed to eject %1").arg(path)
+                                     : result.error);
         }
     });
     watcher->setFuture(QtConcurrent::run([path]() {
@@ -554,19 +588,21 @@ void Sidebar::ejectVolumeAsync(const QString& path)
     }));
 }
 
-void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
-{
-    if (!item) return;
+void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/) {
+    if (!item)
+        return;
     if (item->data(0, IsTagRole).toBool()) {
         QString tag = item->data(0, TagNameRole).toString();
         emit tagSelected(tag);
         return;
     }
     if (item->data(0, IsLocationRole).toBool()) {
-        bool isMounted = item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
+        bool isMounted =
+            item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
         if (!isMounted) {
             QString dev = item->data(0, DeviceRole).toString();
-            if (dev.isEmpty()) dev = item->data(0, PathRole).toString();
+            if (dev.isEmpty())
+                dev = item->data(0, PathRole).toString();
             mountDeviceAsync(dev);
             return;
         }
@@ -577,8 +613,25 @@ void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/)
     }
 }
 
-void Sidebar::selectPath(const QString& path)
-{
+void Sidebar::selectPath(const QString& path) {
+    if (path.startsWith(QStringLiteral("smart://"))) {
+        const QString name = path.mid(8);
+        for (int i = 0; i < topLevelItemCount(); ++i) {
+            QTreeWidgetItem* top = topLevelItem(i);
+            for (int j = 0; j < top->childCount(); ++j) {
+                QTreeWidgetItem* child = top->child(j);
+                if (child->data(0, IsSmartFolderRole).toBool() &&
+                    child->data(0, SmartFolderNameRole)
+                            .toString()
+                            .compare(name, Qt::CaseInsensitive) == 0) {
+                    setCurrentItem(child);
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
     if (path.startsWith(QStringLiteral("tag://"))) {
         QString tagName = path.mid(6);
         for (int i = 0; i < topLevelItemCount(); ++i) {
@@ -586,7 +639,9 @@ void Sidebar::selectPath(const QString& path)
             for (int j = 0; j < top->childCount(); ++j) {
                 QTreeWidgetItem* child = top->child(j);
                 if (child->data(0, IsTagRole).toBool()) {
-                    if (child->data(0, TagNameRole).toString().compare(tagName, Qt::CaseInsensitive) == 0) {
+                    if (child->data(0, TagNameRole)
+                            .toString()
+                            .compare(tagName, Qt::CaseInsensitive) == 0) {
                         setCurrentItem(child);
                         return;
                     }
@@ -609,8 +664,7 @@ void Sidebar::selectPath(const QString& path)
     }
 }
 
-bool Sidebar::viewportEvent(QEvent* event)
-{
+bool Sidebar::viewportEvent(QEvent* event) {
     if (event->type() == QEvent::ToolTip) {
         auto* help = static_cast<QHelpEvent*>(event);
         QTreeWidgetItem* item = itemAt(help->pos());
@@ -618,7 +672,8 @@ bool Sidebar::viewportEvent(QEvent* event)
             const QString path = item->data(0, PathRole).toString();
             const QString device = item->data(0, DeviceRole).toString();
             const bool isMounted = item->data(0, IsMountedRole).isValid()
-                ? item->data(0, IsMountedRole).toBool() : true;
+                                       ? item->data(0, IsMountedRole).toBool()
+                                       : true;
 
             qint64 totalBytes = item->data(0, TotalBytesRole).toLongLong();
             qint64 availableBytes = item->data(0, AvailableBytesRole).toLongLong();
@@ -635,16 +690,15 @@ bool Sidebar::viewportEvent(QEvent* event)
                 }
             }
 
-            item->setToolTip(0, volumeToolTip(item->text(0), device, totalBytes,
-                                              availableBytes, isMounted));
+            item->setToolTip(
+                0, volumeToolTip(item->text(0), device, totalBytes, availableBytes, isMounted));
         }
     }
 
     return QTreeWidget::viewportEvent(event);
 }
 
-void Sidebar::contextMenuEvent(QContextMenuEvent* event)
-{
+void Sidebar::contextMenuEvent(QContextMenuEvent* event) {
     QPoint vpPos = viewport()->mapFromGlobal(event->globalPos());
     QModelIndex idx = indexAt(vpPos);
     QTreeWidgetItem* item = idx.isValid() ? itemFromIndex(idx) : nullptr;
@@ -666,13 +720,16 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
 
         // 1. Right clicked "Favorites" Header
         if (headerType == 1) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-new")), QStringLiteral("Pin Folder..."), this, [this]() {
-                QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Select Folder to Pin to Sidebar"), QDir::homePath());
-                if (!dir.isEmpty()) {
-                    AppSettings::instance().addFavorite(dir);
-                    refresh();
-                }
-            });
+            menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-new")),
+                           QStringLiteral("Pin Folder..."), this, [this]() {
+                               QString dir = QFileDialog::getExistingDirectory(
+                                   this, QStringLiteral("Select Folder to Pin to Sidebar"),
+                                   QDir::homePath());
+                               if (!dir.isEmpty()) {
+                                   AppSettings::instance().addFavorite(dir);
+                                   refresh();
+                               }
+                           });
 
             QStringList hiddenFavs = AppSettings::instance().hiddenFavorites();
             if (!hiddenFavs.isEmpty()) {
@@ -693,7 +750,8 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             }
 
             menu.addSeparator();
-            menu.addAction(QStringLiteral("Manage Sidebar..."), this, &Sidebar::openManageSidebarDialog);
+            menu.addAction(QStringLiteral("Manage Sidebar..."), this,
+                           &Sidebar::openManageSidebarDialog);
             menu.exec(event->globalPos());
             return;
         }
@@ -719,37 +777,76 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             }
 
             menu.addSeparator();
-            menu.addAction(QStringLiteral("Manage Sidebar..."), this, &Sidebar::openManageSidebarDialog);
+            menu.addAction(QStringLiteral("Manage Sidebar..."), this,
+                           &Sidebar::openManageSidebarDialog);
             menu.exec(event->globalPos());
             return;
         }
 
-        // 3. Right clicked on Tag item
+        if (headerType == 4) {
+            menu.addAction(QIcon::fromTheme(QStringLiteral("folder-new")),
+                           QStringLiteral("New Smart Folder..."), this,
+                           &Sidebar::newSmartFolderRequested);
+            menu.exec(event->globalPos());
+            return;
+        }
+
+        // 3. Right clicked on Smart Folder item
+        if (item->data(0, IsSmartFolderRole).toBool()) {
+            const QString name = item->data(0, SmartFolderNameRole).toString();
+            auto* openAct = menu.addAction(
+                QIcon::fromTheme(QStringLiteral("document-open")), QStringLiteral("Open"), this,
+                [this, name]() { emit pathSelected(QStringLiteral("smart://") + name); });
+            QFont f = openAct->font();
+            f.setBold(true);
+            openAct->setFont(f);
+
+            menu.addAction(QStringLiteral("Open in New Tab"), this, [this, name]() {
+                emit openInNewTabRequested(QStringLiteral("smart://") + name);
+            });
+            menu.addAction(QStringLiteral("Open in New Window"), this, [name]() {
+                QProcess::startDetached(
+                    QCoreApplication::applicationFilePath(),
+                    {QStringLiteral("--new-window"), QStringLiteral("smart://") + name});
+            });
+            menu.addSeparator();
+            menu.addAction(QStringLiteral("Edit Smart Folder..."), this,
+                           [this, name]() { emit editSmartFolderRequested(name); });
+            menu.addAction(QStringLiteral("Delete Smart Folder"), this,
+                           [this, name]() { emit deleteSmartFolderRequested(name); });
+            menu.exec(event->globalPos());
+            return;
+        }
+
+        // 4. Right clicked on Tag item
         if (item->data(0, IsTagRole).toBool()) {
             QString tag = item->data(0, TagNameRole).toString();
-            auto* openAct = menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")), QStringLiteral("Open"), this, [this, tag]() {
-                emit tagSelected(tag);
-            });
+            auto* openAct = menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")),
+                                           QStringLiteral("Open"), this,
+                                           [this, tag]() { emit tagSelected(tag); });
             QFont f = openAct->font();
             f.setBold(true);
             openAct->setFont(f);
 
             menu.addSeparator();
             int count = TagManager::instance().tagCount(tag);
-            auto* clearAct = menu.addAction(QStringLiteral("Clear All \"%1\" Tags (%2 Files)").arg(tag).arg(count), this, [this, tag]() {
-                QStringList files = TagManager::instance().filesForTag(tag);
-                for (const auto& f : files) {
-                    TagManager::instance().removeTag(f, tag);
-                }
-                refresh();
-            });
-            if (count == 0) clearAct->setEnabled(false);
+            auto* clearAct = menu.addAction(
+                QStringLiteral("Clear All \"%1\" Tags (%2 Files)").arg(tag).arg(count), this,
+                [this, tag]() {
+                    QStringList files = TagManager::instance().filesForTag(tag);
+                    for (const auto& f : files) {
+                        TagManager::instance().removeTag(f, tag);
+                    }
+                    refresh();
+                });
+            if (count == 0)
+                clearAct->setEnabled(false);
 
             menu.exec(event->globalPos());
             return;
         }
 
-        // 4. Right clicked specific item
+        // 5. Right clicked specific item
         bool isCustom = item->data(0, IsCustomFavRole).toBool();
         bool isStandard = item->data(0, IsStandardFavRole).toBool();
         bool isTrash = item->data(0, IsTrashRole).toBool();
@@ -757,20 +854,20 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
         QString path = item->data(0, PathRole).toString();
 
         // Open action
-        auto* openAct = menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")), QStringLiteral("Open"), this, [this, path]() {
-            if (!path.isEmpty()) {
-                emit pathSelected(path);
-            }
-        });
+        auto* openAct = menu.addAction(QIcon::fromTheme(QStringLiteral("document-open")),
+                                       QStringLiteral("Open"), this, [this, path]() {
+                                           if (!path.isEmpty()) {
+                                               emit pathSelected(path);
+                                           }
+                                       });
         QFont f = openAct->font();
         f.setBold(true);
         openAct->setFont(f);
 
         // Open in New Tab
         if (!path.isEmpty()) {
-            menu.addAction(QStringLiteral("Open in New Tab"), this, [this, path]() {
-                emit openInNewTabRequested(path);
-            });
+            menu.addAction(QStringLiteral("Open in New Tab"), this,
+                           [this, path]() { emit openInNewTabRequested(path); });
             menu.addAction(QStringLiteral("Open in New Window"), this, [path]() {
                 QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                         {QStringLiteral("--new-window"), path});
@@ -779,47 +876,54 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
 
         // Open in Terminal
         if (!isTrash && !path.isEmpty()) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")), QStringLiteral("Open in Terminal"), this, [path]() {
-                DesktopAppsManager::openTerminal(path);
-            });
+            menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")),
+                           QStringLiteral("Open in Terminal"), this,
+                           [path]() { DesktopAppsManager::openTerminal(path); });
         }
 
         // Copy Path
         if (!path.isEmpty()) {
-            menu.addAction(QStringLiteral("Copy Path"), this, [path]() {
-                QApplication::clipboard()->setText(path);
-            });
+            menu.addAction(QStringLiteral("Copy Path"), this,
+                           [path]() { QApplication::clipboard()->setText(path); });
         }
 
         menu.addSeparator();
 
         // Location specific or Favorite specific actions
         if (isLocation) {
-            bool isMounted = item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
+            bool isMounted = item->data(0, IsMountedRole).isValid()
+                                 ? item->data(0, IsMountedRole).toBool()
+                                 : true;
             bool isUsb = item->data(0, IsUsbRole).toBool();
             QString dev = item->data(0, DeviceRole).toString();
 
             if (isTrash) {
-                menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")), QStringLiteral("Empty Trash"), this, &Sidebar::emptyTrashRequested);
+                menu.addAction(QIcon::fromTheme(QStringLiteral("trash-empty")),
+                               QStringLiteral("Empty Trash"), this, &Sidebar::emptyTrashRequested);
                 menu.addSeparator();
             } else if (!isMounted) {
-                menu.addAction(QIcon::fromTheme(QStringLiteral("media-mount")), QStringLiteral("Mount"), this, [this, dev, path]() {
-                    QString toMount = !dev.isEmpty() ? dev : path;
-                    mountDeviceAsync(toMount);
-                });
+                menu.addAction(QIcon::fromTheme(QStringLiteral("media-mount")),
+                               QStringLiteral("Mount"), this, [this, dev, path]() {
+                                   QString toMount = !dev.isEmpty() ? dev : path;
+                                   mountDeviceAsync(toMount);
+                               });
                 menu.addSeparator();
             } else if (path != QStringLiteral("/") && !path.isEmpty()) {
                 // Eject / Unmount
-                menu.addAction(QIcon::fromTheme(QStringLiteral("media-eject")), QStringLiteral("Eject / Unmount"), this, [this, path]() {
-                    ejectVolumeAsync(path);
-                });
+                menu.addAction(QIcon::fromTheme(QStringLiteral("media-eject")),
+                               QStringLiteral("Eject / Unmount"), this,
+                               [this, path]() { ejectVolumeAsync(path); });
                 if (isUsb) {
-                    menu.addAction(QIcon::fromTheme(QStringLiteral("media-removable")), QStringLiteral("Safely Remove Drive"), this, [this, dev, path]() {
-                        ejectVolumeAsync(path);
-                        if (!dev.isEmpty()) {
-                            QProcess::startDetached(QStringLiteral("udisksctl"), {QStringLiteral("power-off"), QStringLiteral("-b"), dev});
-                        }
-                    });
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("media-removable")),
+                                   QStringLiteral("Safely Remove Drive"), this,
+                                   [this, dev, path]() {
+                                       ejectVolumeAsync(path);
+                                       if (!dev.isEmpty()) {
+                                           QProcess::startDetached(QStringLiteral("udisksctl"),
+                                                                   {QStringLiteral("power-off"),
+                                                                    QStringLiteral("-b"), dev});
+                                       }
+                                   });
                 }
                 menu.addSeparator();
             }
@@ -829,19 +933,22 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
                 QString diskTool;
                 if (!QStandardPaths::findExecutable(QStringLiteral("partitionmanager")).isEmpty()) {
                     diskTool = QStringLiteral("partitionmanager");
-                } else if (!QStandardPaths::findExecutable(QStringLiteral("gnome-disks")).isEmpty()) {
+                } else if (!QStandardPaths::findExecutable(QStringLiteral("gnome-disks"))
+                                .isEmpty()) {
                     diskTool = QStringLiteral("gnome-disks");
                 } else if (!QStandardPaths::findExecutable(QStringLiteral("gparted")).isEmpty()) {
                     diskTool = QStringLiteral("gparted");
                 }
                 if (!diskTool.isEmpty()) {
-                    menu.addAction(QIcon::fromTheme(QStringLiteral("drive-harddisk")), QStringLiteral("Manage Partition / Format..."), [diskTool, dev]() {
-                        if (!dev.isEmpty()) {
-                            QProcess::startDetached(diskTool, {dev});
-                        } else {
-                            QProcess::startDetached(diskTool, {});
-                        }
-                    });
+                    menu.addAction(QIcon::fromTheme(QStringLiteral("drive-harddisk")),
+                                   QStringLiteral("Manage Partition / Format..."),
+                                   [diskTool, dev]() {
+                                       if (!dev.isEmpty()) {
+                                           QProcess::startDetached(diskTool, {dev});
+                                       } else {
+                                           QProcess::startDetached(diskTool, {});
+                                       }
+                                   });
                     menu.addSeparator();
                 }
             }
@@ -851,10 +958,11 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
                 refresh();
             });
         } else if (isCustom) {
-            menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-remove")), QStringLiteral("Unpin from Sidebar"), this, [this, path]() {
-                AppSettings::instance().removeFavorite(path);
-                refresh();
-            });
+            menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-remove")),
+                           QStringLiteral("Unpin from Sidebar"), this, [this, path]() {
+                               AppSettings::instance().removeFavorite(path);
+                               refresh();
+                           });
         } else if (isStandard) {
             menu.addAction(QStringLiteral("Hide from Sidebar"), this, [this, path]() {
                 AppSettings::instance().hideFavorite(path);
@@ -862,88 +970,104 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             });
         }
 
-        // Get Info
+        // Properties
         if (!path.isEmpty()) {
             menu.addSeparator();
-            menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")), QStringLiteral("Get Info"), this, [this, path]() {
-                emit getInfoRequested(path);
-            });
+            menu.addAction(QIcon::fromTheme(QStringLiteral("dialog-information")),
+                           QStringLiteral("Properties"), this,
+                           [this, path]() { emit getInfoRequested(path); });
         }
 
         // Arrangement actions for Favorites
         if (isCustom || isStandard) {
             menu.addSeparator();
-            menu.addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
-                AppSettings::instance().moveFavoriteToTop(path);
-                refresh();
-                selectPath(path);
-            });
-            auto* arrangeMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("view-sort-ascending")), QStringLiteral("Arrange"));
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
-                AppSettings::instance().moveFavoriteToTop(path);
-                refresh();
-                selectPath(path);
-            });
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-up")), QStringLiteral("Move Up"), this, [this, path]() {
-                AppSettings::instance().moveFavoriteUp(path);
-                refresh();
-                selectPath(path);
-            });
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-down")), QStringLiteral("Move Down"), this, [this, path]() {
-                AppSettings::instance().moveFavoriteDown(path);
-                refresh();
-                selectPath(path);
-            });
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-bottom")), QStringLiteral("Move to Bottom"), this, [this, path]() {
-                AppSettings::instance().moveFavoriteToBottom(path);
-                refresh();
-                selectPath(path);
-            });
+            menu.addAction(QIcon::fromTheme(QStringLiteral("go-top")),
+                           QStringLiteral("Move to Top"), this, [this, path]() {
+                               AppSettings::instance().moveFavoriteToTop(path);
+                               refresh();
+                               selectPath(path);
+                           });
+            auto* arrangeMenu = menu.addMenu(
+                QIcon::fromTheme(QStringLiteral("view-sort-ascending")), QStringLiteral("Arrange"));
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-top")),
+                                   QStringLiteral("Move to Top"), this, [this, path]() {
+                                       AppSettings::instance().moveFavoriteToTop(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-up")),
+                                   QStringLiteral("Move Up"), this, [this, path]() {
+                                       AppSettings::instance().moveFavoriteUp(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-down")),
+                                   QStringLiteral("Move Down"), this, [this, path]() {
+                                       AppSettings::instance().moveFavoriteDown(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-bottom")),
+                                   QStringLiteral("Move to Bottom"), this, [this, path]() {
+                                       AppSettings::instance().moveFavoriteToBottom(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
         }
 
         // Arrangement actions for Locations
         if (isLocation) {
             menu.addSeparator();
-            menu.addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
-                AppSettings::instance().moveLocationToTop(path);
-                refresh();
-                selectPath(path);
-            });
-            auto* arrangeMenu = menu.addMenu(QIcon::fromTheme(QStringLiteral("view-sort-ascending")), QStringLiteral("Arrange"));
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-top")), QStringLiteral("Move to Top"), this, [this, path]() {
-                AppSettings::instance().moveLocationToTop(path);
-                refresh();
-                selectPath(path);
-            });
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-up")), QStringLiteral("Move Up"), this, [this, path]() {
-                AppSettings::instance().moveLocationUp(path);
-                refresh();
-                selectPath(path);
-            });
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-down")), QStringLiteral("Move Down"), this, [this, path]() {
-                AppSettings::instance().moveLocationDown(path);
-                refresh();
-                selectPath(path);
-            });
-            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-bottom")), QStringLiteral("Move to Bottom"), this, [this, path]() {
-                AppSettings::instance().moveLocationToBottom(path);
-                refresh();
-                selectPath(path);
-            });
+            menu.addAction(QIcon::fromTheme(QStringLiteral("go-top")),
+                           QStringLiteral("Move to Top"), this, [this, path]() {
+                               AppSettings::instance().moveLocationToTop(path);
+                               refresh();
+                               selectPath(path);
+                           });
+            auto* arrangeMenu = menu.addMenu(
+                QIcon::fromTheme(QStringLiteral("view-sort-ascending")), QStringLiteral("Arrange"));
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-top")),
+                                   QStringLiteral("Move to Top"), this, [this, path]() {
+                                       AppSettings::instance().moveLocationToTop(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-up")),
+                                   QStringLiteral("Move Up"), this, [this, path]() {
+                                       AppSettings::instance().moveLocationUp(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-down")),
+                                   QStringLiteral("Move Down"), this, [this, path]() {
+                                       AppSettings::instance().moveLocationDown(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
+            arrangeMenu->addAction(QIcon::fromTheme(QStringLiteral("go-bottom")),
+                                   QStringLiteral("Move to Bottom"), this, [this, path]() {
+                                       AppSettings::instance().moveLocationToBottom(path);
+                                       refresh();
+                                       selectPath(path);
+                                   });
         }
 
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Manage Sidebar..."), this, &Sidebar::openManageSidebarDialog);
+        menu.addAction(QStringLiteral("Manage Sidebar..."), this,
+                       &Sidebar::openManageSidebarDialog);
 
     } else {
         // 4. Right clicked on empty space
-        menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-new")), QStringLiteral("Pin Folder..."), this, [this]() {
-            QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Select Folder to Pin to Sidebar"), QDir::homePath());
-            if (!dir.isEmpty()) {
-                AppSettings::instance().addFavorite(dir);
-                refresh();
-            }
-        });
+        menu.addAction(QIcon::fromTheme(QStringLiteral("bookmark-new")),
+                       QStringLiteral("Pin Folder..."), this, [this]() {
+                           QString dir = QFileDialog::getExistingDirectory(
+                               this, QStringLiteral("Select Folder to Pin to Sidebar"),
+                               QDir::homePath());
+                           if (!dir.isEmpty()) {
+                               AppSettings::instance().addFavorite(dir);
+                               refresh();
+                           }
+                       });
 
         QStringList hiddenFavs = AppSettings::instance().hiddenFavorites();
         QStringList hiddenLocs = AppSettings::instance().hiddenLocations();
@@ -953,23 +1077,26 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             for (const auto& hf : hiddenFavs) {
                 QFileInfo fi(hf);
                 QString label = fi.fileName().isEmpty() ? hf : fi.fileName();
-                unhideMenu->addAction(QStringLiteral("Favorite: %1").arg(label), this, [this, hf]() {
-                    AppSettings::instance().unhideFavorite(hf);
-                    refresh();
-                });
+                unhideMenu->addAction(QStringLiteral("Favorite: %1").arg(label), this,
+                                      [this, hf]() {
+                                          AppSettings::instance().unhideFavorite(hf);
+                                          refresh();
+                                      });
             }
             for (const auto& hl : hiddenLocs) {
                 QFileInfo fi(hl);
                 QString label = fi.fileName().isEmpty() ? hl : fi.fileName();
-                unhideMenu->addAction(QStringLiteral("Location: %1").arg(label), this, [this, hl]() {
-                    AppSettings::instance().unhideLocation(hl);
-                    refresh();
-                });
+                unhideMenu->addAction(QStringLiteral("Location: %1").arg(label), this,
+                                      [this, hl]() {
+                                          AppSettings::instance().unhideLocation(hl);
+                                          refresh();
+                                      });
             }
         }
 
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Manage Sidebar..."), this, &Sidebar::openManageSidebarDialog);
+        menu.addAction(QStringLiteral("Manage Sidebar..."), this,
+                       &Sidebar::openManageSidebarDialog);
     }
 
     if (!menu.isEmpty()) {
@@ -977,18 +1104,17 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
     }
 }
 
-void Sidebar::openManageSidebarDialog()
-{
+void Sidebar::openManageSidebarDialog() {
     auto* dlg = new SidebarSettingsDialog(this);
     connect(dlg, &SidebarSettingsDialog::sidebarChanged, this, &Sidebar::refresh);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
 
-void Sidebar::startDrag(Qt::DropActions /*supportedActions*/)
-{
+void Sidebar::startDrag(Qt::DropActions /*supportedActions*/) {
     QTreeWidgetItem* item = currentItem();
-    if (!item) return;
+    if (!item)
+        return;
 
     bool isFav = (item->parent() == m_favoritesHeader);
     bool isLoc = (item->parent() == m_locationsHeader);
@@ -997,7 +1123,8 @@ void Sidebar::startDrag(Qt::DropActions /*supportedActions*/)
     }
 
     QString path = item->data(0, PathRole).toString();
-    if (path.isEmpty()) return;
+    if (path.isEmpty())
+        return;
 
     auto* mimeData = new QMimeData();
     if (isFav) {
@@ -1031,8 +1158,7 @@ void Sidebar::startDrag(Qt::DropActions /*supportedActions*/)
     drag->exec(Qt::MoveAction);
 }
 
-void Sidebar::dragEnterEvent(QDragEnterEvent* event)
-{
+void Sidebar::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item")) ||
         event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-location")) ||
         event->mimeData()->hasUrls()) {
@@ -1040,8 +1166,7 @@ void Sidebar::dragEnterEvent(QDragEnterEvent* event)
     }
 }
 
-void Sidebar::dragMoveEvent(QDragMoveEvent* event)
-{
+void Sidebar::dragMoveEvent(QDragMoveEvent* event) {
     if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item"))) {
         QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
         QModelIndex idx = indexAt(vpPos);
@@ -1109,18 +1234,17 @@ void Sidebar::dragMoveEvent(QDragMoveEvent* event)
     }
 }
 
-void Sidebar::dragLeaveEvent(QDragLeaveEvent* event)
-{
+void Sidebar::dragLeaveEvent(QDragLeaveEvent* event) {
     resetSpringTimer();
     QTreeWidget::dragLeaveEvent(event);
 }
 
-void Sidebar::dropEvent(QDropEvent* event)
-{
+void Sidebar::dropEvent(QDropEvent* event) {
     resetSpringTimer();
     // 1. Reordering favorite items inside sidebar
     if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-item"))) {
-        QString draggedPath = QString::fromUtf8(event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-item")));
+        QString draggedPath = QString::fromUtf8(
+            event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-item")));
         if (!draggedPath.isEmpty()) {
             QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
             QModelIndex idx = indexAt(vpPos);
@@ -1134,7 +1258,8 @@ void Sidebar::dropEvent(QDropEvent* event)
                 } else {
                     QString targetPath = target->data(0, PathRole).toString();
                     targetIndex = static_cast<int>(currentOrder.indexOf(targetPath));
-                    if (targetIndex < 0) targetIndex = 0;
+                    if (targetIndex < 0)
+                        targetIndex = 0;
                     QRect rect = visualItemRect(target);
                     if (vpPos.y() > rect.center().y()) {
                         targetIndex++; // Dropped on lower half -> place after target
@@ -1154,7 +1279,8 @@ void Sidebar::dropEvent(QDropEvent* event)
 
     // 2. Reordering location items inside sidebar
     if (event->mimeData()->hasFormat(QStringLiteral("application/x-finder-sidebar-location"))) {
-        QString draggedPath = QString::fromUtf8(event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-location")));
+        QString draggedPath = QString::fromUtf8(
+            event->mimeData()->data(QStringLiteral("application/x-finder-sidebar-location")));
         if (!draggedPath.isEmpty()) {
             QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
             QModelIndex idx = indexAt(vpPos);
@@ -1168,7 +1294,8 @@ void Sidebar::dropEvent(QDropEvent* event)
                 } else {
                     QString targetPath = target->data(0, PathRole).toString();
                     targetIndex = static_cast<int>(currentOrder.indexOf(targetPath));
-                    if (targetIndex < 0) targetIndex = 0;
+                    if (targetIndex < 0)
+                        targetIndex = 0;
                     QRect rect = visualItemRect(target);
                     if (vpPos.y() > rect.center().y()) {
                         targetIndex++; // Dropped on lower half -> place after target
@@ -1187,7 +1314,8 @@ void Sidebar::dropEvent(QDropEvent* event)
     }
 
     // 2. External files dropped
-    if (!event->mimeData()->hasUrls()) return;
+    if (!event->mimeData()->hasUrls())
+        return;
 
     QStringList sourcePaths;
     for (const auto& url : event->mimeData()->urls()) {
@@ -1195,7 +1323,8 @@ void Sidebar::dropEvent(QDropEvent* event)
             sourcePaths.append(url.toLocalFile());
         }
     }
-    if (sourcePaths.isEmpty()) return;
+    if (sourcePaths.isEmpty())
+        return;
 
     QPoint vpPos = viewport()->mapFromGlobal(mapToGlobal(event->position().toPoint()));
     QModelIndex idx = indexAt(vpPos);
@@ -1250,8 +1379,7 @@ void Sidebar::dropEvent(QDropEvent* event)
     }
 }
 
-void Sidebar::resetSpringTimer()
-{
+void Sidebar::resetSpringTimer() {
     if (m_springTimer && m_springTimer->isActive()) {
         m_springTimer->stop();
     }
@@ -1262,24 +1390,23 @@ void Sidebar::resetSpringTimer()
     }
 }
 
-void Sidebar::onUdisksInterfacesAdded(const QDBusObjectPath& /*path*/, const QVariantMap& /*interfaces*/)
-{
+void Sidebar::onUdisksInterfacesAdded(const QDBusObjectPath& /*path*/,
+                                      const QVariantMap& /*interfaces*/) {
     m_volumeScanTimestamp.invalidate();
     if (m_volumeDebounceTimer) {
         m_volumeDebounceTimer->start();
     }
 }
 
-void Sidebar::onUdisksInterfacesRemoved(const QDBusObjectPath& /*path*/, const QStringList& /*interfaces*/)
-{
+void Sidebar::onUdisksInterfacesRemoved(const QDBusObjectPath& /*path*/,
+                                        const QStringList& /*interfaces*/) {
     m_volumeScanTimestamp.invalidate();
     if (m_volumeDebounceTimer) {
         m_volumeDebounceTimer->start();
     }
 }
 
-void Sidebar::onSpringTimeout()
-{
+void Sidebar::onSpringTimeout() {
     if (!m_springHoverPath.isEmpty()) {
         QString target = m_springHoverPath;
         resetSpringTimer();
@@ -1288,9 +1415,9 @@ void Sidebar::onSpringTimeout()
     }
 }
 
-void Sidebar::checkVolumeChanges()
-{
-    QStringList blockEntries = QDir(QStringLiteral("/sys/class/block")).entryList(QDir::NoDotAndDotDot);
+void Sidebar::checkVolumeChanges() {
+    QStringList blockEntries =
+        QDir(QStringLiteral("/sys/class/block")).entryList(QDir::NoDotAndDotDot);
     std::sort(blockEntries.begin(), blockEntries.end());
 
     QFileInfo mountsInfo(QStringLiteral("/proc/mounts"));
@@ -1313,7 +1440,8 @@ void Sidebar::checkVolumeChanges()
 
     if (fp != m_lastVolumeFingerprint) {
         m_lastVolumeFingerprint = fp;
-        if (m_volumeWatcher && QDir(userMedia).exists() && !m_volumeWatcher->directories().contains(userMedia)) {
+        if (m_volumeWatcher && QDir(userMedia).exists() &&
+            !m_volumeWatcher->directories().contains(userMedia)) {
             m_volumeWatcher->addPath(userMedia);
         }
         m_volumeScanTimestamp.invalidate();

@@ -35,7 +35,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Validate desktop entry
-        run: desktop-file-validate data/org.finderlinux.Finder.desktop
+        run: desktop-file-validate build/org.finderlinux.Finder.desktop
 
       - name: Validate AppStream metadata
         run: appstreamcli validate --no-net data/org.finderlinux.Finder.metainfo.xml

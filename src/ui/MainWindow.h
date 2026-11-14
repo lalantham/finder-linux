@@ -1,15 +1,15 @@
 #pragma once
 
-#include "Toolbar.h"
-#include "Sidebar.h"
-#include "TabManager.h"
 #include "FileOperationEngine.h"
-#include "UndoManager.h"
 #include "ProgressDialog.h"
 #include "QuickLookDialog.h"
+#include "Sidebar.h"
+#include "TabManager.h"
+#include "Toolbar.h"
+#include "UndoManager.h"
+#include <QLabel>
 #include <QMainWindow>
 #include <QSplitter>
-#include <QLabel>
 #include <QStringList>
 #include <QVariantList>
 
@@ -83,14 +83,21 @@ private slots:
     void onDeletePermanently();
     void onEmptyTrash();
     void onPutBack();
-    void onFilesDropped(const QStringList& sources, const QString& targetDir, Qt::DropAction action);
-    void onContextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
+    void onFilesDropped(const QStringList& sources, const QString& targetDir,
+                        Qt::DropAction action);
+    void onContextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths,
+                                const QString& currentDir);
 
     // Inspection & Preview
     void onQuickLook();
     void onGetInfo();
     void onToggleHidden();
     void onOpenTerminal();
+    void onViewOptions();
+    void onSaveSearch();
+    void onNewSmartFolder();
+    void onEditSmartFolder(const QString& name);
+    void onDeleteSmartFolder(const QString& name);
 
     // Undo / Redo
     void onUndo();
@@ -102,7 +109,8 @@ private slots:
     // Operations Engine callbacks
     void onOperationStarted(OperationType type, int totalItems, qint64 totalBytes);
     void onOperationProgress(const OperationProgress& progress);
-    void onOperationConflict(const OperationConflict& conflict, ConflictResolution& res, bool& applyToAll);
+    void onOperationConflict(const OperationConflict& conflict, ConflictResolution& res,
+                             bool& applyToAll);
     void onOperationFinished(const OperationResult& result);
 
 private:
@@ -117,6 +125,7 @@ private:
     void updateSplitActions();
     void applyIconSizeToAll(int size);
     void adjustIconSize(int delta);
+    void applyChromeVisibility();
     void onPreferences();
     void onBatchRename();
     void toggleTerminalPanel();
@@ -142,6 +151,11 @@ private:
     QAction* m_syncSplitAction{nullptr};
     QAction* m_copyToOtherPaneAction{nullptr};
     QAction* m_moveToOtherPaneAction{nullptr};
+    QAction* m_showSidebarAction{nullptr};
+    QAction* m_showToolbarAction{nullptr};
+    QAction* m_showPathBarAction{nullptr};
+    QAction* m_showStatusBarAction{nullptr};
+    QAction* m_fullScreenAction{nullptr};
 
     QStringList m_clipboardPaths;
     bool m_isCutOperation{false};

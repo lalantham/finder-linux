@@ -1,6 +1,29 @@
 # Changelog
 
-All notable changes to Finder Linux are documented here.
+All notable changes to File Manager for Linux are documented here.
+
+## [Unreleased]
+
+### Search and Smart Folders
+- Added real metadata, tag, comment, size, date, extension, and content search.
+- Added structured search tokens such as `kind:`, `tag:`, `size:`, `modified:`, `ext:`,
+  `name:`, `content:`, and `-exclude`.
+- Added a **This PC** scope that searches local mounted filesystems with system-directory pruning.
+- Added content search for text/source files and PDFs (via `pdftotext` when available).
+- Added Smart Folders: save, edit, rename, delete, and open saved searches from the sidebar.
+- Added active-filter summaries and a Save Search action to the search bar.
+- `F5` re-runs an active search to pick up filesystem changes.
+
+### View options and list columns
+- Added a per-folder **Show View Options** dialog (`Ctrl+J`) for icon size, text size,
+  label position, grid spacing, item info, icon previews, and manual icon arrangement.
+- Added **Use as Defaults**, **Clean Up**, and **Align to Grid**.
+- Added metadata list columns: Date Created, Date Last Opened, Tags, Permissions,
+  Owner, Group, and Comment, with a header menu to show/hide and reorder columns.
+- Persisted list column visibility, order, and widths.
+- Added locale-aware natural sorting (`file2` before `file10`) and sorting for the new columns.
+- Added show/hide controls for the sidebar, toolbar, path bar, and status bar.
+- Added `F11` full-screen mode.
 
 ## [1.0.0] - 2026-11-14
 
@@ -33,8 +56,8 @@ All notable changes to Finder Linux are documented here.
 
 ### UI
 - Added active-pane highlighting in split view.
-- Added Quick Look video/audio playback via Qt Multimedia.
-- Added filesystem metadata and checksum sections to Get Info.
+- Added Preview video/audio playback via Qt Multimedia.
+- Added filesystem metadata and checksum sections to Properties.
 - Added Filelight and Plasma wallpaper integration.
 
 ### Packaging

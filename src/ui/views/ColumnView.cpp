@@ -1,47 +1,44 @@
 #include "ColumnView.h"
-#include "TagManager.h"
 #include "AppSettings.h"
 #include "DesktopAppsManager.h"
-#include "PreviewManager.h"
 #include "FileItem.h"
+#include "PreviewManager.h"
+#include "TagManager.h"
 #include "ThemeManager.h"
 #include "WrappingLabel.h"
-#include <QScrollBar>
-#include <QKeyEvent>
-#include <QMouseEvent>
-#include <QSignalBlocker>
-#include <QFontMetrics>
-#include <QVBoxLayout>
 #include <QDesktopServices>
-#include <QUrl>
-#include <QPushButton>
-#include <QPainter>
-#include <QFileIconProvider>
-#include <QPropertyAnimation>
-#include <QTimer>
-#include <QScreen>
-#include <QGuiApplication>
 #include <QDragEnterEvent>
-#include <QDragMoveEvent>
 #include <QDragLeaveEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
-#include <QMimeData>
+#include <QFileIconProvider>
+#include <QFontMetrics>
+#include <QGuiApplication>
+#include <QKeyEvent>
 #include <QLineEdit>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPropertyAnimation>
+#include <QPushButton>
+#include <QScreen>
+#include <QScrollBar>
+#include <QSignalBlocker>
+#include <QTimer>
+#include <QUrl>
+#include <QVBoxLayout>
 
 namespace {
 constexpr int kColumnResizeMargin = 6;
 constexpr int kMinColumnWidth = 200;
 constexpr int kMaxColumnWidth = 1600;
-}
+} // namespace
 
 // ColumnItemDelegate
-ColumnItemDelegate::ColumnItemDelegate(QObject* parent)
-    : QStyledItemDelegate(parent)
-{
-}
+ColumnItemDelegate::ColumnItemDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
 
-void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
-{
+void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option,
+                               const QModelIndex& index) const {
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, true);
 
@@ -73,8 +70,10 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
     if (icon.isNull()) {
         static QFileIconProvider fallbackProv;
-        icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"), fallbackProv.icon(QFileIconProvider::Folder))
-                     : QIcon::fromTheme(QStringLiteral("text-x-generic"), fallbackProv.icon(QFileIconProvider::File));
+        icon = isDir ? QIcon::fromTheme(QStringLiteral("folder"),
+                                        fallbackProv.icon(QFileIconProvider::Folder))
+                     : QIcon::fromTheme(QStringLiteral("text-x-generic"),
+                                        fallbackProv.icon(QFileIconProvider::File));
     }
     QRect iconRect(textLeft, option.rect.top() + (option.rect.height() - 18) / 2, 18, 18);
     icon.paint(painter, iconRect);
@@ -88,11 +87,12 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     int dotsWidth = tags.isEmpty() ? 0 : (numTags * (dotSize + dotSpacing) + 4);
 
     int rightMargin = (isDir ? 24 : 8) + dotsWidth;
-    QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - rightMargin, option.rect.height());
+    QRect textRect(textLeft, option.rect.top(), option.rect.right() - textLeft - rightMargin,
+                   option.rect.height());
     QString text = index.data(Qt::DisplayRole).toString();
 
     QFont font = option.font;
-    font.setPointSize(10);
+    font.setPointSize(m_textSize);
     painter->setFont(font);
 
     QFontMetrics fm(font);
@@ -113,7 +113,7 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
         }
     }
 
-    // Draw iconic macOS right chevron for folders
+    // Draw the right chevron used for folders.
     if (isDir) {
         QRect chevronRect(option.rect.right() - 20, option.rect.top(), 14, option.rect.height());
         painter->setPen(isSelected ? Qt::white : ThemeManager::instance().subTextColor());
@@ -127,26 +127,28 @@ void ColumnItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& op
     painter->restore();
 }
 
-QSize ColumnItemDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& /*index*/) const
-{
+QSize ColumnItemDelegate::sizeHint(const QStyleOptionViewItem& option,
+                                   const QModelIndex& /*index*/) const {
     return QSize(option.rect.width(), 26);
 }
 
-QWidget* ColumnItemDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const
-{
+QWidget* ColumnItemDelegate::createEditor(QWidget* parent, const QStyleOptionViewItem& option,
+                                          const QModelIndex& index) const {
     Q_UNUSED(option);
     Q_UNUSED(index);
     auto* editor = new QLineEdit(parent);
     editor->setFrame(true);
-    editor->setStyleSheet(QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3; border-radius: 4px; padding: 2px 4px; }")
-        .arg(ThemeManager::instance().isDark() ? QStringLiteral("#2d2d2d") : QStringLiteral("#ffffff"))
-        .arg(ThemeManager::instance().isDark() ? QStringLiteral("#ffffff") : QStringLiteral("#000000"))
-        .arg(ThemeManager::instance().accentColor().name()));
+    editor->setStyleSheet(QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid "
+                                         "%3; border-radius: 4px; padding: 2px 4px; }")
+                              .arg(ThemeManager::instance().isDark() ? QStringLiteral("#2d2d2d")
+                                                                     : QStringLiteral("#ffffff"))
+                              .arg(ThemeManager::instance().isDark() ? QStringLiteral("#ffffff")
+                                                                     : QStringLiteral("#000000"))
+                              .arg(ThemeManager::instance().accentColor().name()));
     return editor;
 }
 
-void ColumnItemDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const
-{
+void ColumnItemDelegate::setEditorData(QWidget* editor, const QModelIndex& index) const {
     auto* lineEdit = qobject_cast<QLineEdit*>(editor);
     if (!lineEdit) {
         QStyledItemDelegate::setEditorData(editor, index);
@@ -156,19 +158,17 @@ void ColumnItemDelegate::setEditorData(QWidget* editor, const QModelIndex& index
     lineEdit->setText(name);
     const bool isDirectory = index.data(FileSystemModel::FileIsDirRole).toBool();
     const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
-    const int selectionLen = (!isDirectory && dot > 0)
-        ? static_cast<int>(dot)
-        : static_cast<int>(name.size());
+    const int selectionLen =
+        (!isDirectory && dot > 0) ? static_cast<int>(dot) : static_cast<int>(name.size());
     lineEdit->setSelection(0, selectionLen);
     // QAbstractItemView selects the whole editor text after setEditorData().
     // Re-apply the stem selection once the view has finished opening the editor.
-    QTimer::singleShot(0, lineEdit, [lineEdit, selectionLen]() {
-        lineEdit->setSelection(0, selectionLen);
-    });
+    QTimer::singleShot(0, lineEdit,
+                       [lineEdit, selectionLen]() { lineEdit->setSelection(0, selectionLen); });
 }
 
-void ColumnItemDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& /*index*/) const
-{
+void ColumnItemDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option,
+                                              const QModelIndex& /*index*/) const {
     int textLeft = option.rect.left() + 34;
     QRect textRect(textLeft, option.rect.top() + (option.rect.height() - 24) / 2,
                    option.rect.width() - 40, 24);
@@ -177,9 +177,7 @@ void ColumnItemDelegate::updateEditorGeometry(QWidget* editor, const QStyleOptio
 
 // ColumnBrowserList
 ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
-    : QListView(parent)
-    , m_path(path)
-{
+    : QListView(parent), m_path(path) {
     m_model = new FileSystemModel(this);
     m_model->setShowHidden(AppSettings::instance().showHiddenFiles());
     m_model->setRootPath(path);
@@ -211,34 +209,43 @@ ColumnBrowserList::ColumnBrowserList(const QString& path, QWidget* parent)
     m_springTimer->setSingleShot(true);
     connect(m_springTimer, &QTimer::timeout, this, &ColumnBrowserList::onSpringTimeout);
 
-    setStyleSheet(QStringLiteral(
-        "QListView {"
-        "  background: transparent;"
-        "  border: none;"
-        "  border-right: 1px solid rgba(128, 128, 128, 0.22);"
-        "  outline: none;"
-        "}"
-    ));
+    setStyleSheet(QStringLiteral("QListView {"
+                                 "  background: transparent;"
+                                 "  border: none;"
+                                 "  border-right: 1px solid rgba(128, 128, 128, 0.22);"
+                                 "  outline: none;"
+                                 "}"));
 
-    connect(m_model, &FileSystemModel::fileDropRequested, this, &ColumnBrowserList::fileDropRequested);
+    connect(m_model, &FileSystemModel::fileDropRequested, this,
+            &ColumnBrowserList::fileDropRequested);
     connect(m_model, &FileSystemModel::directoryLoaded, this, [this]() {
         applyPendingSelection(true);
         updateColumnWidth();
     });
-    connect(selectionModel(), &QItemSelectionModel::currentChanged, this, &ColumnBrowserList::onSelectionChanged);
-    connect(selectionModel(), &QItemSelectionModel::selectionChanged, this, &ColumnBrowserList::onSelectionChanged);
+    connect(selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &ColumnBrowserList::onSelectionChanged);
+    connect(selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            &ColumnBrowserList::onSelectionChanged);
     connect(this, &QListView::doubleClicked, this, [this](const QModelIndex& index) {
-        if (!index.isValid()) return;
+        if (!index.isValid())
+            return;
         QString itemPath = index.data(FileSystemModel::FilePathRole).toString();
         bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
         emit itemDoubleClicked(itemPath, isDir);
     });
 }
 
-QStringList ColumnBrowserList::selectedPaths() const
-{
+void ColumnBrowserList::setItemDelegateTextSize(int size) {
+    if (m_delegate) {
+        m_delegate->setTextSize(size);
+        viewport()->update();
+    }
+}
+
+QStringList ColumnBrowserList::selectedPaths() const {
     QStringList paths;
-    if (!selectionModel()) return paths;
+    if (!selectionModel())
+        return paths;
     for (const auto& idx : selectionModel()->selectedIndexes()) {
         QString p = idx.data(FileSystemModel::FilePathRole).toString();
         if (!p.isEmpty() && !paths.contains(p)) {
@@ -248,9 +255,9 @@ QStringList ColumnBrowserList::selectedPaths() const
     return paths;
 }
 
-void ColumnBrowserList::updateColumnWidth()
-{
-    if (!m_model || m_userResized) return;
+void ColumnBrowserList::updateColumnWidth() {
+    if (!m_model || m_userResized)
+        return;
 
     QFont measurementFont = font();
     measurementFont.setPointSize(10);
@@ -267,8 +274,7 @@ void ColumnBrowserList::updateColumnWidth()
     }
 }
 
-void ColumnBrowserList::setWidthAnimating(bool animating)
-{
+void ColumnBrowserList::setWidthAnimating(bool animating) {
     m_widthAnimating = animating;
     if (!m_widthAnimating) {
         setFixedWidth(m_preferredWidth);
@@ -276,8 +282,8 @@ void ColumnBrowserList::setWidthAnimating(bool animating)
     }
 }
 
-void ColumnBrowserList::selectPathWhenLoaded(const QString& path, bool notifyPassive, bool applyNow)
-{
+void ColumnBrowserList::selectPathWhenLoaded(const QString& path, bool notifyPassive,
+                                             bool applyNow) {
     m_pendingSelectPath = path;
     m_pendingNotifyPassive = notifyPassive;
     if (applyNow) {
@@ -285,8 +291,7 @@ void ColumnBrowserList::selectPathWhenLoaded(const QString& path, bool notifyPas
     }
 }
 
-void ColumnBrowserList::applyPendingSelection(bool afterLoad)
-{
+void ColumnBrowserList::applyPendingSelection(bool afterLoad) {
     if (m_pendingSelectPath.isEmpty()) {
         return;
     }
@@ -326,8 +331,7 @@ void ColumnBrowserList::applyPendingSelection(bool afterLoad)
     }
 }
 
-void ColumnBrowserList::onSelectionChanged()
-{
+void ColumnBrowserList::onSelectionChanged() {
     QStringList paths = selectedPaths();
 
     // currentChanged and selectionChanged both fire for the same user action;
@@ -358,15 +362,14 @@ void ColumnBrowserList::onSelectionChanged()
 }
 
 namespace {
-bool isOnColumnEdge(const QWidget* widget, const QPoint& pos)
-{
+bool isOnColumnEdge(const QWidget* widget, const QPoint& pos) {
     return pos.x() >= widget->width() - kColumnResizeMargin;
 }
-}
+} // namespace
 
-void ColumnBrowserList::mousePressEvent(QMouseEvent* event)
-{
-    if (event->button() == Qt::LeftButton && isOnColumnEdge(viewport(), event->position().toPoint())) {
+void ColumnBrowserList::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton &&
+        isOnColumnEdge(viewport(), event->position().toPoint())) {
         m_resizing = true;
         m_resizeStartWidth = width();
         m_resizeStartGlobalX = event->globalPosition().toPoint().x();
@@ -377,8 +380,7 @@ void ColumnBrowserList::mousePressEvent(QMouseEvent* event)
     QListView::mousePressEvent(event);
 }
 
-void ColumnBrowserList::mouseMoveEvent(QMouseEvent* event)
-{
+void ColumnBrowserList::mouseMoveEvent(QMouseEvent* event) {
     if (m_resizing) {
         const int delta = event->globalPosition().toPoint().x() - m_resizeStartGlobalX;
         if (delta != 0) {
@@ -398,8 +400,7 @@ void ColumnBrowserList::mouseMoveEvent(QMouseEvent* event)
     QListView::mouseMoveEvent(event);
 }
 
-void ColumnBrowserList::mouseReleaseEvent(QMouseEvent* event)
-{
+void ColumnBrowserList::mouseReleaseEvent(QMouseEvent* event) {
     if (m_resizing) {
         m_resizing = false;
         if (!isOnColumnEdge(viewport(), event->position().toPoint())) {
@@ -413,9 +414,9 @@ void ColumnBrowserList::mouseReleaseEvent(QMouseEvent* event)
     QListView::mouseReleaseEvent(event);
 }
 
-void ColumnBrowserList::mouseDoubleClickEvent(QMouseEvent* event)
-{
-    if (event->button() == Qt::LeftButton && isOnColumnEdge(viewport(), event->position().toPoint())) {
+void ColumnBrowserList::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton &&
+        isOnColumnEdge(viewport(), event->position().toPoint())) {
         AppSettings::instance().removeColumnViewWidth(m_path);
         m_userResized = false;
         updateColumnWidth();
@@ -426,16 +427,14 @@ void ColumnBrowserList::mouseDoubleClickEvent(QMouseEvent* event)
     QListView::mouseDoubleClickEvent(event);
 }
 
-bool ColumnBrowserList::viewportEvent(QEvent* event)
-{
+bool ColumnBrowserList::viewportEvent(QEvent* event) {
     if (event->type() == QEvent::Leave) {
         viewport()->unsetCursor();
     }
     return QListView::viewportEvent(event);
 }
 
-void ColumnBrowserList::dragEnterEvent(QDragEnterEvent* event)
-{
+void ColumnBrowserList::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
     } else {
@@ -443,8 +442,7 @@ void ColumnBrowserList::dragEnterEvent(QDragEnterEvent* event)
     }
 }
 
-void ColumnBrowserList::dragMoveEvent(QDragMoveEvent* event)
-{
+void ColumnBrowserList::dragMoveEvent(QDragMoveEvent* event) {
     if (!AppSettings::instance().springLoadedFoldersEnabled() || !event->mimeData()->hasUrls()) {
         resetSpringTimer();
         QListView::dragMoveEvent(event);
@@ -482,20 +480,17 @@ void ColumnBrowserList::dragMoveEvent(QDragMoveEvent* event)
     QListView::dragMoveEvent(event);
 }
 
-void ColumnBrowserList::dragLeaveEvent(QDragLeaveEvent* event)
-{
+void ColumnBrowserList::dragLeaveEvent(QDragLeaveEvent* event) {
     resetSpringTimer();
     QListView::dragLeaveEvent(event);
 }
 
-void ColumnBrowserList::dropEvent(QDropEvent* event)
-{
+void ColumnBrowserList::dropEvent(QDropEvent* event) {
     resetSpringTimer();
     QListView::dropEvent(event);
 }
 
-void ColumnBrowserList::resetSpringTimer()
-{
+void ColumnBrowserList::resetSpringTimer() {
     if (m_springTimer && m_springTimer->isActive()) {
         m_springTimer->stop();
     }
@@ -506,8 +501,7 @@ void ColumnBrowserList::resetSpringTimer()
     }
 }
 
-void ColumnBrowserList::onSpringTimeout()
-{
+void ColumnBrowserList::onSpringTimeout() {
     if (!m_springHoverPath.isEmpty()) {
         QString target = m_springHoverPath;
         resetSpringTimer();
@@ -522,8 +516,7 @@ void ColumnBrowserList::onSpringTimeout()
     }
 }
 
-void ColumnBrowserList::keyPressEvent(QKeyEvent* event)
-{
+void ColumnBrowserList::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_F2) {
         QModelIndex idx = currentIndex();
         if (idx.isValid()) {
@@ -552,8 +545,7 @@ void ColumnBrowserList::keyPressEvent(QKeyEvent* event)
     QListView::keyPressEvent(event);
 }
 
-void ColumnBrowserList::contextMenuEvent(QContextMenuEvent* event)
-{
+void ColumnBrowserList::contextMenuEvent(QContextMenuEvent* event) {
     QModelIndex idx = indexAt(event->pos());
     QStringList paths;
     if (idx.isValid()) {
@@ -571,16 +563,12 @@ void ColumnBrowserList::contextMenuEvent(QContextMenuEvent* event)
 }
 
 // ColumnPreviewPane
-ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
-    : QWidget(parent)
-{
+ColumnPreviewPane::ColumnPreviewPane(QWidget* parent) : QWidget(parent) {
     setFixedWidth(280);
-    setStyleSheet(QStringLiteral(
-        "ColumnPreviewPane {"
-        "  background: transparent;"
-        "  border-left: 1px solid rgba(128, 128, 128, 0.22);"
-        "}"
-    ));
+    setStyleSheet(QStringLiteral("ColumnPreviewPane {"
+                                 "  background: transparent;"
+                                 "  border-left: 1px solid rgba(128, 128, 128, 0.22);"
+                                 "}"));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(16, 20, 16, 20);
@@ -624,30 +612,34 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent)
 
     layout->addSpacing(12);
 
-    m_qlBtn = new QPushButton(QStringLiteral("Quick Look"), this);
+    m_qlBtn = new QPushButton(QStringLiteral("Preview"), this);
     connect(m_qlBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_currentPath.isEmpty()) emit quickLookRequested(m_currentPath);
+        if (!m_currentPath.isEmpty())
+            emit quickLookRequested(m_currentPath);
     });
     layout->addWidget(m_qlBtn);
 
     layout->addStretch();
 }
 
-void ColumnPreviewPane::setItem(const QString& path)
-{
+void ColumnPreviewPane::setItem(const QString& path) {
     m_currentPath = path;
-    if (m_qlBtn) m_qlBtn->setEnabled(true);
+    if (m_qlBtn)
+        m_qlBtn->setEnabled(true);
     FileItem item(path);
 
     m_nameLabel->setText(item.fileName());
     m_kindLabel->setText(QStringLiteral("Kind: %1").arg(item.kind()));
     m_sizeLabel->setText(QStringLiteral("Size: %1").arg(item.formattedSize()));
-    m_modifiedLabel->setText(QStringLiteral("Modified: %1").arg(item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm"))));
+    m_modifiedLabel->setText(
+        QStringLiteral("Modified: %1")
+            .arg(item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm"))));
 
     // Clear and re-populate tag badges
     QLayoutItem* child;
     while ((child = m_tagsLayout->takeAt(0)) != nullptr) {
-        if (child->widget()) delete child->widget();
+        if (child->widget())
+            delete child->widget();
         delete child;
     }
 
@@ -660,17 +652,18 @@ void ColumnPreviewPane::setItem(const QString& path)
         for (const auto& t : tags) {
             auto* badge = new QLabel(t, m_tagsContainer);
             QColor c = TagManager::colorForTag(t);
-            badge->setStyleSheet(QStringLiteral(
-                "QLabel {"
-                "  background: rgba(%1, %2, %3, 0.2);"
-                "  color: rgb(%1, %2, %3);"
-                "  border: 1px solid rgba(%1, %2, %3, 0.5);"
-                "  border-radius: 4px;"
-                "  padding: 1px 6px;"
-                "  font-size: 10px;"
-                "  font-weight: bold;"
-                "}"
-            ).arg(c.red()).arg(c.green()).arg(c.blue()));
+            badge->setStyleSheet(QStringLiteral("QLabel {"
+                                                "  background: rgba(%1, %2, %3, 0.2);"
+                                                "  color: rgb(%1, %2, %3);"
+                                                "  border: 1px solid rgba(%1, %2, %3, 0.5);"
+                                                "  border-radius: 4px;"
+                                                "  padding: 1px 6px;"
+                                                "  font-size: 10px;"
+                                                "  font-weight: bold;"
+                                                "}")
+                                     .arg(c.red())
+                                     .arg(c.green())
+                                     .arg(c.blue()));
             m_tagsLayout->addWidget(badge);
         }
         m_tagsLayout->addStretch();
@@ -688,12 +681,12 @@ void ColumnPreviewPane::setItem(const QString& path)
     }
 }
 
-void ColumnPreviewPane::setMultipleItems(const QStringList& paths)
-{
+void ColumnPreviewPane::setMultipleItems(const QStringList& paths) {
     m_currentPath.clear();
     QFileIconProvider iconProv;
     m_iconLabel->setPixmap(QIcon::fromTheme(QStringLiteral("document-multiple"),
-                           iconProv.icon(QFileIconProvider::Folder)).pixmap(64, 64));
+                                            iconProv.icon(QFileIconProvider::Folder))
+                               .pixmap(64, 64));
     m_nameLabel->setText(QStringLiteral("%1 items selected").arg(paths.size()));
     m_kindLabel->setText(QStringLiteral("Multiple Items"));
 
@@ -717,12 +710,14 @@ void ColumnPreviewPane::setMultipleItems(const QStringList& paths)
     } else {
         countStr = QStringLiteral("%1 files").arg(fileCount);
     }
-    m_sizeLabel->setText(QStringLiteral("Size: %1 (%2)").arg(FileItem::formatSize(totalBytes), countStr));
+    m_sizeLabel->setText(
+        QStringLiteral("Size: %1 (%2)").arg(FileItem::formatSize(totalBytes), countStr));
     m_modifiedLabel->clear();
 
     QLayoutItem* child;
     while ((child = m_tagsLayout->takeAt(0)) != nullptr) {
-        if (child->widget()) delete child->widget();
+        if (child->widget())
+            delete child->widget();
         delete child;
     }
     m_tagsContainer->hide();
@@ -733,9 +728,7 @@ void ColumnPreviewPane::setMultipleItems(const QStringList& paths)
 
 // ColumnView
 ColumnView::ColumnView(QWidget* parent)
-    : QScrollArea(parent)
-    , m_showHidden(AppSettings::instance().showHiddenFiles())
-{
+    : QScrollArea(parent), m_showHidden(AppSettings::instance().showHiddenFiles()) {
     m_sortColumn = AppSettings::instance().sortColumn();
     m_sortOrder = AppSettings::instance().sortOrder();
     setWidgetResizable(true);
@@ -749,8 +742,10 @@ ColumnView::ColumnView(QWidget* parent)
 
     m_previewPane = new ColumnPreviewPane(m_container);
     m_previewPane->hide();
-    connect(m_previewPane, &ColumnPreviewPane::quickLookRequested, this, &ColumnView::quickLookRequested);
-    connect(m_previewPane, &ColumnPreviewPane::getInfoRequested, this, &ColumnView::getInfoRequested);
+    connect(m_previewPane, &ColumnPreviewPane::quickLookRequested, this,
+            &ColumnView::quickLookRequested);
+    connect(m_previewPane, &ColumnPreviewPane::getInfoRequested, this,
+            &ColumnView::getInfoRequested);
 
     m_layout->addWidget(m_previewPane);
     m_layout->addStretch();
@@ -758,8 +753,7 @@ ColumnView::ColumnView(QWidget* parent)
     setWidget(m_container);
 }
 
-void ColumnView::setRootPath(const QString& path)
-{
+void ColumnView::setRootPath(const QString& path) {
     m_rootPath = path;
     m_selectedPath.clear();
     for (auto* col : m_columns) {
@@ -772,10 +766,10 @@ void ColumnView::setRootPath(const QString& path)
     addColumn(path, false);
 }
 
-void ColumnView::navigateToPath(const QString& targetPath)
-{
+void ColumnView::navigateToPath(const QString& targetPath) {
     QString clean = QDir::cleanPath(targetPath);
-    if (!QDir(clean).exists()) return;
+    if (!QDir(clean).exists())
+        return;
 
     bool oldRefreshing = m_isRefreshing;
     m_isRefreshing = true;
@@ -817,25 +811,23 @@ void ColumnView::navigateToPath(const QString& targetPath)
     setRootPath(clean);
 }
 
-QString ColumnView::activeDirectory() const
-{
+QString ColumnView::activeDirectory() const {
     if (m_columns.isEmpty()) {
         return m_rootPath;
     }
     return m_columns.last()->path();
 }
 
-int ColumnView::activeColumnRowCount() const
-{
+int ColumnView::activeColumnRowCount() const {
     if (m_columns.isEmpty() || !m_columns.last()->model()) {
         return 0;
     }
     return m_columns.last()->model()->rowCount();
 }
 
-void ColumnView::refresh(const QString& targetToSelect)
-{
-    if (m_isRefreshing) return;
+void ColumnView::refresh(const QString& targetToSelect) {
+    if (m_isRefreshing)
+        return;
     m_isRefreshing = true;
 
     QString selected = !targetToSelect.isEmpty() ? targetToSelect : m_selectedPath;
@@ -852,13 +844,15 @@ void ColumnView::refresh(const QString& targetToSelect)
         if (i + 1 < m_columns.size()) {
             colSelectedPath = m_columns[i + 1]->path();
         } else {
-            if (!targetToSelect.isEmpty() && QFileInfo(targetToSelect).absolutePath() == col->path()) {
+            if (!targetToSelect.isEmpty() &&
+                QFileInfo(targetToSelect).absolutePath() == col->path()) {
                 colSelectedPath = targetToSelect;
             } else {
                 QModelIndex currIdx = col->currentIndex();
                 if (currIdx.isValid()) {
                     colSelectedPath = currIdx.data(FileSystemModel::FilePathRole).toString();
-                } else if (!selected.isEmpty() && QFileInfo(selected).absolutePath() == col->path()) {
+                } else if (!selected.isEmpty() &&
+                           QFileInfo(selected).absolutePath() == col->path()) {
                     colSelectedPath = selected;
                 }
             }
@@ -890,16 +884,21 @@ void ColumnView::refresh(const QString& targetToSelect)
     scrollToRightAnimated();
 }
 
-void ColumnView::setShowHidden(bool show)
-{
+void ColumnView::setShowHidden(bool show) {
     m_showHidden = show;
     for (auto* col : m_columns) {
         col->model()->setShowHidden(show);
     }
 }
 
-void ColumnView::applySort(int column, Qt::SortOrder order)
-{
+void ColumnView::setTextSize(int size) {
+    m_textSize = qBound(8, size, 24);
+    for (auto* col : m_columns) {
+        col->setItemDelegateTextSize(m_textSize);
+    }
+}
+
+void ColumnView::applySort(int column, Qt::SortOrder order) {
     m_sortColumn = column;
     m_sortOrder = order;
     for (auto* col : m_columns) {
@@ -907,10 +906,10 @@ void ColumnView::applySort(int column, Qt::SortOrder order)
     }
 }
 
-void ColumnView::addColumn(const QString& path, bool animate)
-{
+void ColumnView::addColumn(const QString& path, bool animate) {
     int colIndex = static_cast<int>(m_columns.size());
     auto* col = new ColumnBrowserList(path, m_container);
+    col->setItemDelegateTextSize(m_textSize);
     col->model()->setShowHidden(m_showHidden);
     col->model()->setDirectoriesFirst(AppSettings::instance().directoriesFirst());
     col->model()->sort(m_sortColumn, m_sortOrder);
@@ -925,11 +924,12 @@ void ColumnView::addColumn(const QString& path, bool animate)
         }
     });
 
-    connect(col->model(), &FileSystemModel::directoryLoaded, this, [this, col](const QString&, int) {
-        if (!m_columns.isEmpty() && m_columns.last() == col) {
-            emit contentLoaded();
-        }
-    });
+    connect(col->model(), &FileSystemModel::directoryLoaded, this,
+            [this, col](const QString&, int) {
+                if (!m_columns.isEmpty() && m_columns.last() == col) {
+                    emit contentLoaded();
+                }
+            });
     connect(col->model(), &FileSystemModel::itemRenamed, this, &ColumnView::itemRenamed);
     connect(col, &ColumnBrowserList::passivePathSelected, this, [this, col](const QString& path) {
         if (!m_columns.isEmpty() && m_columns.last() == col) {
@@ -940,43 +940,51 @@ void ColumnView::addColumn(const QString& path, bool animate)
         }
     });
 
-    connect(col, &ColumnBrowserList::itemSelected, this, [this, col](const QString& itemPath, bool isDir) {
-        if (m_isRefreshing) return;
-        int idx = static_cast<int>(m_columns.indexOf(col));
-        if (idx >= 0) {
-            onColumnItemSelected(idx, itemPath, isDir);
-        }
-    });
+    connect(col, &ColumnBrowserList::itemSelected, this,
+            [this, col](const QString& itemPath, bool isDir) {
+                if (m_isRefreshing)
+                    return;
+                int idx = static_cast<int>(m_columns.indexOf(col));
+                if (idx >= 0) {
+                    onColumnItemSelected(idx, itemPath, isDir);
+                }
+            });
 
-    connect(col, &ColumnBrowserList::multipleItemsSelected, this, [this, col](const QStringList& paths) {
-        if (m_isRefreshing) return;
-        int idx = static_cast<int>(m_columns.indexOf(col));
-        if (idx >= 0) {
-            onColumnMultipleItemsSelected(idx, paths);
-        }
-    });
+    connect(col, &ColumnBrowserList::multipleItemsSelected, this,
+            [this, col](const QStringList& paths) {
+                if (m_isRefreshing)
+                    return;
+                int idx = static_cast<int>(m_columns.indexOf(col));
+                if (idx >= 0) {
+                    onColumnMultipleItemsSelected(idx, paths);
+                }
+            });
 
     connect(col, &ColumnBrowserList::selectionCleared, this, [this, col]() {
-        if (m_isRefreshing) return;
+        if (m_isRefreshing)
+            return;
         int idx = static_cast<int>(m_columns.indexOf(col));
         if (idx >= 0) {
             onColumnSelectionCleared(idx);
         }
     });
 
-    connect(col, &ColumnBrowserList::itemDoubleClicked, this, [this](const QString& itemPath, bool isDir) {
-        if (isDir) {
-            emit openPathRequested(itemPath);
-        } else {
-            DesktopAppsManager::launchFile(itemPath);
-        }
-    });
+    connect(col, &ColumnBrowserList::itemDoubleClicked, this,
+            [this](const QString& itemPath, bool isDir) {
+                if (isDir) {
+                    emit openPathRequested(itemPath);
+                } else {
+                    DesktopAppsManager::launchFile(itemPath);
+                }
+            });
 
     connect(col, &ColumnBrowserList::quickLookRequested, this, &ColumnView::quickLookRequested);
     connect(col, &ColumnBrowserList::getInfoRequested, this, &ColumnView::getInfoRequested);
-    connect(col, &ColumnBrowserList::contextMenuRequested, this, [this](const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir) {
-        emit contextMenuRequested(globalPos, selectedPaths, currentDir);
-    });
+    connect(col, &ColumnBrowserList::contextMenuRequested, this,
+            [this](const QPoint& globalPos, const QStringList& selectedPaths,
+                   const QString& currentDir) {
+                emit contextMenuRequested(globalPos, selectedPaths, currentDir);
+            });
     connect(col, &ColumnBrowserList::fileDropRequested, this, &ColumnView::fileDropRequested);
 
     // Keyboard navigation across columns
@@ -1017,8 +1025,7 @@ void ColumnView::addColumn(const QString& path, bool animate)
     scrollToRightAnimated();
 }
 
-void ColumnView::truncateColumnsAfter(int columnIndex)
-{
+void ColumnView::truncateColumnsAfter(int columnIndex) {
     while (m_columns.size() > columnIndex + 1) {
         auto* col = m_columns.takeLast();
         m_layout->removeWidget(col);
@@ -1026,9 +1033,9 @@ void ColumnView::truncateColumnsAfter(int columnIndex)
     }
 }
 
-void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool isDir)
-{
-    if (m_isRefreshing) return;
+void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool isDir) {
+    if (m_isRefreshing)
+        return;
     m_activeColumnIndex = columnIndex;
     m_selectedPath = path;
     m_selectedPaths = {path};
@@ -1042,14 +1049,16 @@ void ColumnView::onColumnItemSelected(int columnIndex, const QString& path, bool
         m_previewPane->setItem(path);
         m_previewPane->show();
         scrollToRightAnimated();
-        QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size()) ? m_columns[columnIndex]->path() : m_rootPath;
+        QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size())
+                             ? m_columns[columnIndex]->path()
+                             : m_rootPath;
         emit activeDirectoryChanged(colDir);
     }
 }
 
-void ColumnView::onColumnMultipleItemsSelected(int columnIndex, const QStringList& paths)
-{
-    if (m_isRefreshing) return;
+void ColumnView::onColumnMultipleItemsSelected(int columnIndex, const QStringList& paths) {
+    if (m_isRefreshing)
+        return;
     m_activeColumnIndex = columnIndex;
     m_selectedPaths = paths;
     m_selectedPath.clear();
@@ -1059,63 +1068,65 @@ void ColumnView::onColumnMultipleItemsSelected(int columnIndex, const QStringLis
     m_previewPane->show();
     scrollToRightAnimated();
 
-    QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size()) ? m_columns[columnIndex]->path() : m_rootPath;
+    QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size())
+                         ? m_columns[columnIndex]->path()
+                         : m_rootPath;
     emit activeDirectoryChanged(colDir);
 }
 
-void ColumnView::onColumnSelectionCleared(int columnIndex)
-{
-    if (m_isRefreshing) return;
+void ColumnView::onColumnSelectionCleared(int columnIndex) {
+    if (m_isRefreshing)
+        return;
     if (m_activeColumnIndex == columnIndex) {
         m_selectedPath.clear();
         m_selectedPaths.clear();
         m_previewPane->hide();
         truncateColumnsAfter(columnIndex);
 
-        QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size()) ? m_columns[columnIndex]->path() : m_rootPath;
+        QString colDir = (columnIndex >= 0 && columnIndex < m_columns.size())
+                             ? m_columns[columnIndex]->path()
+                             : m_rootPath;
         emit activeDirectoryChanged(colDir);
     }
 }
 
-QStringList ColumnView::selectedPaths() const
-{
+QStringList ColumnView::selectedPaths() const {
     int numCols = static_cast<int>(m_columns.size());
     if (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols) {
         QStringList paths = m_columns[m_activeColumnIndex]->selectedPaths();
-        if (!paths.isEmpty()) return paths;
+        if (!paths.isEmpty())
+            return paths;
     }
     for (int i = numCols - 1; i >= 0; --i) {
         QStringList paths = m_columns[i]->selectedPaths();
-        if (!paths.isEmpty()) return paths;
+        if (!paths.isEmpty())
+            return paths;
     }
-    return m_selectedPaths.isEmpty() ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{}) : m_selectedPaths;
+    return m_selectedPaths.isEmpty()
+               ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{})
+               : m_selectedPaths;
 }
 
-QListView* ColumnView::activeView() const
-{
+QListView* ColumnView::activeView() const {
     if (m_activeColumnIndex >= 0 && m_activeColumnIndex < m_columns.size()) {
         return m_columns.at(m_activeColumnIndex);
     }
     return nullptr;
 }
 
-void ColumnView::selectAll()
-{
+void ColumnView::selectAll() {
     int numCols = static_cast<int>(m_columns.size());
-    int colIdx = (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols)
-                 ? m_activeColumnIndex
-                 : (numCols - 1);
+    int colIdx = (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols) ? m_activeColumnIndex
+                                                                             : (numCols - 1);
     if (colIdx >= 0 && colIdx < numCols) {
         m_columns[colIdx]->selectAll();
     }
 }
 
-bool ColumnView::triggerRename()
-{
+bool ColumnView::triggerRename() {
     int numCols = static_cast<int>(m_columns.size());
-    int colIdx = (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols)
-                 ? m_activeColumnIndex
-                 : (numCols - 1);
+    int colIdx = (m_activeColumnIndex >= 0 && m_activeColumnIndex < numCols) ? m_activeColumnIndex
+                                                                             : (numCols - 1);
     if (colIdx >= 0 && colIdx < numCols) {
         auto* col = m_columns[colIdx];
         QModelIndex idx = col->currentIndex();
@@ -1127,10 +1138,10 @@ bool ColumnView::triggerRename()
     return false;
 }
 
-void ColumnView::scrollToRightAnimated()
-{
+void ColumnView::scrollToRightAnimated() {
     QScrollBar* hBar = horizontalScrollBar();
-    if (!hBar) return;
+    if (!hBar)
+        return;
 
     if (m_container) {
         m_container->adjustSize();
@@ -1138,7 +1149,8 @@ void ColumnView::scrollToRightAnimated()
 
     QTimer::singleShot(40, this, [this, hBar]() {
         int endVal = hBar->maximum();
-        if (endVal <= 0 || hBar->value() >= endVal) return;
+        if (endVal <= 0 || hBar->value() >= endVal)
+            return;
 
         auto* anim = new QPropertyAnimation(hBar, "value", this);
         anim->setDuration(250);

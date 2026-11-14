@@ -1,15 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=Finder
-GenericName=File Manager
+Name=File Manager
+GenericName=File Browser
 Comment=Browse the file system and manage files
-Exec=finder-linux %U
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/finder-linux %U
 Icon=finder-linux
 Terminal=false
 DBusActivatable=true
-Categories=System;FileTools;FileManager;Qt;KDE;
+Categories=System;FileTools;FileManager;Qt;
 MimeType=inode/directory;
-Keywords=folder;manager;explore;disk;filesystem;dolphin;kde;
+Keywords=folder;manager;explore;disk;filesystem;file;browser;
 StartupNotify=true
 StartupWMClass=org.finderlinux.Finder
 X-GNOME-UsesNotifications=true
@@ -17,4 +17,4 @@ Actions=NewWindow;
 
 [Desktop Action NewWindow]
 Name=New Window
-Exec=finder-linux --new-window
+Exec=@CMAKE_INSTALL_FULL_BINDIR@/finder-linux --new-window

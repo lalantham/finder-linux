@@ -1,21 +1,21 @@
-#include <QTest>
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QFile>
-#include <QDir>
-#include <QApplication>
-#include <QLineEdit>
+#include "AppChooserDialog.h"
+#include "AppSettings.h"
+#include "ColumnView.h"
+#include "FileSystemModel.h"
+#include "GalleryView.h"
 #include "IconView.h"
 #include "ListView.h"
-#include "ColumnView.h"
-#include "GalleryView.h"
-#include "TabPage.h"
 #include "TabManager.h"
-#include "AppSettings.h"
-#include "FileSystemModel.h"
+#include "TabPage.h"
 #include "TagManager.h"
-#include "AppChooserDialog.h"
 #include "TearOffTabBar.h"
+#include <QApplication>
+#include <QDir>
+#include <QFile>
+#include <QLineEdit>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTest>
 
 class TestSelection : public QObject {
     Q_OBJECT
@@ -38,6 +38,10 @@ private slots:
     void testTabManagerCloseAndReopen();
     void testTabTearOffSignal();
     void testColumnWidthPersistence();
+    void testListViewColumnSettings();
+    void testIconViewViewOptions();
+    void testManualIconPositions();
+    void testTabPageSmartFolder();
     void testAppChooserDialog();
 
 private:
@@ -45,8 +49,7 @@ private:
     QStringList m_createdFiles;
 };
 
-void TestSelection::initTestCase()
-{
+void TestSelection::initTestCase() {
     QVERIFY(m_tempDir.isValid());
     QDir dir(m_tempDir.path());
     for (int i = 1; i <= 5; ++i) {
@@ -59,20 +62,17 @@ void TestSelection::initTestCase()
     }
 }
 
-void TestSelection::cleanup()
-{
+void TestSelection::cleanup() {
     AppSettings::setSettingsFilePath(QString());
 }
 
-void TestSelection::testColumnWidthPersistence()
-{
+void TestSelection::testColumnWidthPersistence() {
     QTemporaryDir directory;
     QTemporaryDir settingsDirectory;
     QVERIFY(directory.isValid());
     QVERIFY(settingsDirectory.isValid());
 
-    AppSettings::setSettingsFilePath(
-        settingsDirectory.path() + QStringLiteral("/settings.ini"));
+    AppSettings::setSettingsFilePath(settingsDirectory.path() + QStringLiteral("/settings.ini"));
 
     const QString folderPath = directory.path();
     AppSettings::instance().setColumnViewWidth(folderPath, 321);
@@ -87,8 +87,7 @@ void TestSelection::testColumnWidthPersistence()
     QCOMPARE(resetWidthList.width(), 240);
 }
 
-void TestSelection::testIconViewSelection()
-{
+void TestSelection::testIconViewSelection() {
     auto* model = new FileSystemModel(this);
     model->setRootPath(m_tempDir.path());
 
@@ -124,12 +123,12 @@ void TestSelection::testIconViewSelection()
     iconView.clearSelection();
     QCOMPARE(iconView.selectionModel()->selectedIndexes().size(), 0);
     iconView.selectAll();
-    // FileSystemModel has 4 columns per row, so 5 rows * 4 columns = 20 indexes
-    QCOMPARE(iconView.selectionModel()->selectedIndexes().size(), 20);
+    // QListView's selection model exposes every model column for each row.
+    const int expectedIndexes = model->rowCount() * model->columnCount();
+    QCOMPARE(iconView.selectionModel()->selectedIndexes().size(), expectedIndexes);
 }
 
-void TestSelection::testListViewSelection()
-{
+void TestSelection::testListViewSelection() {
     auto* model = new FileSystemModel(this);
     model->setRootPath(m_tempDir.path());
 
@@ -168,8 +167,7 @@ void TestSelection::testListViewSelection()
     QCOMPARE(listView.selectionModel()->selectedRows().size(), 5);
 }
 
-void TestSelection::testColumnViewSelection()
-{
+void TestSelection::testColumnViewSelection() {
     ColumnView colView;
     colView.setRootPath(m_tempDir.path());
     colView.resize(600, 400);
@@ -212,8 +210,7 @@ void TestSelection::testColumnViewSelection()
     QCOMPARE(colView.selectedPaths().size(), 5);
 }
 
-void TestSelection::testGalleryViewSelection()
-{
+void TestSelection::testGalleryViewSelection() {
     auto* model = new FileSystemModel(this);
     model->setRootPath(m_tempDir.path());
 
@@ -248,8 +245,7 @@ void TestSelection::testGalleryViewSelection()
     QCOMPARE(galleryView.selectedFilePaths().size(), 5);
 }
 
-void TestSelection::testTabPageMultiSelection()
-{
+void TestSelection::testTabPageMultiSelection() {
     // Test that TabPage::selectedFilePaths() correctly queries active view
     TabPage tabPage(m_tempDir.path());
     tabPage.resize(600, 400);
@@ -277,8 +273,7 @@ void TestSelection::testTabPageMultiSelection()
     QCOMPARE(tabPage.selectedFilePaths().size(), 5);
 }
 
-void TestSelection::testNavigationHistory()
-{
+void TestSelection::testNavigationHistory() {
     QDir dir(m_tempDir.path());
     dir.mkdir("sub1");
     dir.mkdir("sub2");
@@ -340,8 +335,7 @@ void TestSelection::testNavigationHistory()
     QVERIFY(colPage.canGoBack());
 }
 
-void TestSelection::testSplitTabManager()
-{
+void TestSelection::testSplitTabManager() {
     TabManager tabMgr;
     TabPage* p1 = tabMgr.createTab(m_tempDir.path());
     QVERIFY(p1 != nullptr);
@@ -362,8 +356,7 @@ void TestSelection::testSplitTabManager()
     QCOMPARE(tabMgr.currentPage(), p1);
 }
 
-void TestSelection::testSplitViewSync()
-{
+void TestSelection::testSplitViewSync() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString firstPath = directory.path() + QStringLiteral("/first");
@@ -395,8 +388,7 @@ void TestSelection::testSplitViewSync()
     QCOMPARE(split.primaryPage()->currentPath(), secondPath);
 }
 
-void TestSelection::testTaggedFilesView()
-{
+void TestSelection::testTaggedFilesView() {
     TabPage page(m_tempDir.path());
     page.setViewMode(ViewMode::Column);
     QCOMPARE(page.viewMode(), ViewMode::Column);
@@ -405,7 +397,8 @@ void TestSelection::testTaggedFilesView()
     QString taggedFile = m_createdFiles.first();
     TagManager::instance().addTag(taggedFile, testTag);
 
-    // Navigating or showing tagged files switches out of Column view to display the virtual tag view
+    // Navigating or showing tagged files switches out of Column view to display the virtual tag
+    // view
     page.showTaggedFiles(testTag);
     QCOMPARE(page.currentPath(), QStringLiteral("tag://TestTag"));
     QVERIFY(page.viewMode() != ViewMode::Column);
@@ -420,8 +413,7 @@ void TestSelection::testTaggedFilesView()
     TagManager::instance().removeTag(taggedFile, testTag);
 }
 
-void TestSelection::testInlineRenamingModel()
-{
+void TestSelection::testInlineRenamingModel() {
     QTemporaryDir renameDir;
     QVERIFY(renameDir.isValid());
     QString testFile = renameDir.filePath("rename_me.txt");
@@ -456,8 +448,7 @@ void TestSelection::testInlineRenamingModel()
     QVERIFY(!QFile::exists(testFile));
 }
 
-void TestSelection::testSelectByPatternAndInvert()
-{
+void TestSelection::testSelectByPatternAndInvert() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString alpha = directory.filePath(QStringLiteral("alpha.txt"));
@@ -498,8 +489,7 @@ void TestSelection::testSelectByPatternAndInvert()
     QCOMPARE(selected.first(), gamma);
 }
 
-void TestSelection::testRenameEditorSelectsStem()
-{
+void TestSelection::testRenameEditorSelectsStem() {
     QTemporaryDir renameDir;
     QVERIFY(renameDir.isValid());
 
@@ -526,8 +516,10 @@ void TestSelection::testRenameEditorSelectsStem()
     for (int row = 0; row < model->rowCount(); ++row) {
         const QModelIndex index = model->index(row, FileSystemModel::ColName);
         const QString path = index.data(FileSystemModel::FilePathRole).toString();
-        if (path == filePath) fileRow = row;
-        if (path == folderPath) folderRow = row;
+        if (path == filePath)
+            fileRow = row;
+        if (path == folderPath)
+            folderRow = row;
     }
     QVERIFY(fileRow >= 0);
     QVERIFY(folderRow >= 0);
@@ -552,8 +544,7 @@ void TestSelection::testRenameEditorSelectsStem()
     QTest::keyClick(folderEditor, Qt::Key_Escape);
 }
 
-void TestSelection::testTabManagerCloseAndReopen()
-{
+void TestSelection::testTabManagerCloseAndReopen() {
     TabManager tabMgr;
     tabMgr.createTab(m_tempDir.path());
     QCOMPARE(tabMgr.count(), 1);
@@ -577,8 +568,7 @@ void TestSelection::testTabManagerCloseAndReopen()
     QVERIFY(!tabMgr.canReopenClosedTab());
 }
 
-void TestSelection::testTabTearOffSignal()
-{
+void TestSelection::testTabTearOffSignal() {
     TearOffTabBar tabBar;
     tabBar.addTab(QStringLiteral("Tab 1"));
     tabBar.addTab(QStringLiteral("Tab 2"));
@@ -592,8 +582,8 @@ void TestSelection::testTabTearOffSignal()
 
     const QPointF tearOffPosition(pressPosition.x(), tabBar.height() + 50);
     QMouseEvent tearOffMove(QEvent::MouseMove, tearOffPosition,
-                            QPointF(tabBar.mapToGlobal(tearOffPosition.toPoint())),
-                            Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                            QPointF(tabBar.mapToGlobal(tearOffPosition.toPoint())), Qt::NoButton,
+                            Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(&tabBar, &tearOffMove);
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.at(0).at(0).toInt(), 0);
@@ -610,8 +600,133 @@ void TestSelection::testTabTearOffSignal()
     QTest::mouseRelease(&tabBar, Qt::LeftButton, Qt::NoModifier, pressPosition);
 }
 
-void TestSelection::testAppChooserDialog()
-{
+void TestSelection::testListViewColumnSettings() {
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    AppSettings::setSettingsFilePath(settingsDirectory.path() + QStringLiteral("/settings.ini"));
+    AppSettings::instance().setListVisibleColumns({QStringLiteral("name"), QStringLiteral("size")});
+
+    auto* model = new FileSystemModel(this);
+    model->setRootPath(m_tempDir.path());
+
+    ListView listView;
+    listView.setFileSystemModel(model);
+
+    QVERIFY(!listView.isColumnHidden(FileSystemModel::ColName));
+    QVERIFY(!listView.isColumnHidden(FileSystemModel::ColSize));
+    QVERIFY(listView.isColumnHidden(FileSystemModel::ColDateModified));
+    QVERIFY(listView.isColumnHidden(FileSystemModel::ColKind));
+
+    AppSettings::instance().setListVisibleColumns(
+        {QStringLiteral("name"), QStringLiteral("kind"), QStringLiteral("permissions")});
+    listView.applyColumnConfiguration();
+    QVERIFY(!listView.isColumnHidden(FileSystemModel::ColKind));
+    QVERIFY(!listView.isColumnHidden(FileSystemModel::ColPermissions));
+    QVERIFY(listView.isColumnHidden(FileSystemModel::ColSize));
+}
+
+void TestSelection::testIconViewViewOptions() {
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    AppSettings::setSettingsFilePath(settingsDirectory.path() + QStringLiteral("/settings.ini"));
+
+    auto* model = new FileSystemModel(this);
+    model->setRootPath(m_tempDir.path());
+
+    IconView iconView;
+    iconView.setFileSystemModel(model);
+    iconView.setFolderPath(m_tempDir.path());
+
+    FolderViewOptions options;
+    options.iconSize = 80;
+    options.textSize = 13;
+    options.labelPosition = 1;
+    options.gridSpacing = 20;
+    options.showItemInfo = true;
+    options.showIconPreview = false;
+    options.manualArrangement = true;
+    iconView.applyViewOptions(options);
+
+    QCOMPARE(iconView.iconSize(), QSize(80, 80));
+    QCOMPARE(iconView.spacing(), 20);
+    QCOMPARE(iconView.movement(), QListView::Free);
+
+    options.manualArrangement = false;
+    options.labelPosition = 0;
+    iconView.applyViewOptions(options);
+    QCOMPARE(iconView.movement(), QListView::Static);
+}
+
+void TestSelection::testManualIconPositions() {
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    AppSettings::setSettingsFilePath(settingsDirectory.path() + QStringLiteral("/settings.ini"));
+
+    auto* model = new FileSystemModel(this);
+    model->setRootPath(m_tempDir.path());
+
+    struct TestableIconView : IconView {
+        using QListView::rectForIndex;
+        using QListView::setPositionForIndex;
+    } iconView;
+    iconView.setFileSystemModel(model);
+    iconView.resize(600, 400);
+    iconView.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&iconView));
+    iconView.setFolderPath(m_tempDir.path());
+
+    FolderViewOptions options;
+    options.manualArrangement = true;
+    iconView.applyViewOptions(options);
+
+    const QModelIndex index = model->index(0, FileSystemModel::ColName);
+    QVERIFY(index.isValid());
+    const QPoint target(64, 80);
+    iconView.setPositionForIndex(target, index);
+
+    // Leaving and re-entering the folder persists and restores the position.
+    iconView.setFolderPath(QDir::tempPath());
+    iconView.setFolderPath(m_tempDir.path());
+    QTest::qWait(100);
+    QCOMPARE(iconView.rectForIndex(index).topLeft(), target);
+}
+
+void TestSelection::testTabPageSmartFolder() {
+    QTemporaryDir settingsDirectory;
+    QTemporaryDir searchDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    QVERIFY(searchDirectory.isValid());
+    AppSettings::setSettingsFilePath(settingsDirectory.path() + QStringLiteral("/settings.ini"));
+
+    QFile hit(searchDirectory.filePath(QStringLiteral("needle.txt")));
+    QVERIFY(hit.open(QIODevice::WriteOnly));
+    hit.write("needle");
+    hit.close();
+    QFile miss(searchDirectory.filePath(QStringLiteral("other.txt")));
+    QVERIFY(miss.open(QIODevice::WriteOnly));
+    miss.write("other");
+    miss.close();
+
+    SmartFolder folder;
+    folder.name = QStringLiteral("Needle");
+    folder.filter = SearchQuery::parse(QStringLiteral("needle"));
+    folder.filter.searchPath = searchDirectory.path();
+    folder.filter.recursive = false;
+    AppSettings::instance().saveSmartFolder(folder);
+
+    TabPage page(QDir::homePath());
+    page.showSmartFolder(folder);
+    QCOMPARE(page.currentPath(), QStringLiteral("smart://Needle"));
+    QCOMPARE(page.searchText(), QStringLiteral("needle"));
+    QTRY_COMPARE_WITH_TIMEOUT(page.model()->rowCount(), 1, 5000);
+    QCOMPARE(page.model()->index(0, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("needle.txt"));
+
+    page.navigateTo(searchDirectory.path());
+    QVERIFY(!page.currentPath().startsWith(QStringLiteral("smart://")));
+}
+
+void TestSelection::testAppChooserDialog() {
     AppChooserDialog dlg(QStringLiteral("text/plain"), QStringLiteral("notes.txt"));
     QVERIFY(dlg.customCommand().isEmpty());
     QVERIFY(!dlg.makeDefault());

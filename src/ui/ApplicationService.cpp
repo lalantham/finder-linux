@@ -31,14 +31,14 @@ bool ApplicationService::registerOnBus()
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.isConnected()) {
-        qWarning() << "Finder: session D-Bus is unavailable;"
+        qWarning() << "File Manager: session D-Bus is unavailable;"
                    << "org.freedesktop.Application integration is disabled";
         return false;
     }
 
     const QString objectPath = QStringLiteral("/org/finderlinux/Finder");
     if (!bus.registerObject(objectPath, this, QDBusConnection::ExportAllSlots)) {
-        qWarning() << "Finder: failed to export" << objectPath << "on the session bus";
+        qWarning() << "File Manager: failed to export" << objectPath << "on the session bus";
         return false;
     }
 
@@ -51,13 +51,13 @@ bool ApplicationService::registerOnBus()
             QDBusConnectionInterface::AllowReplacement);
 
     if (!reply.isValid()) {
-        qWarning() << "Finder: could not register" << ApplicationBusName
+        qWarning() << "File Manager: could not register" << ApplicationBusName
                    << "on the session bus:" << reply.error().message();
         return false;
     }
 
     if (reply.value() == QDBusConnectionInterface::ServiceQueued) {
-        qInfo() << "Finder: another instance owns" << ApplicationBusName
+        qInfo() << "File Manager: another instance owns" << ApplicationBusName
                 << "; queued to take over when it exits";
         return false;
     }

@@ -19,7 +19,7 @@ if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
 fi
 BUILD_DIR="${ROOT_DIR}/build"
 
-echo -e "${BLUE}${BOLD}==> Updating macOS Finder for Linux...${NC}\n"
+echo -e "${BLUE}${BOLD}==> Updating File Manager for Linux...${NC}\n"
 
 # Parse optional arguments
 OVERRIDE_PREFIX=""
@@ -130,7 +130,7 @@ mkdir -p "${USER_APPS_DIR}"
 cat > "${USER_APPS_DIR}/${OLD_DESKTOP_ID}.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Finder
+Name=File Manager
 Exec=finder-linux %U
 Hidden=true
 EOF
@@ -219,10 +219,10 @@ if command -v xdg-mime >/dev/null 2>&1; then
   fi
 fi
 
-# Check if Finder is currently running
+# Check if File Manager is currently running
 if pgrep -x finder-linux >/dev/null 2>&1; then
-  echo -e "\n${YELLOW}${BOLD}Notice:${NC} Finder is currently running. Please close and reopen it for updates to take effect."
+  echo -e "\n${YELLOW}${BOLD}Notice:${NC} File Manager is currently running. Please close and reopen it for updates to take effect."
 fi
 
 echo -e "\n${GREEN}${BOLD}✓ Update Complete!${NC}"
-echo -e "Finder is up to date and ready to use."
+echo -e "File Manager is up to date and ready to use."

@@ -31,7 +31,7 @@ if [[ $# -gt 0 && "$1" == "--prefix" ]]; then
   PREFIX="$2"
 fi
 
-echo -e "${YELLOW}${BOLD}==> Uninstalling Finder from ${PREFIX}...${NC}\n"
+echo -e "${YELLOW}${BOLD}==> Uninstalling File Manager from ${PREFIX}...${NC}\n"
 
 SUDO=""
 if [[ "${PREFIX}" != "${HOME}"* && $EUID -ne 0 ]]; then

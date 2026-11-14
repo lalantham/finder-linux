@@ -2,11 +2,11 @@
 
 #include "AppSettings.h"
 #include "BreadcrumbBar.h"
+#include <QAction>
+#include <QButtonGroup>
+#include <QLineEdit>
 #include <QToolBar>
 #include <QToolButton>
-#include <QLineEdit>
-#include <QButtonGroup>
-#include <QAction>
 
 class Toolbar : public QToolBar {
     Q_OBJECT
@@ -23,9 +23,13 @@ public:
 
     void focusSearch();
     void clearSearch();
+    void setSearchText(const QString& text);
+    void setPathBarVisible(bool visible);
     [[nodiscard]] QString searchQuery() const;
 
-    [[nodiscard]] BreadcrumbBar* breadcrumbBar() const noexcept { return m_breadcrumb; }
+    [[nodiscard]] BreadcrumbBar* breadcrumbBar() const noexcept {
+        return m_breadcrumb;
+    }
 
 signals:
     void backRequested();
@@ -53,6 +57,7 @@ private:
     QToolButton* m_backBtn{nullptr};
     QToolButton* m_fwdBtn{nullptr};
     BreadcrumbBar* m_breadcrumb{nullptr};
+    QAction* m_breadcrumbAction{nullptr};
 
     // View Switcher
     QButtonGroup* m_viewGroup{nullptr};

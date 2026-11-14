@@ -1,8 +1,11 @@
 #pragma once
 
-#include "FileSystemModel.h"
+#include "AppSettings.h"
 #include "FileItemDelegate.h"
+#include "FileSystemModel.h"
 #include <QTreeView>
+
+class QTimer;
 
 class ListView : public QTreeView {
     Q_OBJECT
@@ -11,6 +14,9 @@ public:
     explicit ListView(QWidget* parent = nullptr);
 
     void setFileSystemModel(FileSystemModel* model);
+    void applyViewOptions(const FolderViewOptions& options);
+    void setTextSize(int size);
+    void applyColumnConfiguration();
 
 signals:
     void openPathRequested(const QString& path);
@@ -33,9 +39,15 @@ private slots:
 
 private:
     void resetSpringTimer();
+    void showHeaderMenu(const QPoint& pos);
+    void saveColumnSettings();
+    void setColumnVisible(int column, bool visible);
+    [[nodiscard]] int defaultColumnWidth(int column) const;
 
     FileSystemModel* m_fsModel{nullptr};
     FileItemDelegate* m_delegate{nullptr};
     QTimer* m_springTimer{nullptr};
+    QTimer* m_layoutSaveTimer{nullptr};
     QString m_springHoverPath;
+    bool m_applyingColumns{false};
 };

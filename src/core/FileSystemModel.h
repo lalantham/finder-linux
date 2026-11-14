@@ -2,14 +2,14 @@
 
 #include "FileItem.h"
 #include <QAbstractItemModel>
-#include <QFileSystemWatcher>
 #include <QDir>
-#include <QVector>
+#include <QFileSystemWatcher>
 #include <QMimeData>
+#include <QTimer>
 #include <QUrl>
+#include <QVector>
 #include <atomic>
 #include <memory>
-#include <QTimer>
 
 class QTimer;
 
@@ -22,6 +22,15 @@ public:
         ColDateModified,
         ColSize,
         ColKind,
+        // Additional metadata columns. Existing values are kept stable so
+        // saved sort settings keep working across upgrades.
+        ColDateCreated,
+        ColDateOpened,
+        ColTags,
+        ColPermissions,
+        ColOwner,
+        ColGroup,
+        ColComment,
         ColumnCount
     };
 
@@ -37,15 +46,32 @@ public:
         FileOwnerRole,
         FileGroupRole,
         FileFormattedSizeRole,
-        FileTagsRole
+        FileTagsRole,
+        FileDateCreatedRole,
+        FileDateOpenedRole,
+        FileCommentRole,
+        FileMimeTypeRole
     };
 
     enum class SortField {
         Name,
         DateModified,
+        DateCreated,
+        DateOpened,
         Size,
-        Kind
+        Kind,
+        Tags,
+        Permissions,
+        Owner,
+        Group,
+        Comment
     };
+
+    // Stable identifiers used by the list view and persisted settings.
+    [[nodiscard]] static QString columnKey(int column);
+    [[nodiscard]] static int columnForKey(const QString& key);
+    [[nodiscard]] static QString columnTitle(int column);
+    [[nodiscard]] static QList<int> allColumns();
 
     explicit FileSystemModel(QObject* parent = nullptr);
     ~FileSystemModel() override;
@@ -58,61 +84,91 @@ public:
 
     void setRootPath(const QString& path);
     void setTaggedFiles(const QString& tag);
-    [[nodiscard]] bool isTaggedView() const noexcept { return !m_activeTag.isEmpty(); }
-    [[nodiscard]] const QString& activeTag() const noexcept { return m_activeTag; }
-    [[nodiscard]] const QString& rootPath() const noexcept { return m_rootPath; }
+    [[nodiscard]] bool isTaggedView() const noexcept {
+        return !m_activeTag.isEmpty();
+    }
+    [[nodiscard]] const QString& activeTag() const noexcept {
+        return m_activeTag;
+    }
+    [[nodiscard]] const QString& rootPath() const noexcept {
+        return m_rootPath;
+    }
 
     void setFilterQuery(const QString& query, const QString& kind = QString());
-    [[nodiscard]] const QString& filterQuery() const noexcept { return m_filterQuery; }
-    [[nodiscard]] const QString& filterKind() const noexcept { return m_filterKind; }
+    [[nodiscard]] const QString& filterQuery() const noexcept {
+        return m_filterQuery;
+    }
+    [[nodiscard]] const QString& filterKind() const noexcept {
+        return m_filterKind;
+    }
 
     void setSearchResults(const QVector<FileItem>& items);
     void appendSearchResults(const QVector<FileItem>& items);
     void clearSearchResults();
-    [[nodiscard]] bool isSearchResultsView() const noexcept { return m_isSearchResultsView; }
+    [[nodiscard]] bool isSearchResultsView() const noexcept {
+        return m_isSearchResultsView;
+    }
     void exitSearchResults();
 
     void setShowHidden(bool show);
-    [[nodiscard]] bool showHidden() const noexcept { return m_showHidden; }
+    [[nodiscard]] bool showHidden() const noexcept {
+        return m_showHidden;
+    }
 
     void setDirectoriesFirst(bool dirsFirst);
-    [[nodiscard]] bool directoriesFirst() const noexcept { return m_directoriesFirst; }
+    [[nodiscard]] bool directoriesFirst() const noexcept {
+        return m_directoriesFirst;
+    }
 
     void setCalculateFolderSizes(bool enabled);
-    [[nodiscard]] bool calculateFolderSizes() const noexcept { return m_calculateFolderSizes; }
+    [[nodiscard]] bool calculateFolderSizes() const noexcept {
+        return m_calculateFolderSizes;
+    }
 
     void refresh();
 
     // QAbstractItemModel interface
-    [[nodiscard]] QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
+    [[nodiscard]] QModelIndex index(int row, int column,
+                                    const QModelIndex& parent = QModelIndex()) const override;
     [[nodiscard]] QModelIndex parent(const QModelIndex& child) const override;
     [[nodiscard]] int rowCount(const QModelIndex& parent = QModelIndex()) const override;
     [[nodiscard]] int columnCount(const QModelIndex& parent = QModelIndex()) const override;
-    [[nodiscard]] QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
-    [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
+    [[nodiscard]] QVariant data(const QModelIndex& index,
+                                int role = Qt::DisplayRole) const override;
+    [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation,
+                                      int role = Qt::DisplayRole) const override;
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
     bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
     [[nodiscard]] Qt::DropActions supportedDropActions() const override;
     [[nodiscard]] QStringList mimeTypes() const override;
     [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
-    [[nodiscard]] bool canDropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) const override;
-    bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column, const QModelIndex& parent) override;
+    [[nodiscard]] bool canDropMimeData(const QMimeData* data, Qt::DropAction action, int row,
+                                       int column, const QModelIndex& parent) const override;
+    bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
+                      const QModelIndex& parent) override;
 
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
-    [[nodiscard]] int sortColumn() const noexcept { return m_sortColumn; }
-    [[nodiscard]] Qt::SortOrder sortOrder() const noexcept { return m_sortOrder; }
+    [[nodiscard]] int sortColumn() const noexcept {
+        return m_sortColumn;
+    }
+    [[nodiscard]] Qt::SortOrder sortOrder() const noexcept {
+        return m_sortOrder;
+    }
 
     [[nodiscard]] const FileItem* itemAt(int row) const;
     [[nodiscard]] const FileItem* itemForIndex(const QModelIndex& index) const;
     [[nodiscard]] QModelIndex indexForPath(const QString& path) const;
-    [[nodiscard]] const QString& longestFileName() const noexcept { return m_longestFileName; }
+    [[nodiscard]] const QString& longestFileName() const noexcept {
+        return m_longestFileName;
+    }
 
 signals:
     void rootPathChanged(const QString& newPath);
     void directoryLoading(const QString& path);
     void directoryLoaded(const QString& path, int itemCount);
     void sortChanged(int column, Qt::SortOrder order);
-    void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
+    void fileDropRequested(const QStringList& sources, const QString& targetDirectory,
+                           Qt::DropAction action);
     void itemRenamed(const QString& oldPath, const QString& newPath);
 
 private slots:

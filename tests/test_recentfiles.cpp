@@ -1,10 +1,10 @@
-#include <QTest>
+#include "RecentFilesManager.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#include <QTest>
 #include <QUrl>
-#include "RecentFilesManager.h"
 
 class TestRecentFiles : public QObject {
     Q_OBJECT
@@ -19,21 +19,18 @@ private:
     static void writeFile(const QString& path, const QByteArray& contents);
 };
 
-void TestRecentFiles::cleanup()
-{
+void TestRecentFiles::cleanup() {
     RecentFilesManager::setStoragePathForTesting(QString());
 }
 
-void TestRecentFiles::writeFile(const QString& path, const QByteArray& contents)
-{
+void TestRecentFiles::writeFile(const QString& path, const QByteArray& contents) {
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Text));
     file.write(contents);
     file.close();
 }
 
-void TestRecentFiles::testAddAndList()
-{
+void TestRecentFiles::testAddAndList() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString storage = directory.path() + QStringLiteral("/recently-used.xbel");
@@ -54,8 +51,7 @@ void TestRecentFiles::testAddAndList()
     QCOMPARE(recent.at(0).mimeType, QStringLiteral("image/png"));
 }
 
-void TestRecentFiles::testPreservesExistingApplications()
-{
+void TestRecentFiles::testPreservesExistingApplications() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString storage = directory.path() + QStringLiteral("/recently-used.xbel");
@@ -67,23 +63,26 @@ void TestRecentFiles::testPreservesExistingApplications()
     writeFile(newPath, "new");
 
     const QString existingHref = QUrl::fromLocalFile(existingPath).toString(QUrl::FullyEncoded);
-    const QByteArray existingXbel = QStringLiteral(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-        "<xbel version=\"1.0\" "
-        "xmlns:bookmark=\"http://www.freedesktop.org/standards/desktop-bookmarks\" "
-        "xmlns:mime=\"http://www.freedesktop.org/standards/shared-mime-info\">\n"
-        "  <bookmark href=\"%1\" added=\"2026-01-01T00:00:00Z\" "
-        "modified=\"2026-01-01T00:00:00Z\" visited=\"2026-01-01T00:00:00Z\">\n"
-        "    <info><metadata owner=\"http://freedesktop.org\">\n"
-        "      <mime:mime-type type=\"text/plain\"/>\n"
-        "      <bookmark:groups><bookmark:group>Documents</bookmark:group></bookmark:groups>\n"
-        "      <bookmark:applications>\n"
-        "        <bookmark:application name=\"OtherApp\" exec=\"otherapp %u\" "
-        "modified=\"2026-01-01T00:00:00Z\" count=\"3\"/>\n"
-        "      </bookmark:applications>\n"
-        "    </metadata></info>\n"
-        "  </bookmark>\n"
-        "</xbel>\n").arg(existingHref).toUtf8();
+    const QByteArray existingXbel =
+        QStringLiteral(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<xbel version=\"1.0\" "
+            "xmlns:bookmark=\"http://www.freedesktop.org/standards/desktop-bookmarks\" "
+            "xmlns:mime=\"http://www.freedesktop.org/standards/shared-mime-info\">\n"
+            "  <bookmark href=\"%1\" added=\"2026-01-01T00:00:00Z\" "
+            "modified=\"2026-01-01T00:00:00Z\" visited=\"2026-01-01T00:00:00Z\">\n"
+            "    <info><metadata owner=\"http://freedesktop.org\">\n"
+            "      <mime:mime-type type=\"text/plain\"/>\n"
+            "      <bookmark:groups><bookmark:group>Documents</bookmark:group></bookmark:groups>\n"
+            "      <bookmark:applications>\n"
+            "        <bookmark:application name=\"OtherApp\" exec=\"otherapp %u\" "
+            "modified=\"2026-01-01T00:00:00Z\" count=\"3\"/>\n"
+            "      </bookmark:applications>\n"
+            "    </metadata></info>\n"
+            "  </bookmark>\n"
+            "</xbel>\n")
+            .arg(existingHref)
+            .toUtf8();
     writeFile(storage, existingXbel);
 
     QVERIFY(RecentFilesManager::add(newPath, QStringLiteral("text/plain")));
@@ -94,7 +93,7 @@ void TestRecentFiles::testPreservesExistingApplications()
     QVERIFY(xml.contains(QStringLiteral("OtherApp")));
     QVERIFY(xml.contains(QStringLiteral("Documents")));
     QVERIFY(xml.contains(QStringLiteral("bookmark:groups")));
-    QVERIFY(xml.contains(QStringLiteral("name=\"Finder\"")));
+    QVERIFY(xml.contains(QStringLiteral("name=\"File Manager\"")));
     QVERIFY(xml.contains(existingHref));
     QVERIFY(xml.contains(QUrl::fromLocalFile(newPath).toString(QUrl::FullyEncoded)));
 
@@ -102,8 +101,7 @@ void TestRecentFiles::testPreservesExistingApplications()
     QCOMPARE(recent.size(), 2);
 }
 
-void TestRecentFiles::testClear()
-{
+void TestRecentFiles::testClear() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     const QString storage = directory.path() + QStringLiteral("/recently-used.xbel");

@@ -1,6 +1,6 @@
-# Contributing to Finder Linux
+# Contributing to File Manager for Linux
 
-Thanks for your interest in improving Finder Linux.
+Thanks for your interest in improving File Manager for Linux.
 
 ## Development setup
 
@@ -26,7 +26,7 @@ sudo apt install build-essential cmake ninja-build \
 - Run the full test suite: `ctest --preset release`.
 - Validate the desktop entry:
   ```bash
-  desktop-file-validate data/org.finderlinux.Finder.desktop
+  desktop-file-validate build/org.finderlinux.Finder.desktop
   ```
 - Validate AppStream metadata:
   ```bash

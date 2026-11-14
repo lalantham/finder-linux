@@ -41,7 +41,7 @@ void TestFileItem::testItemProperties()
     QString filePath = tempDir.filePath(QStringLiteral("sample.txt"));
     QFile f(filePath);
     QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write("Hello macOS Finder on Linux!");
+    f.write("Hello file manager on Linux!");
     f.close();
 
     FileItem item(filePath);

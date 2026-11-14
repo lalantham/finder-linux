@@ -51,6 +51,8 @@ set(FINDER_CORE_SOURCES
     src/core/VolumeManager.h
     src/core/SearchEngine.cpp
     src/core/SearchEngine.h
+    src/core/SearchQuery.cpp
+    src/core/SearchQuery.h
     src/core/UndoManager.cpp
     src/core/UndoManager.h
     src/core/DesktopAppsManager.cpp
@@ -89,6 +91,10 @@ set(FINDER_UI_SOURCES
     src/ui/Sidebar.h
     src/ui/SidebarSettingsDialog.cpp
     src/ui/SidebarSettingsDialog.h
+    src/ui/ViewOptionsDialog.cpp
+    src/ui/ViewOptionsDialog.h
+    src/ui/SmartFolderDialog.cpp
+    src/ui/SmartFolderDialog.h
     src/ui/TabPage.cpp
     src/ui/TabPage.h
     src/ui/TabManager.cpp
@@ -193,7 +199,12 @@ install(TARGETS finder-linux
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
-install(FILES data/org.finderlinux.Finder.desktop
+# Generate the desktop entry with an absolute executable path. User-scoped
+# installs live in ~/.local/bin, which Plasma's launcher does not always have
+# on PATH; a relative Exec= line makes "Launching Finder" fail there.
+configure_file(data/org.finderlinux.Finder.desktop.in
+    ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.desktop @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
 

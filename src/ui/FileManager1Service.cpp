@@ -53,14 +53,14 @@ bool FileManager1Service::registerOnBus()
 {
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.isConnected()) {
-        qWarning() << "Finder: session D-Bus is unavailable;"
+        qWarning() << "File Manager: session D-Bus is unavailable;"
                    << "org.freedesktop.FileManager1 integration is disabled";
         return false;
     }
 
     const QString objectPath = QStringLiteral("/org/freedesktop/FileManager1");
     if (!bus.registerObject(objectPath, this, QDBusConnection::ExportAllSlots)) {
-        qWarning() << "Finder: failed to export" << objectPath << "on the session bus";
+        qWarning() << "File Manager: failed to export" << objectPath << "on the session bus";
         return false;
     }
 
@@ -73,7 +73,7 @@ bool FileManager1Service::registerOnBus()
             QDBusConnectionInterface::AllowReplacement);
 
     if (!reply.isValid()) {
-        qWarning() << "Finder: could not register org.freedesktop.FileManager1:"
+        qWarning() << "File Manager: could not register org.freedesktop.FileManager1:"
                    << reply.error().message();
         return false;
     }
@@ -82,8 +82,8 @@ bool FileManager1Service::registerOnBus()
         // Some other file-manager daemon (for example elementary Files) owns
         // the name and does not allow replacement. We stay queued so we take
         // over automatically as soon as that daemon exits. The activation file
-        // installed by install.sh/update.sh makes Finder win on the next login.
-        qInfo() << "Finder: another file manager owns org.freedesktop.FileManager1;"
+        // installed by install.sh/update.sh makes File Manager win on the next login.
+        qInfo() << "File Manager: another file manager owns org.freedesktop.FileManager1;"
                 << "queued to take over when it exits";
         return false;
     }

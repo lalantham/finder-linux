@@ -27,7 +27,7 @@ echo " |  __| | | '_ \ / _\` |/ _ \ '__| | |    | | '_ \| | | \ \/ /"
 echo " | |    | | | | | (_| |  __/ |    | |____| | | | | |_| |>  < "
 echo " |_|    |_|_| |_|\__,_|\___|_|    |______|_|_| |_|\__,_/_/\_\\"
 echo -e "${NC}"
-echo -e "${BOLD}macOS Finder for Linux - Installer & Updater${NC}\n"
+echo -e "${BOLD}File Manager for Linux - Installer & Updater${NC}\n"
 
 # Default configuration
 PREFIX="/usr/local"
@@ -67,7 +67,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --system         Install system-wide to /usr (requires sudo)"
       echo "  --user           Install to user directory (~/.local, no root needed)"
       echo "  --prefix <path>  Install to custom prefix (default: /usr/local)"
-      echo "  --default        Set Finder as the default file manager"
+      echo "  --default        Set File Manager as the default file manager"
       echo "  --debug          Build in Debug mode instead of Release"
       echo "  -h, --help       Show this help message"
       exit 0
@@ -113,7 +113,7 @@ cmake -B "${BUILD_DIR}" \
   -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
   "${ROOT_DIR}"
 
-echo -e "\n${BLUE}==>${NC} Compiling Finder..."
+echo -e "\n${BLUE}==>${NC} Compiling File Manager..."
 ninja -C "${BUILD_DIR}"
 
 echo -e "\n${BLUE}==>${NC} Running automated test suite..."
@@ -145,7 +145,7 @@ mkdir -p "${USER_APPS_DIR}"
 cat > "${USER_APPS_DIR}/${OLD_DESKTOP_ID}.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Finder
+Name=File Manager
 Exec=finder-linux %U
 Hidden=true
 EOF
@@ -186,7 +186,7 @@ if command -v kbuildsycoca6 >/dev/null 2>&1; then
   kbuildsycoca6 --noincremental 2>/dev/null || true
 fi
 
-# Register Finder for the freedesktop.org FileManager1 D-Bus interface and
+# Register File Manager for the freedesktop.org FileManager1 D-Bus interface and
 # the standard org.freedesktop.Application activation interface. Browsers use
 # FileManager1 for "Show in folder"; launchers use Application for Activate/Open.
 # A user-scoped activation file takes precedence over system-wide providers
@@ -211,14 +211,14 @@ EOF
   install_dbus_activation org.freedesktop.FileManager1
   install_dbus_activation org.finderlinux.Finder
   rm -f "${DBUS_SERVICE_DIR}/finder-linux.service" 2>/dev/null || true
-  echo -e "${GREEN}✓${NC} Registered Finder for the FileManager1 and Application D-Bus interfaces."
+  echo -e "${GREEN}✓${NC} Registered File Manager for the FileManager1 and Application D-Bus interfaces."
 
   # Make the session bus pick up the new activation file without a re-login.
   dbus-send --session --type=method_call --dest=org.freedesktop.DBus \
     /org/freedesktop/DBus org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
 
   # If another file-manager daemon already owns the name, it must exit once
-  # before Finder can take over. Only daemons are listed here; no file manager
+  # before File Manager can take over. Only daemons are listed here; no file manager
   # windows are affected.
   if command -v busctl >/dev/null 2>&1; then
     OWNER_PID=$(busctl --user list --no-legend 2>/dev/null \
@@ -227,7 +227,7 @@ EOF
       OWNER_CMD=$(tr '\0' ' ' < "/proc/${OWNER_PID}/cmdline" 2>/dev/null || true)
       if [[ -n "${OWNER_CMD}" && "${OWNER_CMD}" != *"finder-linux"* ]]; then
         echo -e "${YELLOW}Notice:${NC} '${OWNER_CMD}' is currently the FileManager1 provider."
-        echo -e "Finder will take over after you log out and back in (or after"
+        echo -e "File Manager will take over after you log out and back in (or after"
         echo -e "that daemon exits). To switch immediately, run:"
         echo -e "  ${BOLD}pkill -f io.elementary.files-daemon${NC}   # or: pkill -f 'dolphin --daemon'"
       fi
@@ -235,24 +235,24 @@ EOF
   fi
 fi
 
-# Set Finder as the default file manager, or migrate an existing old ID.
+# Set File Manager as the default file manager, or migrate an existing old ID.
 NEW_DESKTOP_ID="org.finderlinux.Finder"
 OLD_DESKTOP_ID="finder-linux"
 CURRENT_DEFAULT=$(xdg-mime query default inode/directory 2>/dev/null || true)
 if [[ "${SET_DEFAULT}" == "true" || "${CURRENT_DEFAULT}" == "${OLD_DESKTOP_ID}.desktop" ]]; then
-  echo -e "\n${BLUE}==>${NC} Setting Finder as default file manager..."
+  echo -e "\n${BLUE}==>${NC} Setting File Manager as default file manager..."
   xdg-mime default "${NEW_DESKTOP_ID}.desktop" inode/directory
   if command -v gio >/dev/null 2>&1; then
     gio mime inode/directory "${NEW_DESKTOP_ID}.desktop" 2>/dev/null || true
   fi
-  echo -e "${GREEN}✓${NC} Finder is now your default file manager."
+  echo -e "${GREEN}✓${NC} File Manager is now your default file manager."
 fi
 
 if pgrep -x finder-linux >/dev/null 2>&1; then
-  echo -e "\n${YELLOW}${BOLD}Notice:${NC} Finder is currently running. Restart it once so the"
+  echo -e "\n${YELLOW}${BOLD}Notice:${NC} File Manager is currently running. Restart it once so the"
   echo -e "new FileManager1 and Application (\"Show in folder\"/launcher) integration takes effect."
 fi
 
 echo -e "\n${GREEN}${BOLD}✓ Installation Successful!${NC}"
 echo -e "You can launch Finder by running: ${BOLD}finder-linux${NC}"
-echo -e "Or search for ${BOLD}Finder${NC} in your desktop application launcher."
+echo -e "Or search for ${BOLD}File Manager${NC} in your desktop application launcher."

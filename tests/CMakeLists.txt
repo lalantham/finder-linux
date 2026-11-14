@@ -22,6 +22,7 @@ add_finder_test(test_volumemanager test_volumemanager.cpp)
 add_finder_test(test_desktopapps test_desktopapps.cpp)
 add_finder_test(test_servicemenus test_servicemenus.cpp)
 add_finder_test(test_recentfiles test_recentfiles.cpp)
+add_finder_test(test_columns test_columns.cpp)
 
 add_executable(test_selection test_selection.cpp)
 target_link_libraries(test_selection PRIVATE

@@ -48,7 +48,7 @@
     <!-- Right side background (fills whole area first) -->
     <rect x="36" y="36" width="440" height="440" fill="url(#right-face)" />
 
-    <!-- Left side shape with classic Finder nose profile -->
+    <!-- Left side shape -->
     <path d="M 36 36
              L 256 36
              L 256 220
@@ -74,7 +74,7 @@
     <!-- Right Eye Highlight -->
     <circle cx="340" cy="194" r="5" fill="#ffffff" opacity="0.85" />
 
-    <!-- Smile (Classic Apple Finder Smile) -->
+    <!-- Smile -->
     <path d="M 148 336
              C 176 394 336 394 364 336"
           fill="none"

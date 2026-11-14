@@ -26,7 +26,7 @@ A clear description of the problem.
 - Desktop/session: KDE Plasma / GNOME / other
 - Session type: Wayland / X11
 - Qt version:
-- Finder version:
+- File Manager version:
 
 ## Logs
 

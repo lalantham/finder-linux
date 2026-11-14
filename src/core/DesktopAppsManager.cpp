@@ -1179,7 +1179,7 @@ bool DesktopAppsManager::launchFile(const QString& filePath)
     if (defaultId.isEmpty() && apps.isEmpty()) {
         QMessageBox::warning(nullptr, QStringLiteral("Cannot Open File"),
             QStringLiteral("No application is associated with this file type.\n\n"
-                           "Use Get Info → Open with to choose an application."));
+                           "Use Properties → Open with to choose an application."));
         return false;
     }
 

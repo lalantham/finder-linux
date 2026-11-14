@@ -21,7 +21,7 @@ class TagManager : public QObject {
 public:
     static TagManager& instance();
 
-    // Standard 7 macOS Finder colors
+    // Standard tag colors
     static const QList<TagInfo>& standardTags();
     static QColor colorForTag(const QString& tag);
     static QIcon tagDotIcon(const QString& tag, int size = 16);

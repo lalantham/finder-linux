@@ -1,16 +1,14 @@
 #pragma once
 
-#include <QWidget>
+#include "SearchQuery.h"
+#include <QCheckBox>
+#include <QComboBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
-#include <QComboBox>
-#include <QCheckBox>
-#include <QHBoxLayout>
+#include <QWidget>
 
-enum class SearchScope {
-    ThisFolder,
-    Everywhere
-};
+enum class SearchScope { ThisFolder, ThisPC };
 
 class SearchScopeBar : public QWidget {
     Q_OBJECT
@@ -19,27 +17,38 @@ public:
     explicit SearchScopeBar(QWidget* parent = nullptr);
 
     void setCurrentFolderName(const QString& name);
-    [[nodiscard]] const QString& currentFolderName() const noexcept { return m_folderName; }
+    [[nodiscard]] const QString& currentFolderName() const noexcept {
+        return m_folderName;
+    }
 
     void setStatusText(const QString& text);
+    void setFilterSummary(const QString& text);
+    void setSaveSearchEnabled(bool enabled);
+    void setFromFilter(const SearchFilter& filter);
     void reset();
 
-    [[nodiscard]] SearchScope currentScope() const noexcept { return m_scope; }
+    [[nodiscard]] SearchScope currentScope() const noexcept {
+        return m_scope;
+    }
     [[nodiscard]] QString currentKind() const;
     [[nodiscard]] bool isSubfolders() const;
+    [[nodiscard]] bool isContentSearch() const;
+    void setContentSearch(bool enabled);
 
 signals:
     void scopeChanged(SearchScope scope);
     void kindChanged(const QString& kind);
     void subfoldersToggled(bool subfolders);
+    void contentToggled(bool enabled);
     void clearRequested();
+    void saveSearchRequested();
 
 public slots:
     void updateThemeStyles(bool isDark);
 
 private slots:
     void onThisFolderClicked();
-    void onEverywhereClicked();
+    void onThisPCClicked();
 
 private:
     void setupUi();
@@ -51,10 +60,13 @@ private:
 
     QLabel* m_labelSearch{nullptr};
     QPushButton* m_thisFolderBtn{nullptr};
-    QPushButton* m_everywhereBtn{nullptr};
+    QPushButton* m_thisPCBtn{nullptr};
     QCheckBox* m_subfoldersCb{nullptr};
+    QCheckBox* m_contentsCb{nullptr};
     QLabel* m_kindLabel{nullptr};
     QComboBox* m_kindCombo{nullptr};
+    QLabel* m_filterSummaryLabel{nullptr};
     QLabel* m_statusLabel{nullptr};
+    QPushButton* m_saveSearchBtn{nullptr};
     QPushButton* m_clearBtn{nullptr};
 };

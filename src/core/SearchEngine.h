@@ -1,22 +1,12 @@
 #pragma once
 
 #include "FileItem.h"
+#include "SearchQuery.h"
+#include <QMimeDatabase>
 #include <QObject>
 #include <QThread>
 #include <QVector>
-#include <QMimeDatabase>
 #include <atomic>
-
-struct SearchFilter {
-    QString query;
-    QString searchPath;
-    bool recursive{true};
-    bool caseSensitive{false};
-    bool includeHidden{false};
-    QString kindFilter; // e.g., "image", "document", or empty for all
-    qint64 minSize{-1};
-    qint64 maxSize{-1};
-};
 
 class SearchWorker : public QObject {
     Q_OBJECT
@@ -34,12 +24,13 @@ signals:
     void progress(const QString& currentDir);
 
 private:
-    void searchDirectory(const QString& dirPath);
+    void searchDirectory(const QString& dirPath, const QString& rootPath);
     bool matchesFilter(const QFileInfo& fi) const;
 
     SearchFilter m_filter;
     std::atomic<bool> m_cancelled{false};
     int m_count{0};
+    int m_progressCounter{0};
     mutable QMimeDatabase m_mimeDb;
 };
 
@@ -53,6 +44,9 @@ public:
     void startSearch(const SearchFilter& filter);
     void stopSearch();
     [[nodiscard]] bool isRunning() const;
+
+    // Local filesystem roots used by the "This PC" scope.
+    [[nodiscard]] static QStringList localSearchRoots();
 
 signals:
     void itemsFound(const QVector<FileItem>& items);

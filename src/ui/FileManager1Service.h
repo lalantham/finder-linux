@@ -17,11 +17,11 @@ public:
     explicit FileManager1Service(MainWindow& window, QObject* parent = nullptr);
 
     // Exports /org/freedesktop/FileManager1 and requests the well-known name.
-    // Returns true when Finder currently owns the name.
+    // Returns true when File Manager currently owns the name.
     bool registerOnBus();
 
     // Writes the user-scoped D-Bus activation file used by browsers when
-    // Finder is not running yet. Safe to call repeatedly.
+    // File Manager is not running yet. Safe to call repeatedly.
     static bool installActivationFile(QString* error = nullptr);
 
 public slots:

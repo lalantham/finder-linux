@@ -1,24 +1,25 @@
 #include "FileItem.h"
 #include "TagManager.h"
+#include <QDir>
+#include <QFile>
 #include <QFileIconProvider>
 #include <QHash>
 #include <QLocale>
 #include <QMutex>
-#include <QDir>
 #include <QStandardPaths>
+#include <cerrno>
 #include <cmath>
+#include <sys/xattr.h>
 
 namespace {
 
-QMimeDatabase& sharedMimeDatabase()
-{
+QMimeDatabase& sharedMimeDatabase() {
     // Directory scans run on worker threads; give each thread its own database.
     thread_local QMimeDatabase database;
     return database;
 }
 
-QString userName(uid_t uid)
-{
+QString userName(uid_t uid) {
     static QMutex mutex;
     static QHash<uid_t, QString> cache;
     QMutexLocker locker(&mutex);
@@ -36,8 +37,7 @@ QString userName(uid_t uid)
     return name;
 }
 
-QString groupName(gid_t gid)
-{
+QString groupName(gid_t gid) {
     static QMutex mutex;
     static QHash<gid_t, QString> cache;
     QMutexLocker locker(&mutex);
@@ -55,8 +55,7 @@ QString groupName(gid_t gid)
     return name;
 }
 
-QHash<QString, QString> buildSpecialDirIcons()
-{
+QHash<QString, QString> buildSpecialDirIcons() {
     QHash<QString, QString> map;
     auto add = [&map](QStandardPaths::StandardLocation location, const QString& icon) {
         const QString path = QStandardPaths::writableLocation(location);
@@ -77,25 +76,20 @@ QHash<QString, QString> buildSpecialDirIcons()
 
 } // namespace
 
-FileItem::FileItem(const QString& absolutePath)
-    : m_path(absolutePath)
-{
+FileItem::FileItem(const QString& absolutePath) : m_path(absolutePath) {
     refresh();
 }
 
-FileItem::FileItem(const QFileInfo& fileInfo)
-{
+FileItem::FileItem(const QFileInfo& fileInfo) {
     initFromInfo(fileInfo);
 }
 
-void FileItem::refresh()
-{
+void FileItem::refresh() {
     QFileInfo info(m_path);
     initFromInfo(info);
 }
 
-void FileItem::initFromInfo(const QFileInfo& info)
-{
+void FileItem::initFromInfo(const QFileInfo& info) {
     m_path = info.absoluteFilePath();
     m_fileName = info.fileName();
     if (m_fileName.isEmpty() && info.isRoot()) {
@@ -152,29 +146,34 @@ void FileItem::initFromInfo(const QFileInfo& info)
         m_mimeTypeName = QStringLiteral("inode/symlink");
     } else {
         // Extension-only matching avoids opening every file just to list a folder.
-        QMimeType mimeType = sharedMimeDatabase().mimeTypeForFile(info, QMimeDatabase::MatchExtension);
+        QMimeType mimeType =
+            sharedMimeDatabase().mimeTypeForFile(info, QMimeDatabase::MatchExtension);
         m_mimeTypeName = mimeType.name();
         m_kind = mimeType.comment();
         if (m_kind.isEmpty()) {
-            m_kind = m_suffix.isEmpty() ? QStringLiteral("Document") : m_suffix.toUpper() + QStringLiteral(" Document");
+            m_kind = m_suffix.isEmpty() ? QStringLiteral("Document")
+                                        : m_suffix.toUpper() + QStringLiteral(" Document");
         }
     }
 
     // Tags are loaded lazily: getxattr() is expensive and only visible rows need it.
     m_tags.clear();
     m_tagsLoaded = false;
+    m_comment.clear();
+    m_commentLoaded = false;
 }
 
-void FileItem::setCalculatedFolderSize(qint64 size, int itemCount)
-{
+void FileItem::setCalculatedFolderSize(qint64 size, int itemCount) {
     m_size = size;
     m_formattedSize = (itemCount >= 0)
-        ? QStringLiteral("%1 (%2)").arg(formatSize(size)).arg(itemCount == 1 ? QStringLiteral("1 item") : QStringLiteral("%1 items").arg(itemCount))
-        : formatSize(size);
+                          ? QStringLiteral("%1 (%2)")
+                                .arg(formatSize(size))
+                                .arg(itemCount == 1 ? QStringLiteral("1 item")
+                                                    : QStringLiteral("%1 items").arg(itemCount))
+                          : formatSize(size);
 }
 
-const QStringList& FileItem::tags() const
-{
+const QStringList& FileItem::tags() const {
     if (!m_tagsLoaded) {
         m_tags = TagManager::instance().tagsForFile(m_path);
         m_tagsLoaded = true;
@@ -182,14 +181,47 @@ const QStringList& FileItem::tags() const
     return m_tags;
 }
 
-QIcon FileItem::icon() const
-{
+QString FileItem::comment() const {
+    if (!m_commentLoaded) {
+        const QByteArray localPath = QFile::encodeName(m_path);
+        char buffer[4096];
+        const ssize_t length =
+            getxattr(localPath.constData(), "user.xdg.comment", buffer, sizeof(buffer));
+        if (length > 0) {
+            m_comment = QString::fromUtf8(buffer, static_cast<int>(length));
+        } else {
+            m_comment.clear();
+        }
+        m_commentLoaded = true;
+    }
+    return m_comment;
+}
+
+bool FileItem::setComment(const QString& comment) {
+    const QByteArray localPath = QFile::encodeName(m_path);
+    if (comment.isEmpty()) {
+        const int rc = removexattr(localPath.constData(), "user.xdg.comment");
+        if (rc != 0 && errno != ENODATA) {
+            return false;
+        }
+    } else {
+        const QByteArray data = comment.toUtf8();
+        if (setxattr(localPath.constData(), "user.xdg.comment", data.constData(),
+                     static_cast<size_t>(data.size()), 0) != 0) {
+            return false;
+        }
+    }
+    m_comment = comment;
+    m_commentLoaded = true;
+    return true;
+}
+
+QIcon FileItem::icon() const {
     if (m_isDir) {
         static const QHash<QString, QString> specialDirs = buildSpecialDirIcons();
         const auto special = specialDirs.constFind(QDir::cleanPath(m_path));
-        const QString iconName = special != specialDirs.cend()
-            ? *special
-            : QStringLiteral("folder");
+        const QString iconName =
+            special != specialDirs.cend() ? *special : QStringLiteral("folder");
 
         static QHash<QString, QIcon> directoryIcons;
         const auto cached = directoryIcons.constFind(iconName);
@@ -211,7 +243,8 @@ QIcon FileItem::icon() const
 
     QIcon icon;
     if (!m_suffix.isEmpty()) {
-        const QMimeType mime = sharedMimeDatabase().mimeTypeForFile(m_path, QMimeDatabase::MatchExtension);
+        const QMimeType mime =
+            sharedMimeDatabase().mimeTypeForFile(m_path, QMimeDatabase::MatchExtension);
         icon = QIcon::fromTheme(mime.iconName());
     }
     if (icon.isNull()) {
@@ -222,9 +255,9 @@ QIcon FileItem::icon() const
     return icon;
 }
 
-QString FileItem::formatSize(qint64 bytes)
-{
-    if (bytes < 0) return QStringLiteral("--");
+QString FileItem::formatSize(qint64 bytes) {
+    if (bytes < 0)
+        return QStringLiteral("--");
     if (bytes < 1000) {
         return QStringLiteral("%1 B").arg(bytes);
     }
@@ -235,39 +268,53 @@ QString FileItem::formatSize(qint64 bytes)
         dBytes /= 1000.0;
         ++unitIndex;
     }
-    return QStringLiteral("%1 %2").arg(dBytes, 0, 'f', dBytes < 10.0 ? 1 : 0).arg(QLatin1String(units[unitIndex]));
+    return QStringLiteral("%1 %2")
+        .arg(dBytes, 0, 'f', dBytes < 10.0 ? 1 : 0)
+        .arg(QLatin1String(units[unitIndex]));
 }
 
-QString FileItem::formatPermissions(mode_t mode)
-{
+QString FileItem::formatPermissions(mode_t mode) {
     QString perms;
     perms.reserve(10);
     // Type
-    if (S_ISDIR(mode)) perms += 'd';
-    else if (S_ISLNK(mode)) perms += 'l';
-    else if (S_ISCHR(mode)) perms += 'c';
-    else if (S_ISBLK(mode)) perms += 'b';
-    else if (S_ISFIFO(mode)) perms += 'p';
-    else if (S_ISSOCK(mode)) perms += 's';
-    else perms += '-';
+    if (S_ISDIR(mode))
+        perms += 'd';
+    else if (S_ISLNK(mode))
+        perms += 'l';
+    else if (S_ISCHR(mode))
+        perms += 'c';
+    else if (S_ISBLK(mode))
+        perms += 'b';
+    else if (S_ISFIFO(mode))
+        perms += 'p';
+    else if (S_ISSOCK(mode))
+        perms += 's';
+    else
+        perms += '-';
 
     // User
     perms += (mode & S_IRUSR) ? 'r' : '-';
     perms += (mode & S_IWUSR) ? 'w' : '-';
-    if (mode & S_ISUID) perms += (mode & S_IXUSR) ? 's' : 'S';
-    else perms += (mode & S_IXUSR) ? 'x' : '-';
+    if (mode & S_ISUID)
+        perms += (mode & S_IXUSR) ? 's' : 'S';
+    else
+        perms += (mode & S_IXUSR) ? 'x' : '-';
 
     // Group
     perms += (mode & S_IRGRP) ? 'r' : '-';
     perms += (mode & S_IWGRP) ? 'w' : '-';
-    if (mode & S_ISGID) perms += (mode & S_IXGRP) ? 's' : 'S';
-    else perms += (mode & S_IXGRP) ? 'x' : '-';
+    if (mode & S_ISGID)
+        perms += (mode & S_IXGRP) ? 's' : 'S';
+    else
+        perms += (mode & S_IXGRP) ? 'x' : '-';
 
     // Others
     perms += (mode & S_IROTH) ? 'r' : '-';
     perms += (mode & S_IWOTH) ? 'w' : '-';
-    if (mode & S_ISVTX) perms += (mode & S_IXOTH) ? 't' : 'T';
-    else perms += (mode & S_IXOTH) ? 'x' : '-';
+    if (mode & S_ISVTX)
+        perms += (mode & S_IXOTH) ? 't' : 'T';
+    else
+        perms += (mode & S_IXOTH) ? 'x' : '-';
 
     return perms;
 }

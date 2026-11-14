@@ -3,22 +3,21 @@
   <id>org.finderlinux.Finder</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>Finder</name>
-  <summary>A native macOS Finder-inspired file manager for Linux</summary>
+  <name>File Manager</name>
+  <summary>A native Linux file manager with modern views and desktop integration</summary>
   <developer id="org.finderlinux">
-    <name>Finder Linux contributors</name>
+    <name>File Manager contributors</name>
   </developer>
   <url type="homepage">https://github.com/lalantham/finder-linux</url>
   <description>
     <p>
-      Finder Linux is a native Qt 6 file manager designed to feel familiar to
-      users coming from macOS Finder while integrating with freedesktop.org and
-      KDE Plasma desktop services.
+      File Manager for Linux is a native Qt 6 file manager integrating with
+      freedesktop.org and desktop services.
     </p>
     <p>Features include:</p>
     <ul>
       <li>Icon, list, column, and gallery views</li>
-      <li>Quick Look previews for images, text, PDF, video, and audio</li>
+      <li>Preview support for images, text, PDF, video, and audio</li>
       <li>Split-pane browsing with synchronized folders and pane-to-pane copy/move</li>
       <li>XDG Trash support with restore, conflict handling, and optional auto-purge</li>
       <li>Archive creation and extraction, including optional ZIP AES encryption</li>
@@ -38,7 +37,7 @@
   </categories>
   <keywords>
     <keyword>file manager</keyword>
-    <keyword>finder</keyword>
+    <keyword>file browser</keyword>
     <keyword>files</keyword>
     <keyword>folders</keyword>
     <keyword>browser</keyword>

@@ -1,11 +1,13 @@
 #include "FileSystemModel.h"
+#include "AppSettings.h"
 #include "FileOperationEngine.h"
 #include "TagManager.h"
-#include "AppSettings.h"
+#include <QCollator>
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QHash>
+#include <QLocale>
 #include <QSet>
 #include <QStorageInfo>
 #include <QTimer>
@@ -14,21 +16,94 @@
 
 bool FileSystemModel::s_asyncLoading = false;
 
-void FileSystemModel::setAsyncLoadingEnabled(bool enabled)
-{
+void FileSystemModel::setAsyncLoadingEnabled(bool enabled) {
     s_asyncLoading = enabled;
 }
 
-bool FileSystemModel::asyncLoadingEnabled()
-{
+bool FileSystemModel::asyncLoadingEnabled() {
     return s_asyncLoading;
 }
 
-FileSystemModel::FileSystemModel(QObject* parent)
-    : QAbstractItemModel(parent)
-{
+QString FileSystemModel::columnKey(int column) {
+    switch (column) {
+    case ColName:
+        return QStringLiteral("name");
+    case ColDateModified:
+        return QStringLiteral("dateModified");
+    case ColSize:
+        return QStringLiteral("size");
+    case ColKind:
+        return QStringLiteral("kind");
+    case ColDateCreated:
+        return QStringLiteral("dateCreated");
+    case ColDateOpened:
+        return QStringLiteral("dateOpened");
+    case ColTags:
+        return QStringLiteral("tags");
+    case ColPermissions:
+        return QStringLiteral("permissions");
+    case ColOwner:
+        return QStringLiteral("owner");
+    case ColGroup:
+        return QStringLiteral("group");
+    case ColComment:
+        return QStringLiteral("comment");
+    default:
+        return {};
+    }
+}
+
+int FileSystemModel::columnForKey(const QString& key) {
+    for (int column = 0; column < ColumnCount; ++column) {
+        if (columnKey(column) == key) {
+            return column;
+        }
+    }
+    return -1;
+}
+
+QString FileSystemModel::columnTitle(int column) {
+    switch (column) {
+    case ColName:
+        return QStringLiteral("Name");
+    case ColDateModified:
+        return QStringLiteral("Date Modified");
+    case ColSize:
+        return QStringLiteral("Size");
+    case ColKind:
+        return QStringLiteral("Kind");
+    case ColDateCreated:
+        return QStringLiteral("Date Created");
+    case ColDateOpened:
+        return QStringLiteral("Date Last Opened");
+    case ColTags:
+        return QStringLiteral("Tags");
+    case ColPermissions:
+        return QStringLiteral("Permissions");
+    case ColOwner:
+        return QStringLiteral("Owner");
+    case ColGroup:
+        return QStringLiteral("Group");
+    case ColComment:
+        return QStringLiteral("Comment");
+    default:
+        return {};
+    }
+}
+
+QList<int> FileSystemModel::allColumns() {
+    QList<int> columns;
+    columns.reserve(ColumnCount);
+    for (int column = 0; column < ColumnCount; ++column) {
+        columns.append(column);
+    }
+    return columns;
+}
+
+FileSystemModel::FileSystemModel(QObject* parent) : QAbstractItemModel(parent) {
     m_calculateFolderSizes = AppSettings::instance().calculateFolderSizes();
-    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &FileSystemModel::onDirectoryChanged);
+    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this,
+            &FileSystemModel::onDirectoryChanged);
 
     // Coalesce bursts of filesystem events (unpacking an archive, downloads)
     // into a single directory rescan.
@@ -37,34 +112,35 @@ FileSystemModel::FileSystemModel(QObject* parent)
     m_refreshTimer->setInterval(300);
     connect(m_refreshTimer, &QTimer::timeout, this, &FileSystemModel::populate);
 
-    connect(&TagManager::instance(), &TagManager::tagsChanged, this, [this](const QString& path, const QStringList& /*tags*/) {
-        for (int i = 0; i < m_items.size(); ++i) {
-            if (m_items[i].path() == path) {
-                m_items[i].refresh();
-                QModelIndex idx = index(i, 0);
-                emit dataChanged(idx, index(i, columnCount() - 1), {FileTagsRole, Qt::DisplayRole});
-                break;
-            }
-        }
-    });
+    connect(&TagManager::instance(), &TagManager::tagsChanged, this,
+            [this](const QString& path, const QStringList& /*tags*/) {
+                for (int i = 0; i < m_items.size(); ++i) {
+                    if (m_items[i].path() == path) {
+                        m_items[i].refresh();
+                        QModelIndex idx = index(i, 0);
+                        emit dataChanged(idx, index(i, columnCount() - 1),
+                                         {FileTagsRole, Qt::DisplayRole});
+                        break;
+                    }
+                }
+            });
 }
 
-FileSystemModel::~FileSystemModel()
-{
+FileSystemModel::~FileSystemModel() {
     ++m_generation;
     if (m_cancelFlag) {
         m_cancelFlag->store(true, std::memory_order_relaxed);
     }
 }
 
-void FileSystemModel::setRootPath(const QString& path)
-{
+void FileSystemModel::setRootPath(const QString& path) {
     m_activeTag.clear();
     m_filterQuery.clear();
     m_filterKind.clear();
     m_isSearchResultsView = false;
     QString cleanPath = QDir::cleanPath(path);
-    if (m_rootPath == cleanPath) return;
+    if (m_rootPath == cleanPath)
+        return;
 
     if (!m_rootPath.isEmpty()) {
         m_watcher.removePath(m_rootPath);
@@ -79,8 +155,7 @@ void FileSystemModel::setRootPath(const QString& path)
     emit rootPathChanged(m_rootPath);
 }
 
-void FileSystemModel::setTaggedFiles(const QString& tag)
-{
+void FileSystemModel::setTaggedFiles(const QString& tag) {
     m_filterQuery.clear();
     m_filterKind.clear();
     m_isSearchResultsView = false;
@@ -93,23 +168,23 @@ void FileSystemModel::setTaggedFiles(const QString& tag)
     emit rootPathChanged(m_rootPath);
 }
 
-void FileSystemModel::setShowHidden(bool show)
-{
-    if (m_showHidden == show) return;
+void FileSystemModel::setShowHidden(bool show) {
+    if (m_showHidden == show)
+        return;
     m_showHidden = show;
     populate();
 }
 
-void FileSystemModel::setDirectoriesFirst(bool dirsFirst)
-{
-    if (m_directoriesFirst == dirsFirst) return;
+void FileSystemModel::setDirectoriesFirst(bool dirsFirst) {
+    if (m_directoriesFirst == dirsFirst)
+        return;
     m_directoriesFirst = dirsFirst;
     sort(m_sortColumn, m_sortOrder);
 }
 
-void FileSystemModel::setCalculateFolderSizes(bool enabled)
-{
-    if (m_calculateFolderSizes == enabled) return;
+void FileSystemModel::setCalculateFolderSizes(bool enabled) {
+    if (m_calculateFolderSizes == enabled)
+        return;
     m_calculateFolderSizes = enabled;
     if (m_calculateFolderSizes) {
         scheduleFolderSizeCalculations();
@@ -118,20 +193,17 @@ void FileSystemModel::setCalculateFolderSizes(bool enabled)
     }
 }
 
-void FileSystemModel::refresh()
-{
+void FileSystemModel::refresh() {
     populate();
 }
 
-void FileSystemModel::onDirectoryChanged(const QString& path)
-{
+void FileSystemModel::onDirectoryChanged(const QString& path) {
     if (path == m_rootPath && m_refreshTimer) {
         m_refreshTimer->start();
     }
 }
 
-bool FileSystemModel::isLocalFileSystem(const QString& path)
-{
+bool FileSystemModel::isLocalFileSystem(const QString& path) {
     if (path.startsWith(QStringLiteral("tag://"))) {
         return false;
     }
@@ -145,19 +217,18 @@ bool FileSystemModel::isLocalFileSystem(const QString& path)
     }
 
     static const QSet<QString> remoteTypes = {
-        QStringLiteral("nfs"), QStringLiteral("nfs4"), QStringLiteral("cifs"),
-        QStringLiteral("smb3"), QStringLiteral("smbfs"), QStringLiteral("afs"),
-        QStringLiteral("ceph"), QStringLiteral("9p"), QStringLiteral("davfs"),
-        QStringLiteral("fuse.sshfs"), QStringLiteral("fuse.rclone"),
-        QStringLiteral("fuse.gvfsd-fuse"), QStringLiteral("fuse.kio-fuse"),
-        QStringLiteral("fuse.smbnetfs")
-    };
+        QStringLiteral("nfs"),           QStringLiteral("nfs4"),
+        QStringLiteral("cifs"),          QStringLiteral("smb3"),
+        QStringLiteral("smbfs"),         QStringLiteral("afs"),
+        QStringLiteral("ceph"),          QStringLiteral("9p"),
+        QStringLiteral("davfs"),         QStringLiteral("fuse.sshfs"),
+        QStringLiteral("fuse.rclone"),   QStringLiteral("fuse.gvfsd-fuse"),
+        QStringLiteral("fuse.kio-fuse"), QStringLiteral("fuse.smbnetfs")};
     const QString fsType = QString::fromLatin1(storage.fileSystemType()).toLower();
     return !remoteTypes.contains(fsType);
 }
 
-void FileSystemModel::populate()
-{
+void FileSystemModel::populate() {
     // Tag collections are small and read the TagManager registry, which is not
     // worth touching from a worker during shutdown.
     if (s_asyncLoading && m_activeTag.isEmpty()) {
@@ -167,8 +238,7 @@ void FileSystemModel::populate()
     }
 }
 
-void FileSystemModel::cancelPendingLoad()
-{
+void FileSystemModel::cancelPendingLoad() {
     ++m_generation;
     if (m_cancelFlag) {
         m_cancelFlag->store(true, std::memory_order_relaxed);
@@ -176,8 +246,7 @@ void FileSystemModel::cancelPendingLoad()
     }
 }
 
-void FileSystemModel::populateSync()
-{
+void FileSystemModel::populateSync() {
     ++m_generation;
     if (m_cancelFlag) {
         m_cancelFlag->store(true, std::memory_order_relaxed);
@@ -217,8 +286,7 @@ void FileSystemModel::populateSync()
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
 }
 
-void FileSystemModel::populateAsync()
-{
+void FileSystemModel::populateAsync() {
     const quint64 generation = ++m_generation;
     if (m_cancelFlag) {
         m_cancelFlag->store(true, std::memory_order_relaxed);
@@ -236,20 +304,21 @@ void FileSystemModel::populateAsync()
     // The watcher is owned by the model, so destroying the model cancels the
     // callback; the scan itself keeps no pointer to the model.
     auto* watcher = new QFutureWatcher<QVector<FileItem>>(this);
-    connect(watcher, &QFutureWatcher<QVector<FileItem>>::finished, this, [this, watcher, generation]() {
-        const QVector<FileItem> items = watcher->result();
-        watcher->deleteLater();
+    connect(watcher, &QFutureWatcher<QVector<FileItem>>::finished, this,
+            [this, watcher, generation]() {
+                const QVector<FileItem> items = watcher->result();
+                watcher->deleteLater();
 
-        if (generation != m_generation) {
-            return; // a newer scan superseded this one
-        }
+                if (generation != m_generation) {
+                    return; // a newer scan superseded this one
+                }
 
-        beginResetModel();
-        m_allFolderItems = items;
-        applyFilterInternal();
-        endResetModel();
-        emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
-    });
+                beginResetModel();
+                m_allFolderItems = items;
+                applyFilterInternal();
+                endResetModel();
+                emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
+            });
 
     watcher->setFuture(QtConcurrent::run([tagView, tag, root, showHidden, cancel]() {
         QVector<FileItem> items;
@@ -261,7 +330,8 @@ void FileSystemModel::populateAsync()
             const QStringList paths = TagManager::instance().filesForTag(tag);
             items.reserve(paths.size());
             for (const auto& path : paths) {
-                if (cancel->load(std::memory_order_relaxed)) break;
+                if (cancel->load(std::memory_order_relaxed))
+                    break;
                 if (QFileInfo::exists(path)) {
                     items.emplace_back(path);
                 }
@@ -274,7 +344,8 @@ void FileSystemModel::populateAsync()
 
             QDirIterator iterator(root, filters);
             while (iterator.hasNext()) {
-                if (cancel->load(std::memory_order_relaxed)) break;
+                if (cancel->load(std::memory_order_relaxed))
+                    break;
                 iterator.next();
                 items.emplace_back(iterator.fileInfo());
             }
@@ -284,8 +355,8 @@ void FileSystemModel::populateAsync()
     }));
 }
 
-bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& query, const QString& kind)
-{
+bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& query,
+                                        const QString& kind) {
     if (!query.isEmpty()) {
         bool matchesName = item.fileName().contains(query, Qt::CaseInsensitive);
         bool matchesTag = false;
@@ -296,7 +367,9 @@ bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& que
                 break;
             }
         }
-        if (!matchesName && !matchesTag) {
+        const bool matchesComment =
+            !matchesName && !matchesTag && item.comment().contains(query, Qt::CaseInsensitive);
+        if (!matchesName && !matchesTag && !matchesComment) {
             return false;
         }
     }
@@ -305,55 +378,56 @@ bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& que
         QString k = kind.toLower();
         QString ext = item.suffix().toLower();
         if (k == QStringLiteral("folders") || k == QStringLiteral("folder")) {
-            if (!item.isDir()) return false;
+            if (!item.isDir())
+                return false;
         } else if (item.isDir()) {
             return false;
         } else if (k == QStringLiteral("images") || k == QStringLiteral("image")) {
-            static const QSet<QString> imgExts = {
-                QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
-                QStringLiteral("gif"), QStringLiteral("svg"), QStringLiteral("webp"),
-                QStringLiteral("bmp"), QStringLiteral("ico"), QStringLiteral("tiff"), QStringLiteral("tif")
-            };
-            if (!imgExts.contains(ext) && !item.kind().contains(QStringLiteral("image"), Qt::CaseInsensitive)) {
+            static const QSet<QString> imgExts = {QStringLiteral("png"),  QStringLiteral("jpg"),
+                                                  QStringLiteral("jpeg"), QStringLiteral("gif"),
+                                                  QStringLiteral("svg"),  QStringLiteral("webp"),
+                                                  QStringLiteral("bmp"),  QStringLiteral("ico"),
+                                                  QStringLiteral("tiff"), QStringLiteral("tif")};
+            if (!imgExts.contains(ext) &&
+                !item.kind().contains(QStringLiteral("image"), Qt::CaseInsensitive)) {
                 return false;
             }
         } else if (k == QStringLiteral("documents") || k == QStringLiteral("document")) {
             static const QSet<QString> docExts = {
-                QStringLiteral("pdf"), QStringLiteral("doc"), QStringLiteral("docx"),
-                QStringLiteral("txt"), QStringLiteral("md"), QStringLiteral("rtf"),
-                QStringLiteral("odt"), QStringLiteral("xls"), QStringLiteral("xlsx"),
-                QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")
-            };
+                QStringLiteral("pdf"), QStringLiteral("doc"),  QStringLiteral("docx"),
+                QStringLiteral("txt"), QStringLiteral("md"),   QStringLiteral("rtf"),
+                QStringLiteral("odt"), QStringLiteral("xls"),  QStringLiteral("xlsx"),
+                QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")};
             if (!docExts.contains(ext) &&
                 !item.kind().contains(QStringLiteral("document"), Qt::CaseInsensitive) &&
                 !item.kind().contains(QStringLiteral("text"), Qt::CaseInsensitive)) {
                 return false;
             }
         } else if (k == QStringLiteral("videos") || k == QStringLiteral("video")) {
-            static const QSet<QString> vidExts = {
-                QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("avi"),
-                QStringLiteral("mov"), QStringLiteral("webm"), QStringLiteral("wmv"),
-                QStringLiteral("flv"), QStringLiteral("m4v")
-            };
-            if (!vidExts.contains(ext) && !item.kind().contains(QStringLiteral("video"), Qt::CaseInsensitive)) {
+            static const QSet<QString> vidExts = {QStringLiteral("mp4"),  QStringLiteral("mkv"),
+                                                  QStringLiteral("avi"),  QStringLiteral("mov"),
+                                                  QStringLiteral("webm"), QStringLiteral("wmv"),
+                                                  QStringLiteral("flv"),  QStringLiteral("m4v")};
+            if (!vidExts.contains(ext) &&
+                !item.kind().contains(QStringLiteral("video"), Qt::CaseInsensitive)) {
                 return false;
             }
         } else if (k == QStringLiteral("audio")) {
-            static const QSet<QString> audExts = {
-                QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("wav"),
-                QStringLiteral("ogg"), QStringLiteral("m4a"), QStringLiteral("aac"),
-                QStringLiteral("wma"), QStringLiteral("opus")
-            };
-            if (!audExts.contains(ext) && !item.kind().contains(QStringLiteral("audio"), Qt::CaseInsensitive)) {
+            static const QSet<QString> audExts = {QStringLiteral("mp3"), QStringLiteral("flac"),
+                                                  QStringLiteral("wav"), QStringLiteral("ogg"),
+                                                  QStringLiteral("m4a"), QStringLiteral("aac"),
+                                                  QStringLiteral("wma"), QStringLiteral("opus")};
+            if (!audExts.contains(ext) &&
+                !item.kind().contains(QStringLiteral("audio"), Qt::CaseInsensitive)) {
                 return false;
             }
         } else if (k == QStringLiteral("archives") || k == QStringLiteral("archive")) {
-            static const QSet<QString> arcExts = {
-                QStringLiteral("zip"), QStringLiteral("tar"), QStringLiteral("gz"),
-                QStringLiteral("bz2"), QStringLiteral("xz"), QStringLiteral("7z"),
-                QStringLiteral("rar"), QStringLiteral("tgz")
-            };
-            if (!arcExts.contains(ext) && !item.kind().contains(QStringLiteral("archive"), Qt::CaseInsensitive)) {
+            static const QSet<QString> arcExts = {QStringLiteral("zip"), QStringLiteral("tar"),
+                                                  QStringLiteral("gz"),  QStringLiteral("bz2"),
+                                                  QStringLiteral("xz"),  QStringLiteral("7z"),
+                                                  QStringLiteral("rar"), QStringLiteral("tgz")};
+            if (!arcExts.contains(ext) &&
+                !item.kind().contains(QStringLiteral("archive"), Qt::CaseInsensitive)) {
                 return false;
             }
         }
@@ -362,8 +436,7 @@ bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& que
     return true;
 }
 
-void FileSystemModel::applyFilterInternal()
-{
+void FileSystemModel::applyFilterInternal() {
     if (m_filterQuery.isEmpty() && m_filterKind.isEmpty()) {
         m_items = m_allFolderItems;
     } else {
@@ -387,14 +460,14 @@ void FileSystemModel::applyFilterInternal()
     scheduleFolderSizeCalculations();
 }
 
-void FileSystemModel::scheduleFolderSizeCalculations()
-{
+void FileSystemModel::scheduleFolderSizeCalculations() {
     if (!m_calculateFolderSizes || m_items.isEmpty() || m_isSearchResultsView) {
         return;
     }
 
     for (int i = 0; i < m_items.size(); ++i) {
-        if (!m_items[i].isDir()) continue;
+        if (!m_items[i].isDir())
+            continue;
         const QString dirPath = m_items[i].path();
         if (m_folderSizeCache.contains(dirPath)) {
             const auto& p = m_folderSizeCache.value(dirPath);
@@ -405,42 +478,46 @@ void FileSystemModel::scheduleFolderSizeCalculations()
 
         quint64 gen = m_generation;
         auto* watcher = new QFutureWatcher<QPair<qint64, int>>(this);
-        connect(watcher, &QFutureWatcher<QPair<qint64, int>>::finished, this, [this, watcher, dirPath, gen]() {
-            QPair<qint64, int> res = watcher->result();
-            watcher->deleteLater();
-            if (gen != m_generation) return;
-            m_folderSizeCache[dirPath] = res;
-            for (int r = 0; r < m_items.size(); ++r) {
-                if (m_items[r].path() == dirPath) {
-                    m_items[r].setCalculatedFolderSize(res.first, res.second);
-                    emit dataChanged(index(r, ColSize), index(r, ColSize));
-                    break;
-                }
-            }
-        });
+        connect(watcher, &QFutureWatcher<QPair<qint64, int>>::finished, this,
+                [this, watcher, dirPath, gen]() {
+                    QPair<qint64, int> res = watcher->result();
+                    watcher->deleteLater();
+                    if (gen != m_generation)
+                        return;
+                    m_folderSizeCache[dirPath] = res;
+                    for (int r = 0; r < m_items.size(); ++r) {
+                        if (m_items[r].path() == dirPath) {
+                            m_items[r].setCalculatedFolderSize(res.first, res.second);
+                            emit dataChanged(index(r, ColSize), index(r, ColSize));
+                            break;
+                        }
+                    }
+                });
 
         auto cancel = m_cancelFlag;
         watcher->setFuture(QtConcurrent::run([dirPath, cancel]() -> QPair<qint64, int> {
             qint64 total = 0;
             int count = 0;
-            QDirIterator it(dirPath, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden, QDirIterator::Subdirectories);
+            QDirIterator it(dirPath, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
+                            QDirIterator::Subdirectories);
             while (it.hasNext()) {
-                if (cancel && cancel->load(std::memory_order_relaxed)) break;
+                if (cancel && cancel->load(std::memory_order_relaxed))
+                    break;
                 it.next();
                 QFileInfo fi = it.fileInfo();
                 if (!fi.isDir()) {
                     total += fi.size();
                 }
                 count++;
-                if (count > 50000) break;
+                if (count > 50000)
+                    break;
             }
             return {total, count};
         }));
     }
 }
 
-void FileSystemModel::setFilterQuery(const QString& query, const QString& kind)
-{
+void FileSystemModel::setFilterQuery(const QString& query, const QString& kind) {
     beginResetModel();
     m_filterQuery = query;
     m_filterKind = kind;
@@ -450,8 +527,7 @@ void FileSystemModel::setFilterQuery(const QString& query, const QString& kind)
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
 }
 
-void FileSystemModel::setSearchResults(const QVector<FileItem>& items)
-{
+void FileSystemModel::setSearchResults(const QVector<FileItem>& items) {
     cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
@@ -461,9 +537,9 @@ void FileSystemModel::setSearchResults(const QVector<FileItem>& items)
     emit directoryLoaded(QStringLiteral("search://"), static_cast<int>(m_items.size()));
 }
 
-void FileSystemModel::appendSearchResults(const QVector<FileItem>& items)
-{
-    if (items.isEmpty()) return;
+void FileSystemModel::appendSearchResults(const QVector<FileItem>& items) {
+    if (items.isEmpty())
+        return;
     int firstRow = static_cast<int>(m_items.size());
     int lastRow = firstRow + static_cast<int>(items.size()) - 1;
     beginInsertRows(QModelIndex(), firstRow, lastRow);
@@ -471,8 +547,7 @@ void FileSystemModel::appendSearchResults(const QVector<FileItem>& items)
     endInsertRows();
 }
 
-void FileSystemModel::clearSearchResults()
-{
+void FileSystemModel::clearSearchResults() {
     cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
@@ -481,9 +556,9 @@ void FileSystemModel::clearSearchResults()
     emit directoryLoaded(QStringLiteral("search://"), 0);
 }
 
-void FileSystemModel::exitSearchResults()
-{
-    if (!m_isSearchResultsView) return;
+void FileSystemModel::exitSearchResults() {
+    if (!m_isSearchResultsView)
+        return;
     cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = false;
@@ -495,17 +570,23 @@ void FileSystemModel::exitSearchResults()
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
 }
 
-void FileSystemModel::sortInternal()
-{
-    if (m_items.size() < 2) return;
+void FileSystemModel::sortInternal() {
+    if (m_items.size() < 2)
+        return;
 
     struct SortEntry {
         int index{0};
         bool isDir{false};
+        QString name;
         QString text;
         qint64 number{0};
         QDateTime date;
     };
+
+    QCollator collator(QLocale::system());
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    collator.setIgnorePunctuation(false);
 
     // Fold strings once instead of on every comparison.
     QVector<SortEntry> entries;
@@ -515,19 +596,40 @@ void FileSystemModel::sortInternal()
         SortEntry entry;
         entry.index = i;
         entry.isDir = item.isDir();
+        entry.name = item.fileName();
         switch (m_sortColumn) {
         case ColDateModified:
             entry.date = item.modified();
+            break;
+        case ColDateCreated:
+            entry.date = item.created();
+            break;
+        case ColDateOpened:
+            entry.date = item.accessed();
             break;
         case ColSize:
             entry.number = item.size();
             break;
         case ColKind:
-            entry.text = item.kind().toCaseFolded();
+            entry.text = item.kind();
+            break;
+        case ColTags:
+            entry.text = item.tags().join(QStringLiteral(", "));
+            break;
+        case ColPermissions:
+            entry.text = item.permissionsString();
+            break;
+        case ColOwner:
+            entry.text = item.owner();
+            break;
+        case ColGroup:
+            entry.text = item.group();
+            break;
+        case ColComment:
+            entry.text = item.comment();
             break;
         case ColName:
         default:
-            entry.text = item.fileName().toCaseFolded();
             break;
         }
         entries.append(std::move(entry));
@@ -537,28 +639,45 @@ void FileSystemModel::sortInternal()
     const bool dirsFirst = m_directoriesFirst;
     const int sortColumn = m_sortColumn;
 
-    std::stable_sort(entries.begin(), entries.end(), [dirsFirst, ascending, sortColumn](const SortEntry& a, const SortEntry& b) {
-        // Folders stay on top regardless of ascending/descending order.
-        if (dirsFirst && a.isDir != b.isDir) {
-            return a.isDir;
-        }
+    std::stable_sort(
+        entries.begin(), entries.end(),
+        [dirsFirst, ascending, sortColumn, &collator](const SortEntry& a, const SortEntry& b) {
+            // Folders stay on top regardless of ascending/descending order.
+            if (dirsFirst && a.isDir != b.isDir) {
+                return a.isDir;
+            }
 
-        int comparison = 0;
-        switch (sortColumn) {
-        case ColDateModified:
-            comparison = (a.date == b.date) ? 0 : (a.date < b.date ? -1 : 1);
-            break;
-        case ColSize:
-            comparison = (a.number == b.number) ? 0 : (a.number < b.number ? -1 : 1);
-            break;
-        case ColKind:
-        case ColName:
-        default:
-            comparison = QString::compare(a.text, b.text, Qt::CaseSensitive);
-            break;
-        }
-        return ascending ? comparison < 0 : comparison > 0;
-    });
+            int comparison = 0;
+            switch (sortColumn) {
+            case ColDateModified:
+            case ColDateCreated:
+            case ColDateOpened:
+                comparison = (a.date == b.date) ? 0 : (a.date < b.date ? -1 : 1);
+                break;
+            case ColSize:
+                comparison = (a.number == b.number) ? 0 : (a.number < b.number ? -1 : 1);
+                break;
+            case ColKind:
+            case ColTags:
+            case ColPermissions:
+            case ColOwner:
+            case ColGroup:
+            case ColComment:
+                comparison = collator.compare(a.text, b.text);
+                break;
+            case ColName:
+            default:
+                comparison = collator.compare(a.name, b.name);
+                break;
+            }
+
+            // Deterministic tie-break: equal keys fall back to name.
+            if (comparison == 0 && sortColumn != ColName) {
+                comparison = collator.compare(a.name, b.name);
+            }
+
+            return ascending ? comparison < 0 : comparison > 0;
+        });
 
     QVector<FileItem> sorted;
     sorted.reserve(entries.size());
@@ -568,9 +687,9 @@ void FileSystemModel::sortInternal()
     m_items = std::move(sorted);
 }
 
-void FileSystemModel::sort(int column, Qt::SortOrder order)
-{
-    if (column < 0 || column >= ColumnCount) return;
+void FileSystemModel::sort(int column, Qt::SortOrder order) {
+    if (column < 0 || column >= ColumnCount)
+        return;
     m_sortColumn = column;
     m_sortOrder = order;
 
@@ -608,33 +727,31 @@ void FileSystemModel::sort(int column, Qt::SortOrder order)
     emit sortChanged(m_sortColumn, m_sortOrder);
 }
 
-QModelIndex FileSystemModel::index(int row, int column, const QModelIndex& parent) const
-{
-    if (parent.isValid() || row < 0 || row >= m_items.size() || column < 0 || column >= ColumnCount) {
+QModelIndex FileSystemModel::index(int row, int column, const QModelIndex& parent) const {
+    if (parent.isValid() || row < 0 || row >= m_items.size() || column < 0 ||
+        column >= ColumnCount) {
         return {};
     }
     return createIndex(row, column);
 }
 
-QModelIndex FileSystemModel::parent(const QModelIndex& /*child*/) const
-{
+QModelIndex FileSystemModel::parent(const QModelIndex& /*child*/) const {
     return {};
 }
 
-int FileSystemModel::rowCount(const QModelIndex& parent) const
-{
-    if (parent.isValid()) return 0;
+int FileSystemModel::rowCount(const QModelIndex& parent) const {
+    if (parent.isValid())
+        return 0;
     return static_cast<int>(m_items.size());
 }
 
-int FileSystemModel::columnCount(const QModelIndex& parent) const
-{
-    if (parent.isValid()) return 0;
+int FileSystemModel::columnCount(const QModelIndex& parent) const {
+    if (parent.isValid())
+        return 0;
     return ColumnCount;
 }
 
-QVariant FileSystemModel::data(const QModelIndex& index, int role) const
-{
+QVariant FileSystemModel::data(const QModelIndex& index, int role) const {
     if (!index.isValid() || index.row() < 0 || index.row() >= m_items.size()) {
         return {};
     }
@@ -651,6 +768,20 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const
             return item.formattedSize();
         case ColKind:
             return item.kind();
+        case ColDateCreated:
+            return item.created().toString(QStringLiteral("yyyy-MM-dd hh:mm"));
+        case ColDateOpened:
+            return item.accessed().toString(QStringLiteral("yyyy-MM-dd hh:mm"));
+        case ColTags:
+            return item.tags().join(QStringLiteral(", "));
+        case ColPermissions:
+            return item.permissionsString();
+        case ColOwner:
+            return item.owner();
+        case ColGroup:
+            return item.group();
+        case ColComment:
+            return item.comment();
         default:
             return {};
         }
@@ -663,10 +794,16 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const
     if (role == Qt::ToolTipRole) {
         if (m_isSearchResultsView) {
             return QStringLiteral("%1\nPath: %2\nSize: %3\nModified: %4\nKind: %5")
-                .arg(item.fileName(), item.path(), item.formattedSize(), item.modified().toString(), item.kind());
+                .arg(item.fileName(), item.path(), item.formattedSize(), item.modified().toString(),
+                     item.kind());
         }
-        return QStringLiteral("%1\nSize: %2\nModified: %3\nKind: %4")
-            .arg(item.fileName(), item.formattedSize(), item.modified().toString(), item.kind());
+        QString tooltip = QStringLiteral("%1\nSize: %2\nModified: %3\nKind: %4")
+                              .arg(item.fileName(), item.formattedSize(),
+                                   item.modified().toString(), item.kind());
+        if (!item.comment().isEmpty()) {
+            tooltip += QStringLiteral("\nComment: %1").arg(item.comment());
+        }
+        return tooltip;
     }
 
     switch (role) {
@@ -694,6 +831,14 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const
         return item.group();
     case FileTagsRole:
         return item.tags();
+    case FileDateCreatedRole:
+        return item.created();
+    case FileDateOpenedRole:
+        return item.accessed();
+    case FileCommentRole:
+        return item.comment();
+    case FileMimeTypeRole:
+        return item.mimeTypeName();
     default:
         break;
     }
@@ -701,27 +846,38 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const
     return {};
 }
 
-QVariant FileSystemModel::headerData(int section, Qt::Orientation orientation, int role) const
-{
-    if (orientation == Qt::Horizontal && role == Qt::DisplayRole) {
-        switch (section) {
-        case ColName:
-            return QStringLiteral("Name");
-        case ColDateModified:
-            return QStringLiteral("Date Modified");
-        case ColSize:
-            return QStringLiteral("Size");
-        case ColKind:
-            return QStringLiteral("Kind");
-        default:
-            return {};
+QVariant FileSystemModel::headerData(int section, Qt::Orientation orientation, int role) const {
+    if (orientation == Qt::Horizontal) {
+        if (role == Qt::DisplayRole) {
+            return columnTitle(section);
+        }
+        if (role == Qt::ToolTipRole) {
+            switch (section) {
+            case ColDateModified:
+                return QStringLiteral("Last modification time");
+            case ColDateCreated:
+                return QStringLiteral("File creation time (birth time when available)");
+            case ColDateOpened:
+                return QStringLiteral("Last access time reported by the filesystem");
+            case ColTags:
+                return QStringLiteral("Freedesktop tags");
+            case ColPermissions:
+                return QStringLiteral("POSIX permissions");
+            case ColOwner:
+                return QStringLiteral("File owner");
+            case ColGroup:
+                return QStringLiteral("File group");
+            case ColComment:
+                return QStringLiteral("File comment stored in the user.xdg.comment xattr");
+            default:
+                break;
+            }
         }
     }
     return {};
 }
 
-Qt::ItemFlags FileSystemModel::flags(const QModelIndex& index) const
-{
+Qt::ItemFlags FileSystemModel::flags(const QModelIndex& index) const {
     if (!index.isValid()) {
         return Qt::ItemIsDropEnabled;
     }
@@ -731,8 +887,7 @@ Qt::ItemFlags FileSystemModel::flags(const QModelIndex& index) const
     if (item && item->isDir()) {
         f |= Qt::ItemIsDropEnabled;
     }
-    if (index.column() == ColName && item && !m_isSearchResultsView &&
-        !item->path().isEmpty() &&
+    if (index.column() == ColName && item && !m_isSearchResultsView && !item->path().isEmpty() &&
         !item->path().startsWith(QStringLiteral("trash://")) &&
         !item->path().startsWith(QStringLiteral("tag://"))) {
         f |= Qt::ItemIsEditable;
@@ -740,8 +895,7 @@ Qt::ItemFlags FileSystemModel::flags(const QModelIndex& index) const
     return f;
 }
 
-bool FileSystemModel::setData(const QModelIndex& index, const QVariant& value, int role)
-{
+bool FileSystemModel::setData(const QModelIndex& index, const QVariant& value, int role) {
     if (!index.isValid() || role != Qt::EditRole) {
         return false;
     }
@@ -749,7 +903,8 @@ bool FileSystemModel::setData(const QModelIndex& index, const QVariant& value, i
         return false;
     }
     const FileItem* item = itemForIndex(index);
-    if (!item) return false;
+    if (!item)
+        return false;
 
     QString newName = value.toString().trimmed();
     if (newName.isEmpty() || newName == item->fileName()) {
@@ -770,24 +925,22 @@ bool FileSystemModel::setData(const QModelIndex& index, const QVariant& value, i
     return false;
 }
 
-Qt::DropActions FileSystemModel::supportedDropActions() const
-{
+Qt::DropActions FileSystemModel::supportedDropActions() const {
     return Qt::CopyAction | Qt::MoveAction;
 }
 
-QStringList FileSystemModel::mimeTypes() const
-{
+QStringList FileSystemModel::mimeTypes() const {
     return {QStringLiteral("text/uri-list")};
 }
 
-QMimeData* FileSystemModel::mimeData(const QModelIndexList& indexes) const
-{
+QMimeData* FileSystemModel::mimeData(const QModelIndexList& indexes) const {
     auto* mime = new QMimeData();
     QList<QUrl> urls;
     QSet<int> seenRows;
 
     for (const auto& idx : indexes) {
-        if (!idx.isValid() || seenRows.contains(idx.row())) continue;
+        if (!idx.isValid() || seenRows.contains(idx.row()))
+            continue;
         seenRows.insert(idx.row());
         const FileItem* item = itemForIndex(idx);
         if (item) {
@@ -799,8 +952,8 @@ QMimeData* FileSystemModel::mimeData(const QModelIndexList& indexes) const
     return mime;
 }
 
-bool FileSystemModel::canDropMimeData(const QMimeData* data, Qt::DropAction /*action*/, int /*row*/, int /*column*/, const QModelIndex& parent) const
-{
+bool FileSystemModel::canDropMimeData(const QMimeData* data, Qt::DropAction /*action*/, int /*row*/,
+                                      int /*column*/, const QModelIndex& parent) const {
     if (!data || !data->hasUrls()) {
         return false;
     }
@@ -811,8 +964,8 @@ bool FileSystemModel::canDropMimeData(const QMimeData* data, Qt::DropAction /*ac
     return true;
 }
 
-bool FileSystemModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int /*row*/, int /*column*/, const QModelIndex& parent)
-{
+bool FileSystemModel::dropMimeData(const QMimeData* data, Qt::DropAction action, int /*row*/,
+                                   int /*column*/, const QModelIndex& parent) {
     if (!data || !data->hasUrls()) {
         return false;
     }
@@ -849,20 +1002,19 @@ bool FileSystemModel::dropMimeData(const QMimeData* data, Qt::DropAction action,
     return true;
 }
 
-const FileItem* FileSystemModel::itemAt(int row) const
-{
-    if (row < 0 || row >= m_items.size()) return nullptr;
+const FileItem* FileSystemModel::itemAt(int row) const {
+    if (row < 0 || row >= m_items.size())
+        return nullptr;
     return &m_items.at(row);
 }
 
-const FileItem* FileSystemModel::itemForIndex(const QModelIndex& index) const
-{
-    if (!index.isValid()) return nullptr;
+const FileItem* FileSystemModel::itemForIndex(const QModelIndex& index) const {
+    if (!index.isValid())
+        return nullptr;
     return itemAt(index.row());
 }
 
-QModelIndex FileSystemModel::indexForPath(const QString& path) const
-{
+QModelIndex FileSystemModel::indexForPath(const QString& path) const {
     QString clean = QDir::cleanPath(path);
     for (int i = 0; i < m_items.size(); ++i) {
         if (m_items[i].path() == clean) {

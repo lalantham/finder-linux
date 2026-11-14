@@ -10,7 +10,7 @@ class MainWindow;
 // Implements the freedesktop.org org.freedesktop.Application interface on the
 // bus name that matches our desktop file (org.finderlinux.Finder). Combined
 // with DBusActivatable=true this gives launchers a standard way to start, raise
-// and open files in Finder.
+// and open files in File Manager.
 class ApplicationService : public QObject {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.freedesktop.Application")
@@ -22,7 +22,7 @@ public:
     // bus name (the object path is the desktop ID with dots replaced by '/').
     bool registerOnBus();
 
-    // Writes the user-scoped activation file used by launchers to start Finder.
+    // Writes the user-scoped activation file used by launchers to start File Manager.
     static bool installActivationFile(QString* error = nullptr);
 
 public slots:

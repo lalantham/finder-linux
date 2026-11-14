@@ -1,17 +1,17 @@
 #pragma once
 
 #include "AppSettings.h"
+#include "ColumnView.h"
 #include "FileSystemModel.h"
+#include "GalleryView.h"
 #include "IconView.h"
 #include "ListView.h"
-#include "ColumnView.h"
-#include "GalleryView.h"
-#include "SearchScopeBar.h"
 #include "SearchEngine.h"
-#include <QWidget>
+#include "SearchScopeBar.h"
 #include <QStackedWidget>
-#include <QVector>
 #include <QTimer>
+#include <QVector>
+#include <QWidget>
 
 class QAbstractItemView;
 
@@ -28,25 +28,42 @@ public:
     void refresh(const QString& pathToSelect = QString());
     void refreshWithSelection(const QStringList& pathsToSelect);
     void showTaggedFiles(const QString& tag, bool recordHistory = true);
+    void showSmartFolder(const SmartFolder& folder, bool recordHistory = true);
+    void showSmartFolder(const QString& name, bool recordHistory = true);
+
+    [[nodiscard]] QString searchText() const noexcept {
+        return m_searchQuery;
+    }
+    [[nodiscard]] SearchFilter currentSearchFilter() const;
 
     [[nodiscard]] QString currentPath() const noexcept;
-    [[nodiscard]] bool canGoBack() const noexcept { return !m_backHistory.isEmpty(); }
-    [[nodiscard]] bool canGoForward() const noexcept { return !m_forwardHistory.isEmpty(); }
+    [[nodiscard]] bool canGoBack() const noexcept {
+        return !m_backHistory.isEmpty();
+    }
+    [[nodiscard]] bool canGoForward() const noexcept {
+        return !m_forwardHistory.isEmpty();
+    }
 
     void setViewMode(ViewMode mode);
-    [[nodiscard]] ViewMode viewMode() const noexcept { return m_viewMode; }
+    [[nodiscard]] ViewMode viewMode() const noexcept {
+        return m_viewMode;
+    }
 
     void applySort(int column, Qt::SortOrder order);
     [[nodiscard]] int sortColumn() const;
     [[nodiscard]] Qt::SortOrder sortOrder() const;
     void setDirectoriesFirst(bool dirsFirst);
     void applyIconSize(int size);
+    void applyViewOptions();
+    void cleanUpIconView();
 
     void setShowHidden(bool show);
     void setCalculateFolderSizes(bool enabled);
     void setFilterQuery(const QString& query);
 
-    [[nodiscard]] FileSystemModel* model() const noexcept { return m_model; }
+    [[nodiscard]] FileSystemModel* model() const noexcept {
+        return m_model;
+    }
     [[nodiscard]] QString selectedFilePath() const;
     [[nodiscard]] QStringList selectedFilePaths() const;
     void selectAll();
@@ -54,7 +71,9 @@ public:
     void selectByPattern(const QString& pattern);
     bool triggerRename();
     void setActive(bool active);
-    [[nodiscard]] bool isActive() const noexcept { return m_isActive; }
+    [[nodiscard]] bool isActive() const noexcept {
+        return m_isActive;
+    }
 
 signals:
     void activated(TabPage* page);
@@ -63,9 +82,12 @@ signals:
     void quickLookRequested(const QString& path);
     void getInfoRequested(const QString& path);
     void statusMessageChanged(const QString& message);
-    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths, const QString& currentDir);
-    void fileDropRequested(const QStringList& sources, const QString& targetDirectory, Qt::DropAction action);
+    void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths,
+                              const QString& currentDir);
+    void fileDropRequested(const QStringList& sources, const QString& targetDirectory,
+                           Qt::DropAction action);
     void searchClearRequested();
+    void saveSearchRequested();
     void itemRenamed(const QString& oldPath, const QString& newPath);
 
 public slots:
@@ -85,6 +107,8 @@ protected:
 private:
     void updateStatus();
     [[nodiscard]] QAbstractItemView* currentView() const;
+    [[nodiscard]] SearchFilter buildSearchFilter() const;
+    void clearSmartFolderState();
 
     bool m_isActive{true};
     QString m_currentPath;
@@ -103,6 +127,8 @@ private:
     QTimer* m_searchBatchTimer{nullptr};
     QTimer* m_filterDebounceTimer{nullptr};
     QVector<FileItem> m_pendingSearchResults;
+    SmartFolder m_activeSmartFolder;
+    bool m_isSmartFolderView{false};
 
     QStackedWidget* m_viewStack{nullptr};
     IconView* m_iconView{nullptr};

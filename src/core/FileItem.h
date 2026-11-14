@@ -1,17 +1,17 @@
 #pragma once
 
-#include <QString>
 #include <QDateTime>
-#include <QIcon>
 #include <QFileInfo>
-#include <QMimeType>
+#include <QIcon>
 #include <QMimeDatabase>
+#include <QMimeType>
+#include <QString>
+#include <grp.h>
+#include <memory>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <pwd.h>
-#include <grp.h>
-#include <memory>
 
 class FileItem {
 public:
@@ -22,37 +22,95 @@ public:
     void refresh();
     void setCalculatedFolderSize(qint64 size, int itemCount = -1);
 
-    [[nodiscard]] const QString& path() const noexcept { return m_path; }
-    [[nodiscard]] const QString& fileName() const noexcept { return m_fileName; }
-    [[nodiscard]] const QString& baseName() const noexcept { return m_baseName; }
-    [[nodiscard]] const QString& suffix() const noexcept { return m_suffix; }
-    [[nodiscard]] qint64 size() const noexcept { return m_size; }
-    [[nodiscard]] qint64 diskUsage() const noexcept { return m_diskUsage; }
-    [[nodiscard]] quint64 inode() const noexcept { return m_inode; }
-    [[nodiscard]] quint64 deviceId() const noexcept { return m_deviceId; }
-    [[nodiscard]] quint64 hardLinks() const noexcept { return m_hardLinks; }
-    [[nodiscard]] const QString& formattedSize() const noexcept { return m_formattedSize; }
-    [[nodiscard]] const QDateTime& modified() const noexcept { return m_modified; }
-    [[nodiscard]] const QDateTime& created() const noexcept { return m_created; }
-    [[nodiscard]] const QDateTime& accessed() const noexcept { return m_accessed; }
-    [[nodiscard]] const QString& kind() const noexcept { return m_kind; }
-    [[nodiscard]] const QString& mimeTypeName() const noexcept { return m_mimeTypeName; }
+    [[nodiscard]] const QString& path() const noexcept {
+        return m_path;
+    }
+    [[nodiscard]] const QString& fileName() const noexcept {
+        return m_fileName;
+    }
+    [[nodiscard]] const QString& baseName() const noexcept {
+        return m_baseName;
+    }
+    [[nodiscard]] const QString& suffix() const noexcept {
+        return m_suffix;
+    }
+    [[nodiscard]] qint64 size() const noexcept {
+        return m_size;
+    }
+    [[nodiscard]] qint64 diskUsage() const noexcept {
+        return m_diskUsage;
+    }
+    [[nodiscard]] quint64 inode() const noexcept {
+        return m_inode;
+    }
+    [[nodiscard]] quint64 deviceId() const noexcept {
+        return m_deviceId;
+    }
+    [[nodiscard]] quint64 hardLinks() const noexcept {
+        return m_hardLinks;
+    }
+    [[nodiscard]] const QString& formattedSize() const noexcept {
+        return m_formattedSize;
+    }
+    [[nodiscard]] const QDateTime& modified() const noexcept {
+        return m_modified;
+    }
+    [[nodiscard]] const QDateTime& created() const noexcept {
+        return m_created;
+    }
+    [[nodiscard]] const QDateTime& accessed() const noexcept {
+        return m_accessed;
+    }
+    [[nodiscard]] const QString& kind() const noexcept {
+        return m_kind;
+    }
+    [[nodiscard]] const QString& mimeTypeName() const noexcept {
+        return m_mimeTypeName;
+    }
 
-    [[nodiscard]] bool isDir() const noexcept { return m_isDir; }
-    [[nodiscard]] bool isFile() const noexcept { return m_isFile; }
-    [[nodiscard]] bool isSymLink() const noexcept { return m_isSymLink; }
-    [[nodiscard]] bool isHidden() const noexcept { return m_isHidden; }
-    [[nodiscard]] bool isReadable() const noexcept { return m_isReadable; }
-    [[nodiscard]] bool isWritable() const noexcept { return m_isWritable; }
-    [[nodiscard]] bool isExecutable() const noexcept { return m_isExecutable; }
-    [[nodiscard]] bool exists() const noexcept { return m_exists; }
+    [[nodiscard]] bool isDir() const noexcept {
+        return m_isDir;
+    }
+    [[nodiscard]] bool isFile() const noexcept {
+        return m_isFile;
+    }
+    [[nodiscard]] bool isSymLink() const noexcept {
+        return m_isSymLink;
+    }
+    [[nodiscard]] bool isHidden() const noexcept {
+        return m_isHidden;
+    }
+    [[nodiscard]] bool isReadable() const noexcept {
+        return m_isReadable;
+    }
+    [[nodiscard]] bool isWritable() const noexcept {
+        return m_isWritable;
+    }
+    [[nodiscard]] bool isExecutable() const noexcept {
+        return m_isExecutable;
+    }
+    [[nodiscard]] bool exists() const noexcept {
+        return m_exists;
+    }
 
-    [[nodiscard]] const QString& symLinkTarget() const noexcept { return m_symLinkTarget; }
-    [[nodiscard]] const QString& permissionsString() const noexcept { return m_permissionsString; }
-    [[nodiscard]] mode_t posixMode() const noexcept { return m_posixMode; }
-    [[nodiscard]] const QString& owner() const noexcept { return m_owner; }
-    [[nodiscard]] const QString& group() const noexcept { return m_group; }
+    [[nodiscard]] const QString& symLinkTarget() const noexcept {
+        return m_symLinkTarget;
+    }
+    [[nodiscard]] const QString& permissionsString() const noexcept {
+        return m_permissionsString;
+    }
+    [[nodiscard]] mode_t posixMode() const noexcept {
+        return m_posixMode;
+    }
+    [[nodiscard]] const QString& owner() const noexcept {
+        return m_owner;
+    }
+    [[nodiscard]] const QString& group() const noexcept {
+        return m_group;
+    }
     [[nodiscard]] const QStringList& tags() const;
+    [[nodiscard]] QString comment() const;
+    bool setComment(const QString& comment);
 
     [[nodiscard]] QIcon icon() const;
 
@@ -79,6 +137,8 @@ private:
     QString m_mimeTypeName;
     mutable QStringList m_tags;
     mutable bool m_tagsLoaded{false};
+    mutable QString m_comment;
+    mutable bool m_commentLoaded{false};
 
     bool m_isDir{false};
     bool m_isFile{false};

@@ -219,7 +219,7 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
     connect(m_nextBtn, &QPushButton::clicked, this, &QuickLookDialog::showNext);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
-    // Apply Finder HUD styling
+    // Apply preview HUD styling
     setStyleSheet(QStringLiteral(
         "QuickLookDialog {"
         "  background-color: #242528;"

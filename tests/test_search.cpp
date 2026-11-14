@@ -1,11 +1,11 @@
-#include <QTest>
-#include <QTemporaryDir>
+#include "FileSystemModel.h"
+#include "SearchEngine.h"
 #include <QFile>
-#include <QSignalSpy>
 #include <QItemSelectionModel>
 #include <QPersistentModelIndex>
-#include "SearchEngine.h"
-#include "FileSystemModel.h"
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QTest>
 
 class TestSearch : public QObject {
     Q_OBJECT
@@ -13,6 +13,10 @@ class TestSearch : public QObject {
 private slots:
     void testSearchMatching();
     void testSearchKindFiltering();
+    void testQueryParser();
+    void testContentSearch();
+    void testContentOrNameSearch();
+    void testThisPCRoots();
     void testModelInstantFilter();
     void testModelFilterByKind();
     void testSortKeepsCurrentItem();
@@ -20,8 +24,7 @@ private slots:
     void testAsyncLoading();
 };
 
-void TestSearch::testSearchMatching()
-{
+void TestSearch::testSearchMatching() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -62,8 +65,7 @@ void TestSearch::testSearchMatching()
     QCOMPARE(found, 2);
 }
 
-void TestSearch::testSearchKindFiltering()
-{
+void TestSearch::testSearchKindFiltering() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -96,8 +98,118 @@ void TestSearch::testSearchKindFiltering()
     QCOMPARE(found, 1);
 }
 
-void TestSearch::testModelInstantFilter()
-{
+void TestSearch::testQueryParser() {
+    const SearchFilter filter = SearchQuery::parse(
+        QStringLiteral("annual report kind:image tag:Red,Work size:>1MB "
+                       "modified:>2024-01-01 ext:png -draft content:\"annual report\""));
+
+    const QStringList expectedName{QStringLiteral("annual"), QStringLiteral("report")};
+    QCOMPARE(filter.nameTerms, expectedName);
+    const QStringList expectedExclude{QStringLiteral("draft")};
+    QCOMPARE(filter.excludeTerms, expectedExclude);
+    const QStringList expectedContent{QStringLiteral("annual report")};
+    QCOMPARE(filter.contentTerms, expectedContent);
+    QCOMPARE(filter.kindFilter, QStringLiteral("images"));
+    const QStringList expectedTags{QStringLiteral("Red"), QStringLiteral("Work")};
+    QCOMPARE(filter.tags, expectedTags);
+    const QStringList expectedExt{QStringLiteral("png")};
+    QCOMPARE(filter.extensions, expectedExt);
+    QCOMPARE(filter.minSize, 1000001LL);
+    QCOMPARE(filter.modifiedFrom, QDate(2024, 1, 2));
+    QVERIFY(filter.searchContents);
+
+    const SearchFilter range =
+        SearchQuery::parse(QStringLiteral("size:1MB..10MB modified:2024-01-01..2024-01-31"));
+    QCOMPARE(range.minSize, 1000000LL);
+    QCOMPARE(range.maxSize, 10000000LL);
+    QCOMPARE(range.modifiedFrom, QDate(2024, 1, 1));
+    QCOMPARE(range.modifiedTo, QDate(2024, 1, 31));
+
+    const SearchFilter bare = SearchQuery::parse(QStringLiteral("http://example.com"));
+    const QStringList expectedBare{QStringLiteral("http://example.com")};
+    QCOMPARE(bare.nameTerms, expectedBare);
+}
+
+void TestSearch::testContentSearch() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QFile hit(tempDir.filePath(QStringLiteral("notes.txt")));
+    QVERIFY(hit.open(QIODevice::WriteOnly));
+    hit.write("The secret needle is in this file.");
+    hit.close();
+
+    QFile miss(tempDir.filePath(QStringLiteral("other.txt")));
+    QVERIFY(miss.open(QIODevice::WriteOnly));
+    miss.write("Nothing relevant here.");
+    miss.close();
+
+    SearchEngine engine;
+    SearchFilter filter;
+    filter.searchPath = tempDir.path();
+    filter.recursive = false;
+    filter.searchContents = true;
+    filter.contentTerms = {QStringLiteral("needle")};
+
+    QSignalSpy batchSpy(&engine, &SearchEngine::itemsFound);
+    QSignalSpy finishedSpy(&engine, &SearchEngine::searchFinished);
+    engine.startSearch(filter);
+    QVERIFY(finishedSpy.wait(5000));
+
+    QStringList found;
+    for (const auto& args : batchSpy) {
+        for (const auto& item : args.at(0).value<QVector<FileItem>>()) {
+            found.append(item.fileName());
+        }
+    }
+    QCOMPARE(found, QStringList{QStringLiteral("notes.txt")});
+}
+
+void TestSearch::testContentOrNameSearch() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    QFile byContent(tempDir.filePath(QStringLiteral("notes.txt")));
+    QVERIFY(byContent.open(QIODevice::WriteOnly));
+    byContent.write("contains the word needle");
+    byContent.close();
+
+    QFile byName(tempDir.filePath(QStringLiteral("needle-name.txt")));
+    QVERIFY(byName.open(QIODevice::WriteOnly));
+    byName.write("nothing inside");
+    byName.close();
+
+    SearchEngine engine;
+    SearchFilter filter;
+    filter.searchPath = tempDir.path();
+    filter.recursive = false;
+    filter.searchContents = true;
+    filter.nameTerms = {QStringLiteral("needle")};
+    filter.contentTerms = {QStringLiteral("needle")};
+
+    QSignalSpy batchSpy(&engine, &SearchEngine::itemsFound);
+    QSignalSpy finishedSpy(&engine, &SearchEngine::searchFinished);
+    engine.startSearch(filter);
+    QVERIFY(finishedSpy.wait(5000));
+
+    QStringList found;
+    for (const auto& args : batchSpy) {
+        for (const auto& item : args.at(0).value<QVector<FileItem>>()) {
+            found.append(item.fileName());
+        }
+    }
+    found.sort();
+    const QStringList expected{QStringLiteral("needle-name.txt"), QStringLiteral("notes.txt")};
+    QCOMPARE(found, expected);
+}
+
+void TestSearch::testThisPCRoots() {
+    const QStringList roots = SearchEngine::localSearchRoots();
+    QVERIFY(!roots.isEmpty());
+    QVERIFY(roots.contains(QDir::homePath()));
+}
+
+void TestSearch::testModelInstantFilter() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -123,7 +235,8 @@ void TestSearch::testModelInstantFilter()
     // Instant filter "alpha"
     model.setFilterQuery(QStringLiteral("alpha"));
     QCOMPARE(model.rowCount(), 1);
-    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(), QStringLiteral("report_alpha.pdf"));
+    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("report_alpha.pdf"));
 
     // Filter "report" -> 2 matches
     model.setFilterQuery(QStringLiteral("report"));
@@ -134,8 +247,7 @@ void TestSearch::testModelInstantFilter()
     QCOMPARE(model.rowCount(), 3);
 }
 
-void TestSearch::testModelFilterByKind()
-{
+void TestSearch::testModelFilterByKind() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -158,25 +270,28 @@ void TestSearch::testModelFilterByKind()
     // Filter by Folders
     model.setFilterQuery(QString(), QStringLiteral("Folders"));
     QCOMPARE(model.rowCount(), 1);
-    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(), QStringLiteral("folderA"));
+    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("folderA"));
 
     // Filter by Images
     model.setFilterQuery(QString(), QStringLiteral("Images"));
     QCOMPARE(model.rowCount(), 1);
-    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(), QStringLiteral("photo.jpg"));
+    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("photo.jpg"));
 
     // Filter by Documents
     model.setFilterQuery(QString(), QStringLiteral("Documents"));
     QCOMPARE(model.rowCount(), 1);
-    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(), QStringLiteral("document.pdf"));
+    QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("document.pdf"));
 }
 
-void TestSearch::testSortKeepsCurrentItem()
-{
+void TestSearch::testSortKeepsCurrentItem() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
-    for (const QString& name : {QStringLiteral("alpha.txt"), QStringLiteral("mike.txt"), QStringLiteral("zulu.txt")}) {
+    for (const QString& name :
+         {QStringLiteral("alpha.txt"), QStringLiteral("mike.txt"), QStringLiteral("zulu.txt")}) {
         QFile f(tempDir.filePath(name));
         QVERIFY(f.open(QIODevice::WriteOnly));
         f.write("x");
@@ -201,12 +316,13 @@ void TestSearch::testSortKeepsCurrentItem()
     QVERIFY(selection.currentIndex().isValid());
     QCOMPARE(selection.currentIndex().data(FileSystemModel::FileNameRole).toString(), firstName);
 
-    QCOMPARE(model.index(0, 0).data(FileSystemModel::FileNameRole).toString(), QStringLiteral("zulu.txt"));
-    QCOMPARE(model.index(2, 0).data(FileSystemModel::FileNameRole).toString(), QStringLiteral("alpha.txt"));
+    QCOMPARE(model.index(0, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("zulu.txt"));
+    QCOMPARE(model.index(2, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("alpha.txt"));
 }
 
-void TestSearch::testFoldersStayOnTopWhenDescending()
-{
+void TestSearch::testFoldersStayOnTopWhenDescending() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -225,16 +341,19 @@ void TestSearch::testFoldersStayOnTopWhenDescending()
     model.sort(FileSystemModel::ColName, Qt::DescendingOrder);
 
     // Descending order must not undo the folders-first rule.
-    QCOMPARE(model.index(0, 0).data(FileSystemModel::FileNameRole).toString(), QStringLiteral("zzz-folder"));
-    QCOMPARE(model.index(1, 0).data(FileSystemModel::FileNameRole).toString(), QStringLiteral("mmm.txt"));
-    QCOMPARE(model.index(2, 0).data(FileSystemModel::FileNameRole).toString(), QStringLiteral("aaa.txt"));
+    QCOMPARE(model.index(0, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("zzz-folder"));
+    QCOMPARE(model.index(1, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("mmm.txt"));
+    QCOMPARE(model.index(2, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("aaa.txt"));
 }
 
-void TestSearch::testAsyncLoading()
-{
+void TestSearch::testAsyncLoading() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
-    for (const QString& name : {QStringLiteral("one.txt"), QStringLiteral("two.txt"), QStringLiteral("three.txt")}) {
+    for (const QString& name :
+         {QStringLiteral("one.txt"), QStringLiteral("two.txt"), QStringLiteral("three.txt")}) {
         QFile f(tempDir.filePath(name));
         QVERIFY(f.open(QIODevice::WriteOnly));
         f.write("x");
@@ -242,8 +361,12 @@ void TestSearch::testAsyncLoading()
     }
 
     struct AsyncGuard {
-        AsyncGuard() { FileSystemModel::setAsyncLoadingEnabled(true); }
-        ~AsyncGuard() { FileSystemModel::setAsyncLoadingEnabled(false); }
+        AsyncGuard() {
+            FileSystemModel::setAsyncLoadingEnabled(true);
+        }
+        ~AsyncGuard() {
+            FileSystemModel::setAsyncLoadingEnabled(false);
+        }
     } guard;
 
     FileSystemModel model;

@@ -258,7 +258,7 @@ bool RecentFilesManager::add(const QString& path, const QString& mimeType, const
     }
 
     const QString now = nowIso();
-    const QString entryName = appName.isEmpty() ? QStringLiteral("Finder") : appName;
+    const QString entryName = appName.isEmpty() ? QStringLiteral("File Manager") : appName;
     const QString entryExec = QStringLiteral("finder-linux %u");
 
     int index = -1;

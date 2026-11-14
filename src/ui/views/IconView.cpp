@@ -1,23 +1,22 @@
 #include "IconView.h"
-#include "DesktopAppsManager.h"
 #include "AppSettings.h"
+#include "DesktopAppsManager.h"
 #include "PreviewManager.h"
-#include <QMouseEvent>
-#include <QKeyEvent>
 #include <QContextMenuEvent>
-#include <QMenu>
 #include <QDesktopServices>
-#include <QUrl>
-#include <QTimer>
+#include <QDir>
 #include <QDragEnterEvent>
-#include <QDragMoveEvent>
 #include <QDragLeaveEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QKeyEvent>
+#include <QMenu>
 #include <QMimeData>
+#include <QMouseEvent>
+#include <QTimer>
+#include <QUrl>
 
-IconView::IconView(QWidget* parent)
-    : QListView(parent)
-{
+IconView::IconView(QWidget* parent) : QListView(parent) {
     setViewMode(QListView::IconMode);
     setResizeMode(QListView::Adjust);
     setWrapping(true);
@@ -39,30 +38,173 @@ IconView::IconView(QWidget* parent)
     m_springTimer->setSingleShot(true);
     connect(m_springTimer, &QTimer::timeout, this, &IconView::onSpringTimeout);
 
-    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this, [this](const QString&) {
-        viewport()->update();
-    });
+    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this,
+            [this](const QString&) { viewport()->update(); });
 
     connect(this, &QListView::activated, this, &IconView::onItemActivated);
 }
 
-void IconView::setFileSystemModel(FileSystemModel* model)
-{
+void IconView::setFileSystemModel(FileSystemModel* model) {
     m_fsModel = model;
     setModel(model);
+
+    if (model) {
+        connect(model, &QAbstractItemModel::modelReset, this,
+                [this]() { QTimer::singleShot(0, this, &IconView::applyIconPositions); });
+        connect(model, &QAbstractItemModel::layoutChanged, this,
+                [this]() { QTimer::singleShot(0, this, &IconView::applyIconPositions); });
+        connect(model, &QAbstractItemModel::rowsInserted, this,
+                [this]() { QTimer::singleShot(0, this, &IconView::applyIconPositions); });
+        connect(model, &FileSystemModel::sortChanged, this, [this]() {
+            if (m_manualArrangement) {
+                m_iconPositions.clear();
+                AppSettings::instance().clearIconPositions(m_folderPath);
+                QTimer::singleShot(0, this, &IconView::alignToGrid);
+            }
+        });
+    }
 }
 
-void IconView::setIconSizeValue(int size)
-{
+void IconView::setFolderPath(const QString& path) {
+    if (m_manualArrangement) {
+        saveIconPositions();
+    }
+    if (path.isEmpty() || path.startsWith(QStringLiteral("tag://")) ||
+        path.startsWith(QStringLiteral("search://"))) {
+        m_folderPath.clear();
+        m_iconPositions.clear();
+        setManualArrangement(false);
+        return;
+    }
+    const QString clean = QDir::cleanPath(path);
+    if (m_folderPath == clean)
+        return;
+    m_folderPath = clean;
+    m_iconPositions.clear();
+    const QVariantMap saved = AppSettings::instance().iconPositions(m_folderPath);
+    for (auto it = saved.cbegin(); it != saved.cend(); ++it) {
+        m_iconPositions.insert(it.key(), it.value().toPoint());
+    }
+    QTimer::singleShot(0, this, &IconView::applyIconPositions);
+}
+
+void IconView::setManualArrangement(bool enabled) {
+    if (m_manualArrangement == enabled)
+        return;
+    if (m_manualArrangement) {
+        saveIconPositions();
+    }
+    m_manualArrangement = enabled;
+    setMovement(enabled ? QListView::Free : QListView::Static);
+    if (enabled) {
+        QTimer::singleShot(0, this, &IconView::applyIconPositions);
+    } else {
+        updateLayoutMetrics();
+    }
+}
+
+void IconView::setIconSizeValue(int size) {
     m_delegate->setIconSize(size);
+    updateLayoutMetrics();
+}
+
+void IconView::applyViewOptions(const FolderViewOptions& options) {
+    setManualArrangement(options.manualArrangement);
+    m_delegate->setIconSize(options.iconSize);
+    m_delegate->setTextSize(options.textSize);
+    m_delegate->setLabelPosition(options.labelPosition == 1
+                                     ? FileItemDelegate::LabelPosition::Right
+                                     : FileItemDelegate::LabelPosition::Bottom);
+    m_delegate->setShowItemInfo(options.showItemInfo);
+    m_delegate->setShowIconPreview(options.showIconPreview);
+    setSpacing(options.gridSpacing);
+    updateLayoutMetrics();
+}
+
+void IconView::updateLayoutMetrics() {
+    const int size = m_delegate->iconSize();
     setIconSize(QSize(size, size));
-    setGridSize(QSize(qMax(size + 36, 96), size + 48));
+    setGridSize(m_delegate->iconGridSize());
     doItemsLayout();
 }
 
-void IconView::onItemActivated(const QModelIndex& index)
-{
-    if (!index.isValid()) return;
+void IconView::cleanUp() {
+    alignToGrid();
+}
+
+void IconView::alignToGrid() {
+    if (!m_fsModel)
+        return;
+    m_iconPositions.clear();
+    AppSettings::instance().clearIconPositions(m_folderPath);
+    const QListView::Movement oldMovement = movement();
+    setMovement(QListView::Static);
+    doItemsLayout();
+    if (m_manualArrangement) {
+        setMovement(QListView::Free);
+    } else {
+        setMovement(oldMovement);
+    }
+    saveIconPositions();
+    viewport()->update();
+}
+
+void IconView::applyIconPositions() {
+    if (!m_manualArrangement || !m_fsModel || m_applyingPositions || m_iconPositions.isEmpty()) {
+        return;
+    }
+    m_applyingPositions = true;
+    for (int row = 0; row < m_fsModel->rowCount(); ++row) {
+        const QModelIndex index = m_fsModel->index(row, FileSystemModel::ColName);
+        const QString path = index.data(FileSystemModel::FilePathRole).toString();
+        const auto it = m_iconPositions.constFind(path);
+        if (it != m_iconPositions.cend()) {
+            setPositionForIndex(it.value(), index);
+        }
+    }
+    m_applyingPositions = false;
+}
+
+void IconView::saveIconPositions() {
+    if (!m_manualArrangement || !m_fsModel || m_applyingPositions)
+        return;
+    QVariantMap saved;
+    for (int row = 0; row < m_fsModel->rowCount(); ++row) {
+        const QModelIndex index = m_fsModel->index(row, FileSystemModel::ColName);
+        const QString path = index.data(FileSystemModel::FilePathRole).toString();
+        const QRect rect = rectForIndex(index);
+        if (!path.isEmpty() && rect.isValid() && !rect.isEmpty()) {
+            saved.insert(path, rect.topLeft());
+        }
+    }
+    if (saved.isEmpty()) {
+        return;
+    }
+
+    bool changed = saved.size() != m_iconPositions.size();
+    for (auto it = saved.cbegin(); !changed && it != saved.cend(); ++it) {
+        changed = !m_iconPositions.contains(it.key()) ||
+                  m_iconPositions.value(it.key()) != it.value().toPoint();
+    }
+    if (changed) {
+        m_iconPositions.clear();
+        for (auto it = saved.cbegin(); it != saved.cend(); ++it) {
+            m_iconPositions.insert(it.key(), it.value().toPoint());
+        }
+        AppSettings::instance().setIconPositions(m_folderPath, saved);
+    }
+}
+
+void IconView::mouseReleaseEvent(QMouseEvent* event) {
+    QListView::mouseReleaseEvent(event);
+    if (m_manualArrangement) {
+        saveIconPositions();
+    }
+}
+
+void IconView::onItemActivated(const QModelIndex& index) {
+    if (!index.isValid())
+        return;
     QString path = index.data(FileSystemModel::FilePathRole).toString();
     bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
 
@@ -73,8 +215,7 @@ void IconView::onItemActivated(const QModelIndex& index)
     }
 }
 
-void IconView::mouseDoubleClickEvent(QMouseEvent* event)
-{
+void IconView::mouseDoubleClickEvent(QMouseEvent* event) {
     QModelIndex idx = indexAt(event->pos());
     if (idx.isValid()) {
         onItemActivated(idx);
@@ -83,8 +224,7 @@ void IconView::mouseDoubleClickEvent(QMouseEvent* event)
     }
 }
 
-void IconView::keyPressEvent(QKeyEvent* event)
-{
+void IconView::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Space) {
         QModelIndex idx = currentIndex();
         if (idx.isValid()) {
@@ -109,8 +249,7 @@ void IconView::keyPressEvent(QKeyEvent* event)
     QListView::keyPressEvent(event);
 }
 
-void IconView::contextMenuEvent(QContextMenuEvent* event)
-{
+void IconView::contextMenuEvent(QContextMenuEvent* event) {
     QModelIndex idx = indexAt(event->pos());
     QStringList paths;
     if (idx.isValid()) {
@@ -120,7 +259,8 @@ void IconView::contextMenuEvent(QContextMenuEvent* event)
         QModelIndexList selected = selectionModel()->selectedIndexes();
         for (const auto& i : selected) {
             QString p = i.data(FileSystemModel::FilePathRole).toString();
-            if (!p.isEmpty() && !paths.contains(p)) paths.append(p);
+            if (!p.isEmpty() && !paths.contains(p))
+                paths.append(p);
         }
         if (paths.isEmpty()) {
             paths.append(idx.data(FileSystemModel::FilePathRole).toString());
@@ -129,8 +269,7 @@ void IconView::contextMenuEvent(QContextMenuEvent* event)
     emit contextMenuRequested(event->globalPos(), paths);
 }
 
-void IconView::dragEnterEvent(QDragEnterEvent* event)
-{
+void IconView::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
     } else {
@@ -138,8 +277,7 @@ void IconView::dragEnterEvent(QDragEnterEvent* event)
     }
 }
 
-void IconView::dragMoveEvent(QDragMoveEvent* event)
-{
+void IconView::dragMoveEvent(QDragMoveEvent* event) {
     if (!AppSettings::instance().springLoadedFoldersEnabled() || !event->mimeData()->hasUrls()) {
         resetSpringTimer();
         QListView::dragMoveEvent(event);
@@ -177,20 +315,17 @@ void IconView::dragMoveEvent(QDragMoveEvent* event)
     QListView::dragMoveEvent(event);
 }
 
-void IconView::dragLeaveEvent(QDragLeaveEvent* event)
-{
+void IconView::dragLeaveEvent(QDragLeaveEvent* event) {
     resetSpringTimer();
     QListView::dragLeaveEvent(event);
 }
 
-void IconView::dropEvent(QDropEvent* event)
-{
+void IconView::dropEvent(QDropEvent* event) {
     resetSpringTimer();
     QListView::dropEvent(event);
 }
 
-void IconView::resetSpringTimer()
-{
+void IconView::resetSpringTimer() {
     if (m_springTimer && m_springTimer->isActive()) {
         m_springTimer->stop();
     }
@@ -201,8 +336,7 @@ void IconView::resetSpringTimer()
     }
 }
 
-void IconView::onSpringTimeout()
-{
+void IconView::onSpringTimeout() {
     if (!m_springHoverPath.isEmpty()) {
         QString target = m_springHoverPath;
         resetSpringTimer();

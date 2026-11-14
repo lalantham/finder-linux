@@ -3,14 +3,13 @@
 #include "StyleHelper.h"
 #include "ThemeManager.h"
 #include <QHBoxLayout>
-#include <QMenu>
-#include <QLabel>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QMenu>
 #include <QShortcut>
+#include <QSignalBlocker>
 
-Toolbar::Toolbar(QWidget* parent)
-    : QToolBar(parent)
-{
+Toolbar::Toolbar(QWidget* parent) : QToolBar(parent) {
     setMovable(false);
     setFloatable(false);
     setIconSize(QSize(20, 20));
@@ -19,7 +18,7 @@ Toolbar::Toolbar(QWidget* parent)
     addSeparator();
 
     m_breadcrumb = new BreadcrumbBar(this);
-    addWidget(m_breadcrumb);
+    m_breadcrumbAction = addWidget(m_breadcrumb);
     connect(m_breadcrumb, &BreadcrumbBar::pathSelected, this, &Toolbar::pathChanged);
 
     addSeparator();
@@ -29,12 +28,12 @@ Toolbar::Toolbar(QWidget* parent)
     addSeparator();
     setupSearch();
 
-    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this, &Toolbar::updateThemeStyles);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
+            &Toolbar::updateThemeStyles);
     updateThemeStyles(ThemeManager::instance().isDark());
 }
 
-void Toolbar::setupNavigationControls()
-{
+void Toolbar::setupNavigationControls() {
     auto* navWidget = new QWidget(this);
     auto* navLayout = new QHBoxLayout(navWidget);
     navLayout->setContentsMargins(0, 0, 0, 0);
@@ -66,8 +65,7 @@ void Toolbar::setupNavigationControls()
     connect(m_fwdBtn, &QToolButton::clicked, this, &Toolbar::forwardRequested);
 }
 
-void Toolbar::setupViewSwitcher()
-{
+void Toolbar::setupViewSwitcher() {
     auto* viewWidget = new QWidget(this);
     auto* viewLayout = new QHBoxLayout(viewWidget);
     viewLayout->setContentsMargins(0, 0, 0, 0);
@@ -116,8 +114,7 @@ void Toolbar::setupViewSwitcher()
     m_iconViewBtn->setChecked(true);
 }
 
-void Toolbar::setupActionButtons()
-{
+void Toolbar::setupActionButtons() {
     m_newFolderBtn = new QToolButton(this);
     m_newFolderBtn->setText(QStringLiteral("＋"));
     m_newFolderBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle());
@@ -128,14 +125,14 @@ void Toolbar::setupActionButtons()
     m_quickLookBtn = new QToolButton(this);
     m_quickLookBtn->setText(QStringLiteral("👁"));
     m_quickLookBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle());
-    m_quickLookBtn->setToolTip(QStringLiteral("Quick Look (Space)"));
+    m_quickLookBtn->setToolTip(QStringLiteral("Preview (Space)"));
     connect(m_quickLookBtn, &QToolButton::clicked, this, &Toolbar::quickLookRequested);
     addWidget(m_quickLookBtn);
 
     m_getInfoBtn = new QToolButton(this);
     m_getInfoBtn->setText(QStringLiteral("ℹ"));
     m_getInfoBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle());
-    m_getInfoBtn->setToolTip(QStringLiteral("Get Info (Ctrl+I)"));
+    m_getInfoBtn->setToolTip(QStringLiteral("Properties (Ctrl+I)"));
     connect(m_getInfoBtn, &QToolButton::clicked, this, &Toolbar::getInfoRequested);
     addWidget(m_getInfoBtn);
 
@@ -161,12 +158,14 @@ void Toolbar::setupActionButtons()
     addWidget(m_moreBtn);
 }
 
-void Toolbar::setupSearch()
-{
+void Toolbar::setupSearch() {
     m_searchEdit = new QLineEdit(this);
-    m_searchEdit->setPlaceholderText(QStringLiteral("Search"));
+    m_searchEdit->setPlaceholderText(QStringLiteral("Search (kind:, tag:, content:)"));
+    m_searchEdit->setToolTip(
+        QStringLiteral("Search. Tokens: kind:image, tag:Red, ext:pdf, "
+                       "size:>10MB, modified:>2025-01-01, content:\"invoice\", -exclude"));
     m_searchEdit->setClearButtonEnabled(true);
-    m_searchEdit->setFixedWidth(180);
+    m_searchEdit->setFixedWidth(260);
     m_searchEdit->setStyleSheet(StyleHelper::searchBarStyle());
     connect(m_searchEdit, &QLineEdit::textChanged, this, &Toolbar::searchTextChanged);
 
@@ -180,74 +179,90 @@ void Toolbar::setupSearch()
     addWidget(m_searchEdit);
 }
 
-void Toolbar::focusSearch()
-{
+void Toolbar::focusSearch() {
     if (m_searchEdit) {
         m_searchEdit->setFocus();
         m_searchEdit->selectAll();
     }
 }
 
-void Toolbar::clearSearch()
-{
+void Toolbar::clearSearch() {
     if (m_searchEdit) {
         m_searchEdit->clear();
     }
 }
 
-QString Toolbar::searchQuery() const
-{
+void Toolbar::setSearchText(const QString& text) {
+    if (!m_searchEdit || m_searchEdit->text() == text)
+        return;
+    const QSignalBlocker blocker(m_searchEdit);
+    m_searchEdit->setText(text);
+}
+
+void Toolbar::setPathBarVisible(bool visible) {
+    if (m_breadcrumbAction) {
+        m_breadcrumbAction->setVisible(visible);
+    }
+}
+
+QString Toolbar::searchQuery() const {
     return m_searchEdit ? m_searchEdit->text() : QString();
 }
 
-void Toolbar::setPath(const QString& path)
-{
+void Toolbar::setPath(const QString& path) {
     m_breadcrumb->setPath(path);
 }
 
-void Toolbar::setCanGoBack(bool can)
-{
+void Toolbar::setCanGoBack(bool can) {
     m_backBtn->setEnabled(can);
 }
 
-void Toolbar::setCanGoForward(bool can)
-{
+void Toolbar::setCanGoForward(bool can) {
     m_fwdBtn->setEnabled(can);
 }
 
-void Toolbar::setViewMode(ViewMode mode)
-{
+void Toolbar::setViewMode(ViewMode mode) {
     if (auto* btn = m_viewGroup->button(static_cast<int>(mode))) {
         btn->setChecked(true);
     }
 }
 
-void Toolbar::setShowHidden(bool show)
-{
+void Toolbar::setShowHidden(bool show) {
     m_hiddenBtn->setChecked(show);
 }
 
-void Toolbar::onViewButtonClicked(int id)
-{
+void Toolbar::onViewButtonClicked(int id) {
     emit viewModeChanged(static_cast<ViewMode>(id));
 }
 
-void Toolbar::updateThemeStyles(bool isDark)
-{
-    if (m_backBtn) m_backBtn->setStyleSheet(StyleHelper::segmentedButtonLeftStyle(isDark));
-    if (m_fwdBtn) m_fwdBtn->setStyleSheet(StyleHelper::segmentedButtonRightStyle(isDark));
+void Toolbar::updateThemeStyles(bool isDark) {
+    if (m_backBtn)
+        m_backBtn->setStyleSheet(StyleHelper::segmentedButtonLeftStyle(isDark));
+    if (m_fwdBtn)
+        m_fwdBtn->setStyleSheet(StyleHelper::segmentedButtonRightStyle(isDark));
 
-    if (m_iconViewBtn) m_iconViewBtn->setStyleSheet(StyleHelper::segmentedButtonLeftStyle(isDark));
-    if (m_listViewBtn) m_listViewBtn->setStyleSheet(StyleHelper::segmentedButtonMidStyle(isDark));
-    if (m_colViewBtn) m_colViewBtn->setStyleSheet(StyleHelper::segmentedButtonMidStyle(isDark));
-    if (m_galViewBtn) m_galViewBtn->setStyleSheet(StyleHelper::segmentedButtonRightStyle(isDark));
+    if (m_iconViewBtn)
+        m_iconViewBtn->setStyleSheet(StyleHelper::segmentedButtonLeftStyle(isDark));
+    if (m_listViewBtn)
+        m_listViewBtn->setStyleSheet(StyleHelper::segmentedButtonMidStyle(isDark));
+    if (m_colViewBtn)
+        m_colViewBtn->setStyleSheet(StyleHelper::segmentedButtonMidStyle(isDark));
+    if (m_galViewBtn)
+        m_galViewBtn->setStyleSheet(StyleHelper::segmentedButtonRightStyle(isDark));
 
-    if (m_newFolderBtn) m_newFolderBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
-    if (m_quickLookBtn) m_quickLookBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
-    if (m_getInfoBtn) m_getInfoBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
-    if (m_hiddenBtn) m_hiddenBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
-    if (m_moreBtn) m_moreBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_newFolderBtn)
+        m_newFolderBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_quickLookBtn)
+        m_quickLookBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_getInfoBtn)
+        m_getInfoBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_hiddenBtn)
+        m_hiddenBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
+    if (m_moreBtn)
+        m_moreBtn->setStyleSheet(StyleHelper::segmentedButtonSingleStyle(isDark));
 
-    if (m_searchEdit) m_searchEdit->setStyleSheet(StyleHelper::searchBarStyle(isDark));
-    if (m_breadcrumb) m_breadcrumb->updateThemeStyles(isDark);
+    if (m_searchEdit)
+        m_searchEdit->setStyleSheet(StyleHelper::searchBarStyle(isDark));
+    if (m_breadcrumb)
+        m_breadcrumb->updateThemeStyles(isDark);
 }
