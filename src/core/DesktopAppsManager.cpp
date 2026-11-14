@@ -1,4 +1,7 @@
 #include "DesktopAppsManager.h"
+#include "DesktopNotifier.h"
+#include "DiskImageManager.h"
+#include "FileMetadataManager.h"
 #include "RecentFilesManager.h"
 #include <QApplication>
 #include <QDateTime>
@@ -534,6 +537,7 @@ bool launchWithDesktopEntry(const QString& desktopPath, const QStringList& fileP
 void recordRecent(const QString& filePath) {
     if (!filePath.isEmpty()) {
         RecentFilesManager::add(filePath);
+        FileMetadataManager::instance().markOpened(filePath);
     }
 }
 
@@ -1162,6 +1166,34 @@ bool DesktopAppsManager::launchFile(const QString& filePath) {
     QFileInfo fi(filePath);
     if (fi.isDir()) {
         return false;
+    }
+
+    if (DiskImageManager::isDiskImage(filePath)) {
+        QString mountPath;
+        QString error;
+        if (DiskImageManager::mountImage(filePath, &mountPath, nullptr, &error)) {
+            recordRecent(filePath);
+            DesktopNotifier::notify(
+                QStringLiteral("Disk Image Mounted"),
+                QStringLiteral("%1 is available at %2").arg(fi.fileName(), mountPath));
+            return true;
+        }
+        QMessageBox::warning(
+            nullptr, QStringLiteral("Cannot Mount Disk Image"),
+            error.isEmpty() ? QStringLiteral("The disk image could not be mounted.") : error);
+        return false;
+    }
+
+    // Desktop entries are applications, not documents.
+    if (fi.suffix().compare(QStringLiteral("desktop"), Qt::CaseInsensitive) == 0) {
+        if (launchApp(fi.fileName(), QStringList{})) {
+            recordRecent(filePath);
+            return true;
+        }
+        if (QProcess::startDetached(QStringLiteral("gio"), {QStringLiteral("launch"), filePath})) {
+            recordRecent(filePath);
+            return true;
+        }
     }
 
     QMimeDatabase mimeDb;

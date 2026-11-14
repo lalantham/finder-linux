@@ -30,6 +30,7 @@ struct SearchFilter {
     bool caseSensitive{false};
     bool includeHidden{false};
     bool searchContents{false};
+    bool useIndex{false};
 
     QString kindFilter;
     QStringList tags;

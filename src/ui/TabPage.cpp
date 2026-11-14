@@ -1,5 +1,6 @@
 #include "TabPage.h"
 #include "PreviewPane.h"
+#include "RecentFilesManager.h"
 #include <QAbstractItemView>
 #include <QDir>
 #include <QEvent>
@@ -49,6 +50,7 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     m_viewStack->addWidget(m_galleryView);
 
     m_searchScopeBar = new SearchScopeBar(this);
+    m_searchScopeBar->setIndexProvider(SearchEngine::availableIndexProvider());
     m_searchScopeBar->hide();
     layout->addWidget(m_searchScopeBar);
 
@@ -220,6 +222,10 @@ void TabPage::navigateTo(const QString& path, bool recordHistory) {
         showSmartFolder(path.mid(8), recordHistory);
         return;
     }
+    if (path.startsWith(QStringLiteral("recent://"))) {
+        showRecentFiles(recordHistory);
+        return;
+    }
 
     QString cleanPath = QDir::cleanPath(path);
     if (!QDir(cleanPath).exists())
@@ -242,6 +248,7 @@ void TabPage::navigateTo(const QString& path, bool recordHistory) {
     }
 
     m_currentPath = cleanPath;
+    AppSettings::instance().addRecentFolder(cleanPath);
     if (m_previewPane)
         m_previewPane->clear();
 
@@ -294,7 +301,8 @@ void TabPage::goBack() {
     while (!m_backHistory.isEmpty()) {
         QString prev = m_backHistory.takeLast();
         if (prev.startsWith(QStringLiteral("tag://")) ||
-            prev.startsWith(QStringLiteral("smart://")) || QDir(prev).exists()) {
+            prev.startsWith(QStringLiteral("smart://")) ||
+            prev.startsWith(QStringLiteral("recent://")) || QDir(prev).exists()) {
             m_forwardHistory.append(m_currentPath);
             emit historyChanged();
             navigateTo(prev, false);
@@ -308,7 +316,8 @@ void TabPage::goForward() {
     while (!m_forwardHistory.isEmpty()) {
         QString next = m_forwardHistory.takeLast();
         if (next.startsWith(QStringLiteral("tag://")) ||
-            next.startsWith(QStringLiteral("smart://")) || QDir(next).exists()) {
+            next.startsWith(QStringLiteral("smart://")) ||
+            next.startsWith(QStringLiteral("recent://")) || QDir(next).exists()) {
             m_backHistory.append(m_currentPath);
             emit historyChanged();
             navigateTo(next, false);
@@ -375,6 +384,13 @@ void TabPage::refreshWithSelection(const QStringList& pathsToSelect) {
 void TabPage::setViewMode(ViewMode mode) {
     m_viewMode = mode;
     m_viewStack->setCurrentIndex(static_cast<int>(mode));
+    if (m_currentPath.startsWith(QStringLiteral("recent://"))) {
+        applyViewOptions();
+        applyPreviewPaneVisibility();
+        updatePreviewPane();
+        updateStatus();
+        return;
+    }
     if (AppSettings::instance().rememberFolderViewModes() && !m_currentPath.isEmpty() &&
         !m_currentPath.startsWith(QStringLiteral("tag://"))) {
         AppSettings::instance().setFolderViewMode(m_currentPath, mode);
@@ -537,6 +553,43 @@ void TabPage::showSmartFolder(const QString& name, bool recordHistory) {
     }
 }
 
+void TabPage::showRecentFiles(bool recordHistory) {
+    static const QString virtualPath = QStringLiteral("recent://Recents");
+    clearSmartFolderState();
+    if (recordHistory && !m_currentPath.isEmpty() && m_currentPath != virtualPath) {
+        m_backHistory.append(m_currentPath);
+        m_forwardHistory.clear();
+        emit historyChanged();
+    }
+
+    if (m_viewMode == ViewMode::Column) {
+        m_preSearchViewMode = m_viewMode;
+        setViewMode(ViewMode::List);
+    } else {
+        m_preSearchViewMode = m_viewMode;
+    }
+
+    m_searchEngine->stopSearch();
+    if (m_searchBatchTimer->isActive())
+        m_searchBatchTimer->stop();
+    m_pendingSearchResults.clear();
+    m_searchQuery.clear();
+    m_searchScopeBar->hide();
+    m_currentPath = virtualPath;
+
+    QVector<FileItem> items;
+    for (const RecentFile& recent : RecentFilesManager::list(200)) {
+        if (QFileInfo::exists(recent.path) || QFileInfo(recent.path).isSymLink()) {
+            items.append(FileItem(recent.path));
+        }
+    }
+    m_model->setSearchResults(items, false);
+    if (m_previewPane)
+        m_previewPane->clear();
+    emit pathChanged(m_currentPath);
+    updateStatus();
+}
+
 void TabPage::setFilterQuery(const QString& query) {
     m_searchQuery = query.trimmed();
 
@@ -631,11 +684,15 @@ SearchFilter TabPage::buildSearchFilter() const {
             filter.searchPaths = SearchEngine::localSearchRoots();
         } else {
             filter.thisPC = false;
-            filter.searchPath = m_currentPath;
+            filter.searchPath = (m_currentPath.startsWith(QStringLiteral("recent://")) ||
+                                 m_currentPath.startsWith(QStringLiteral("apps://")))
+                                    ? QDir::homePath()
+                                    : m_currentPath;
             filter.recursive = m_searchScopeBar->isSubfolders();
         }
     }
 
+    filter.useIndex = m_searchScopeBar->isIndexEnabled();
     const bool uiContent = m_searchScopeBar->isContentSearch();
     filter.searchContents = uiContent || parsed.searchContents;
     if (m_isSmartFolderView) {

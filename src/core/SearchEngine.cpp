@@ -9,6 +9,7 @@
 #include <QStandardPaths>
 #include <QStorageInfo>
 #include <QThread>
+#include <QUrl>
 #include <algorithm>
 #include <sys/xattr.h>
 
@@ -97,6 +98,96 @@ bool matchesAnyTerm(const QString& haystack, const QStringList& terms, Qt::CaseS
             return false;
     }
     return true;
+}
+
+struct IndexQueryResult {
+    bool success{false};
+    QString error;
+    QStringList paths;
+};
+
+QString pathFromIndexLine(QString line) {
+    line = line.trimmed();
+    if (line.startsWith(QStringLiteral("file://"))) {
+        return QUrl(line).toLocalFile();
+    }
+    if (line.startsWith(QLatin1Char('/')) && QFileInfo::exists(line)) {
+        return line;
+    }
+    const QStringList tokens = line.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    for (const QString& token : tokens) {
+        if (token.startsWith(QLatin1Char('/')) && QFileInfo::exists(token)) {
+            return token;
+        }
+    }
+    return {};
+}
+
+IndexQueryResult querySystemIndex(const QString& provider, const QString& query, int limit) {
+    IndexQueryResult result;
+    QString program;
+    QStringList arguments;
+    if (provider == QStringLiteral("Baloo")) {
+        program = QStandardPaths::findExecutable(QStringLiteral("baloosearch"));
+        arguments = {QStringLiteral("-l"), QString::number(limit), query};
+    } else if (provider == QStringLiteral("Tracker")) {
+        program = QStandardPaths::findExecutable(QStringLiteral("tracker3"));
+        arguments = {QStringLiteral("search"), QStringLiteral("--files"), query};
+    } else if (provider == QStringLiteral("Recoll")) {
+        program = QStandardPaths::findExecutable(QStringLiteral("recoll"));
+        arguments = {QStringLiteral("-t"), QStringLiteral("-b"), QStringLiteral("-n"),
+                     QString::number(limit), query};
+    }
+
+    if (program.isEmpty()) {
+        result.error = QStringLiteral("%1 index tool is not installed").arg(provider);
+        return result;
+    }
+
+    QProcess process;
+    process.start(program, arguments);
+    if (!process.waitForStarted(2000)) {
+        result.error = QStringLiteral("Could not start %1").arg(program);
+        return result;
+    }
+    if (!process.waitForFinished(10000)) {
+        process.kill();
+        process.waitForFinished(500);
+        result.error = QStringLiteral("%1 index query timed out").arg(provider);
+        return result;
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        result.error = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+        if (result.error.isEmpty())
+            result.error = QStringLiteral("%1 index query failed").arg(provider);
+        return result;
+    }
+
+    QSet<QString> seen;
+    const QStringList lines = QString::fromLocal8Bit(process.readAllStandardOutput())
+                                  .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        const QString path = pathFromIndexLine(line);
+        if (!path.isEmpty() && !seen.contains(path)) {
+            seen.insert(path);
+            result.paths.append(path);
+        }
+    }
+    result.success = true;
+    return result;
+}
+
+bool isUnderSearchRoot(const SearchFilter& filter, const QString& path) {
+    if (filter.thisPC)
+        return true;
+    QStringList roots = filter.searchPaths;
+    if (roots.isEmpty() && !filter.searchPath.isEmpty())
+        roots.append(filter.searchPath);
+    for (const QString& root : roots) {
+        if (path == root || path.startsWith(root + QLatin1Char('/')))
+            return true;
+    }
+    return false;
 }
 
 bool shouldSkipDirectory(const QString& path, const QString& root) {
@@ -328,6 +419,39 @@ void SearchWorker::searchDirectory(const QString& dirPath, const QString& rootPa
 }
 
 void SearchWorker::run() {
+    const QString provider = SearchEngine::availableIndexProvider();
+    if (m_filter.useIndex && !provider.isEmpty()) {
+        QString query = m_filter.nameTerms.join(QLatin1Char(' '));
+        if (query.isEmpty())
+            query = m_filter.contentTerms.join(QLatin1Char(' '));
+        if (!query.isEmpty()) {
+            const IndexQueryResult indexed = querySystemIndex(provider, query, 5000);
+            if (indexed.success) {
+                QVector<FileItem> batch;
+                for (const QString& path : indexed.paths) {
+                    if (m_cancelled.load(std::memory_order_relaxed))
+                        break;
+                    if (!isUnderSearchRoot(m_filter, path))
+                        continue;
+                    const QFileInfo info(path);
+                    if (matchesFilter(info)) {
+                        batch.append(FileItem(info));
+                        ++m_count;
+                        if (batch.size() >= 200) {
+                            emit itemsFound(batch);
+                            batch.clear();
+                        }
+                    }
+                }
+                if (!batch.isEmpty())
+                    emit itemsFound(batch);
+                emit finished(m_count);
+                return;
+            }
+            // If the index is unavailable or failed, fall back to the full scan.
+        }
+    }
+
     QStringList roots;
     if (m_filter.thisPC) {
         roots = m_filter.searchPaths.isEmpty() ? SearchEngine::localSearchRoots()
@@ -357,6 +481,19 @@ SearchEngine::SearchEngine(QObject* parent) : QObject(parent) {}
 
 SearchEngine::~SearchEngine() {
     stopSearch();
+}
+
+QString SearchEngine::availableIndexProvider() {
+    if (!QStandardPaths::findExecutable(QStringLiteral("baloosearch")).isEmpty()) {
+        return QStringLiteral("Baloo");
+    }
+    if (!QStandardPaths::findExecutable(QStringLiteral("tracker3")).isEmpty()) {
+        return QStringLiteral("Tracker");
+    }
+    if (!QStandardPaths::findExecutable(QStringLiteral("recoll")).isEmpty()) {
+        return QStringLiteral("Recoll");
+    }
+    return {};
 }
 
 QStringList SearchEngine::localSearchRoots() {

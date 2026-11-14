@@ -75,6 +75,14 @@ void SearchScopeBar::setupUi() {
     connect(m_contentsCb, &QCheckBox::toggled, this, &SearchScopeBar::contentToggled);
     layout->addWidget(m_contentsCb);
 
+    m_indexCb = new QCheckBox(QStringLiteral("Index"), this);
+    m_indexCb->setToolTip(
+        QStringLiteral("Use the system file index (Baloo, Tracker, or Recoll) when available"));
+    m_indexCb->setStyleSheet(QStringLiteral("font-size: 11px;"));
+    m_indexCb->hide();
+    connect(m_indexCb, &QCheckBox::toggled, this, &SearchScopeBar::indexToggled);
+    layout->addWidget(m_indexCb);
+
     layout->addSpacing(8);
 
     m_filterSummaryLabel = new QLabel(this);
@@ -132,6 +140,17 @@ void SearchScopeBar::setSaveSearchEnabled(bool enabled) {
     m_saveSearchBtn->setEnabled(enabled);
 }
 
+void SearchScopeBar::setIndexProvider(const QString& provider) {
+    m_indexCb->setVisible(!provider.isEmpty());
+    if (!provider.isEmpty()) {
+        m_indexCb->setToolTip(QStringLiteral("Use the %1 index when available").arg(provider));
+    }
+}
+
+bool SearchScopeBar::isIndexEnabled() const {
+    return m_indexCb->isChecked();
+}
+
 void SearchScopeBar::setFromFilter(const SearchFilter& filter) {
     m_scope = filter.thisPC ? SearchScope::ThisPC : SearchScope::ThisFolder;
     m_thisFolderBtn->setChecked(m_scope == SearchScope::ThisFolder);
@@ -143,6 +162,9 @@ void SearchScopeBar::setFromFilter(const SearchFilter& filter) {
     m_contentsCb->blockSignals(true);
     m_contentsCb->setChecked(filter.searchContents);
     m_contentsCb->blockSignals(false);
+    m_indexCb->blockSignals(true);
+    m_indexCb->setChecked(filter.useIndex);
+    m_indexCb->blockSignals(false);
     m_kindCombo->blockSignals(true);
     int kindIndex = 0;
     for (int i = 0; i < m_kindCombo->count(); ++i) {
@@ -169,6 +191,9 @@ void SearchScopeBar::reset() {
     m_contentsCb->blockSignals(true);
     m_contentsCb->setChecked(false);
     m_contentsCb->blockSignals(false);
+    m_indexCb->blockSignals(true);
+    m_indexCb->setChecked(false);
+    m_indexCb->blockSignals(false);
     m_kindCombo->blockSignals(true);
     m_kindCombo->setCurrentIndex(0);
     m_kindCombo->blockSignals(false);

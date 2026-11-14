@@ -111,6 +111,8 @@ public:
     [[nodiscard]] const QStringList& tags() const;
     [[nodiscard]] QString comment() const;
     bool setComment(const QString& comment);
+    [[nodiscard]] QString version() const;
+    bool setVersion(const QString& version);
 
     [[nodiscard]] QIcon icon() const;
 
@@ -139,6 +141,8 @@ private:
     mutable bool m_tagsLoaded{false};
     mutable QString m_comment;
     mutable bool m_commentLoaded{false};
+    mutable QString m_version;
+    mutable bool m_versionLoaded{false};
 
     bool m_isDir{false};
     bool m_isFile{false};

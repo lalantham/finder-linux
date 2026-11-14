@@ -31,6 +31,7 @@ public:
         ColOwner,
         ColGroup,
         ColComment,
+        ColDateAdded,
         ColumnCount
     };
 
@@ -50,7 +51,8 @@ public:
         FileDateCreatedRole,
         FileDateOpenedRole,
         FileCommentRole,
-        FileMimeTypeRole
+        FileMimeTypeRole,
+        FileDateAddedRole
     };
 
     enum class SortField {
@@ -64,7 +66,8 @@ public:
         Permissions,
         Owner,
         Group,
-        Comment
+        Comment,
+        DateAdded
     };
 
     // Stable identifiers used by the list view and persisted settings.
@@ -102,7 +105,7 @@ public:
         return m_filterKind;
     }
 
-    void setSearchResults(const QVector<FileItem>& items);
+    void setSearchResults(const QVector<FileItem>& items, bool applySorting = true);
     void appendSearchResults(const QVector<FileItem>& items);
     void clearSearchResults();
     [[nodiscard]] bool isSearchResultsView() const noexcept {

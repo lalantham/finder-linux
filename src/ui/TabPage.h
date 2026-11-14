@@ -32,6 +32,7 @@ public:
     void showTaggedFiles(const QString& tag, bool recordHistory = true);
     void showSmartFolder(const SmartFolder& folder, bool recordHistory = true);
     void showSmartFolder(const QString& name, bool recordHistory = true);
+    void showRecentFiles(bool recordHistory = true);
 
     [[nodiscard]] QString searchText() const noexcept {
         return m_searchQuery;

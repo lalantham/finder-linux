@@ -1,30 +1,28 @@
 #include "BreadcrumbBar.h"
-#include "StyleHelper.h"
-#include "ThemeManager.h"
 #include "AppSettings.h"
+#include "StyleHelper.h"
 #include "TagManager.h"
-#include <QPushButton>
-#include <QLabel>
+#include "ThemeManager.h"
 #include <QAbstractItemView>
-#include <QDir>
-#include <QFileInfo>
-#include <QMouseEvent>
-#include <QContextMenuEvent>
 #include <QApplication>
 #include <QClipboard>
-#include <QMenu>
-#include <QTimer>
+#include <QContextMenuEvent>
+#include <QDir>
 #include <QDragEnterEvent>
-#include <QDragMoveEvent>
 #include <QDragLeaveEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
-#include <QMimeData>
+#include <QFileInfo>
 #include <QKeyEvent>
+#include <QLabel>
+#include <QMenu>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QPushButton>
+#include <QTimer>
 #include <QUrl>
 
-BreadcrumbBar::BreadcrumbBar(QWidget* parent)
-    : QWidget(parent)
-{
+BreadcrumbBar::BreadcrumbBar(QWidget* parent) : QWidget(parent) {
     m_stackLayout = new QStackedLayout(this);
     m_stackLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -59,17 +57,17 @@ BreadcrumbBar::BreadcrumbBar(QWidget* parent)
     m_stackLayout->addWidget(m_pathEdit);
 }
 
-void BreadcrumbBar::updateThemeStyles(bool isDark)
-{
+void BreadcrumbBar::updateThemeStyles(bool isDark) {
     if (m_pathEdit) {
         m_pathEdit->setStyleSheet(StyleHelper::searchBarStyle(isDark));
     }
     rebuildBreadcrumbs();
 }
 
-void BreadcrumbBar::setPath(const QString& path)
-{
-    if (path.startsWith(QStringLiteral("tag://"))) {
+void BreadcrumbBar::setPath(const QString& path) {
+    if (path.startsWith(QStringLiteral("tag://")) || path.startsWith(QStringLiteral("smart://")) ||
+        path.startsWith(QStringLiteral("recent://")) ||
+        path.startsWith(QStringLiteral("apps://"))) {
         m_currentPath = path;
     } else {
         m_currentPath = QDir::cleanPath(path);
@@ -79,8 +77,7 @@ void BreadcrumbBar::setPath(const QString& path)
     m_stackLayout->setCurrentWidget(m_breadcrumbContainer);
 }
 
-void BreadcrumbBar::rebuildBreadcrumbs()
-{
+void BreadcrumbBar::rebuildBreadcrumbs() {
     // Clear old breadcrumbs
     QLayoutItem* item;
     while ((item = m_breadcrumbLayout->takeAt(0)) != nullptr) {
@@ -96,11 +93,51 @@ void BreadcrumbBar::rebuildBreadcrumbs()
 
     bool isDark = ThemeManager::instance().isDark();
 
+    if (m_currentPath.startsWith(QStringLiteral("recent://"))) {
+        auto* label = new QLabel(QStringLiteral("Recents"), m_breadcrumbContainer);
+        label->setStyleSheet(
+            isDark ? QStringLiteral("color: #f0f0f0; font-weight: bold; padding: 2px 6px;")
+                   : QStringLiteral("color: #1d1d1f; font-weight: bold; padding: 2px 6px;"));
+        m_breadcrumbLayout->addWidget(label);
+        m_breadcrumbLayout->addStretch();
+        return;
+    }
+
+    if (m_currentPath.startsWith(QStringLiteral("apps://"))) {
+        auto* label = new QLabel(QStringLiteral("Applications"), m_breadcrumbContainer);
+        label->setStyleSheet(
+            isDark ? QStringLiteral("color: #f0f0f0; font-weight: bold; padding: 2px 6px;")
+                   : QStringLiteral("color: #1d1d1f; font-weight: bold; padding: 2px 6px;"));
+        m_breadcrumbLayout->addWidget(label);
+        m_breadcrumbLayout->addStretch();
+        return;
+    }
+
+    if (m_currentPath.startsWith(QStringLiteral("smart://"))) {
+        auto* header = new QLabel(QStringLiteral("Smart Folders"), m_breadcrumbContainer);
+        header->setStyleSheet(
+            isDark ? QStringLiteral("color: #8e8e93; font-weight: bold; padding: 2px 6px;")
+                   : QStringLiteral("color: #636366; font-weight: bold; padding: 2px 6px;"));
+        m_breadcrumbLayout->addWidget(header);
+        auto* separator = new QLabel(QStringLiteral("›"), m_breadcrumbContainer);
+        separator->setStyleSheet(isDark ? QStringLiteral("color: #636366;")
+                                        : QStringLiteral("color: #8e8e93;"));
+        m_breadcrumbLayout->addWidget(separator);
+        auto* label = new QLabel(m_currentPath.mid(8), m_breadcrumbContainer);
+        label->setStyleSheet(
+            isDark ? QStringLiteral("color: #f0f0f0; font-weight: bold; padding: 2px 6px;")
+                   : QStringLiteral("color: #1d1d1f; font-weight: bold; padding: 2px 6px;"));
+        m_breadcrumbLayout->addWidget(label);
+        m_breadcrumbLayout->addStretch();
+        return;
+    }
+
     if (m_currentPath.startsWith(QStringLiteral("tag://"))) {
         QString tagName = m_currentPath.mid(6);
         auto* tagsLabel = new QLabel(QStringLiteral("Tags"), m_breadcrumbContainer);
-        tagsLabel->setStyleSheet(isDark ? QStringLiteral("color: #8e8e93; font-weight: bold; padding: 2px 6px;")
-                                        : QStringLiteral("color: #636366; font-weight: bold; padding: 2px 6px;"));
+        tagsLabel->setStyleSheet(
+            isDark ? QStringLiteral("color: #8e8e93; font-weight: bold; padding: 2px 6px;")
+                   : QStringLiteral("color: #636366; font-weight: bold; padding: 2px 6px;"));
         m_breadcrumbLayout->addWidget(tagsLabel);
 
         auto* separator = new QLabel(QStringLiteral("›"), m_breadcrumbContainer);
@@ -129,9 +166,8 @@ void BreadcrumbBar::rebuildBreadcrumbs()
         rootBtn->setToolTip(QStringLiteral("Click to edit the path"));
         connect(rootBtn, &QPushButton::clicked, this, [this]() { showPathEditor(); });
     } else {
-        connect(rootBtn, &QPushButton::clicked, this, [this]() {
-            onSegmentClicked(QStringLiteral("/"));
-        });
+        connect(rootBtn, &QPushButton::clicked, this,
+                [this]() { onSegmentClicked(QStringLiteral("/")); });
     }
     m_breadcrumbLayout->addWidget(rootBtn);
 
@@ -156,9 +192,8 @@ void BreadcrumbBar::rebuildBreadcrumbs()
             btn->setToolTip(QStringLiteral("Click to edit the path"));
             connect(btn, &QPushButton::clicked, this, [this]() { showPathEditor(); });
         } else {
-            connect(btn, &QPushButton::clicked, this, [this, target]() {
-                onSegmentClicked(target);
-            });
+            connect(btn, &QPushButton::clicked, this,
+                    [this, target]() { onSegmentClicked(target); });
         }
         m_breadcrumbLayout->addWidget(btn);
     }
@@ -166,8 +201,7 @@ void BreadcrumbBar::rebuildBreadcrumbs()
     m_breadcrumbLayout->addStretch();
 }
 
-bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
-{
+bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event) {
     // Escape cancels path editing.
     if (watched == m_pathEdit && event->type() == QEvent::KeyPress) {
         auto* keyEvent = static_cast<QKeyEvent*>(event);
@@ -192,8 +226,8 @@ bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
             if (focus == m_pathEdit) {
                 return;
             }
-            if (popup && (popup->isVisible()
-                          || (focus && (focus == popup || popup->isAncestorOf(focus))))) {
+            if (popup &&
+                (popup->isVisible() || (focus && (focus == popup || popup->isAncestorOf(focus))))) {
                 return;
             }
             m_pathEdit->setText(m_currentPath);
@@ -266,9 +300,14 @@ bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
                 m_springHoverWidget = btn;
                 bool isDark = ThemeManager::instance().isDark();
                 QColor acc = ThemeManager::instance().accentColor();
-                btn->setStyleSheet(StyleHelper::breadcrumbButtonStyle(isDark) +
-                    QStringLiteral("QPushButton { border: 1.5px solid %1; background: rgba(%2,%3,%4,0.22); }")
-                    .arg(acc.name()).arg(acc.red()).arg(acc.green()).arg(acc.blue()));
+                btn->setStyleSheet(
+                    StyleHelper::breadcrumbButtonStyle(isDark) +
+                    QStringLiteral(
+                        "QPushButton { border: 1.5px solid %1; background: rgba(%2,%3,%4,0.22); }")
+                        .arg(acc.name())
+                        .arg(acc.red())
+                        .arg(acc.green())
+                        .arg(acc.blue()));
                 m_springTimer->start(AppSettings::instance().springLoadDelayMs());
             }
             dragEvent->acceptProposedAction();
@@ -283,20 +322,16 @@ bool BreadcrumbBar::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
-void BreadcrumbBar::showContextMenu(const QPoint& globalPos)
-{
+void BreadcrumbBar::showContextMenu(const QPoint& globalPos) {
     QMenu menu(this);
-    menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")),
-                   QStringLiteral("Edit Path"), this, [this]() { showPathEditor(); });
-    menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")),
-                   QStringLiteral("Copy Path"), this, [this]() {
-                       QApplication::clipboard()->setText(m_currentPath);
-                   });
+    menu.addAction(QIcon::fromTheme(QStringLiteral("document-edit")), QStringLiteral("Edit Path"),
+                   this, [this]() { showPathEditor(); });
+    menu.addAction(QIcon::fromTheme(QStringLiteral("edit-copy")), QStringLiteral("Copy Path"), this,
+                   [this]() { QApplication::clipboard()->setText(m_currentPath); });
     menu.exec(globalPos);
 }
 
-void BreadcrumbBar::resetSpringTimer()
-{
+void BreadcrumbBar::resetSpringTimer() {
     if (m_springTimer && m_springTimer->isActive()) {
         m_springTimer->stop();
     }
@@ -308,8 +343,7 @@ void BreadcrumbBar::resetSpringTimer()
     m_springHoverPath.clear();
 }
 
-void BreadcrumbBar::onSpringTimeout()
-{
+void BreadcrumbBar::onSpringTimeout() {
     if (!m_springHoverPath.isEmpty()) {
         QString target = m_springHoverPath;
         resetSpringTimer();
@@ -317,14 +351,12 @@ void BreadcrumbBar::onSpringTimeout()
     }
 }
 
-void BreadcrumbBar::onSegmentClicked(const QString& path)
-{
+void BreadcrumbBar::onSegmentClicked(const QString& path) {
     setPath(path);
     emit pathSelected(path);
 }
 
-void BreadcrumbBar::onPathEditFinished()
-{
+void BreadcrumbBar::onPathEditFinished() {
     QString entered = m_pathEdit->text().trimmed();
     if (entered.startsWith(QStringLiteral("file://"))) {
         entered = QUrl(entered).toLocalFile();
@@ -345,8 +377,7 @@ void BreadcrumbBar::onPathEditFinished()
     m_stackLayout->setCurrentWidget(m_breadcrumbContainer);
 }
 
-void BreadcrumbBar::showPathEditor()
-{
+void BreadcrumbBar::showPathEditor() {
     m_pathEdit->setText(m_currentPath);
     m_stackLayout->setCurrentWidget(m_pathEdit);
     m_pathEdit->setFocus();

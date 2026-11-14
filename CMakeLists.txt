@@ -49,6 +49,12 @@ set(FINDER_CORE_SOURCES
     src/core/XdgTrash.h
     src/core/VolumeManager.cpp
     src/core/VolumeManager.h
+    src/core/DiskImageManager.cpp
+    src/core/DiskImageManager.h
+    src/core/FileMetadataManager.cpp
+    src/core/FileMetadataManager.h
+    src/core/MediaMetadata.cpp
+    src/core/MediaMetadata.h
     src/core/SearchEngine.cpp
     src/core/SearchEngine.h
     src/core/SearchQuery.cpp

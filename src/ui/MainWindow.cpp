@@ -8,7 +8,9 @@
 #include "ConflictDialog.h"
 #include "DesktopAppsManager.h"
 #include "DesktopNotifier.h"
+#include "DiskImageManager.h"
 #include "FileManager1Service.h"
+#include "FileMetadataManager.h"
 #include "GetInfoDialog.h"
 #include "RecentFilesManager.h"
 #include "ServiceMenuManager.h"
@@ -549,6 +551,7 @@ void MainWindow::setupUi() {
             page->showTaggedFiles(tag);
         }
     });
+    connect(m_sidebar, &Sidebar::serverSelected, this, &MainWindow::connectToServerAsync);
     connect(m_sidebar, &Sidebar::newSmartFolderRequested, this, &MainWindow::onNewSmartFolder);
     connect(m_sidebar, &Sidebar::editSmartFolderRequested, this, &MainWindow::onEditSmartFolder);
     connect(m_sidebar, &Sidebar::deleteSmartFolderRequested, this,
@@ -1711,14 +1714,17 @@ void MainWindow::connectToServerAsync(const QString& uri) {
         const QPair<bool, QString> result = watcher->result();
         watcher->deleteLater();
 
-        m_sidebar->refresh();
         if (!result.first) {
+            m_sidebar->refresh();
             QMessageBox::warning(this, QStringLiteral("Cannot Connect"),
                                  result.second.isEmpty()
                                      ? QStringLiteral("Could not connect to %1").arg(uri)
                                      : result.second);
             return;
         }
+
+        AppSettings::instance().addRecentServer(uri);
+        m_sidebar->refresh();
 
         // gvfs exposes remote mounts as directories under /run/user/<uid>/gvfs.
         const QString host = QUrl(uri).host();
@@ -1918,6 +1924,59 @@ void MainWindow::onDeleteSmartFolder(const QString& name) {
             page->navigateTo(AppSettings::instance().defaultPath());
         }
     }
+}
+
+void MainWindow::mountDiskImage(const QString& path) {
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString mountPath;
+    QString error;
+    const bool ok = DiskImageManager::mountImage(path, &mountPath, nullptr, &error);
+    QApplication::restoreOverrideCursor();
+
+    if (!ok) {
+        QMessageBox::warning(
+            this, QStringLiteral("Cannot Mount Disk Image"),
+            error.isEmpty() ? QStringLiteral("The disk image could not be mounted.") : error);
+        return;
+    }
+
+    m_sidebar->refresh();
+    openPath(mountPath);
+}
+
+void MainWindow::createDiskImageFromFolder(const QString& folder) {
+    const QFileInfo info(folder);
+    if (!info.isDir()) {
+        QMessageBox::warning(this, QStringLiteral("Create Disk Image"),
+                             QStringLiteral("Select a folder first."));
+        return;
+    }
+
+    const QString suggested =
+        info.absoluteFilePath() + QStringLiteral("/") + info.fileName() + QStringLiteral(".iso");
+    const QString output =
+        QFileDialog::getSaveFileName(this, QStringLiteral("Create Disk Image"), suggested,
+                                     QStringLiteral("ISO Images (*.iso);;All Files (*)"));
+    if (output.isEmpty())
+        return;
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QString error;
+    const bool ok = DiskImageManager::createIso(folder, output, &error);
+    QApplication::restoreOverrideCursor();
+
+    if (!ok) {
+        QMessageBox::warning(
+            this, QStringLiteral("Create Disk Image"),
+            error.isEmpty() ? QStringLiteral("The disk image could not be created.") : error);
+        return;
+    }
+
+    if (TabPage* page = m_tabManager->currentPage())
+        page->refresh(QFileInfo(output).fileName());
+    m_sidebar->refresh();
+    QMessageBox::information(this, QStringLiteral("Disk Image Created"),
+                             QStringLiteral("Created %1").arg(output));
 }
 
 void MainWindow::onViewOptions() {
@@ -2596,6 +2655,16 @@ void MainWindow::onOperationFinished(const OperationResult& result) {
         m_sidebar->selectPath(page->currentPath());
     }
     updateStatusInfo();
+
+    for (const auto& pair : result.movedPairs) {
+        FileMetadataManager::instance().renamePath(pair.first, pair.second);
+    }
+    for (const auto& pair : result.trashedPairs) {
+        FileMetadataManager::instance().forgetPath(pair.first);
+    }
+    if (result.type != OperationType::Trash && result.type != OperationType::Delete) {
+        FileMetadataManager::instance().registerPaths(result.createdPaths);
+    }
 
     for (const auto& pair : result.movedPairs) {
         UndoAction act;

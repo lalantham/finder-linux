@@ -33,24 +33,20 @@ struct Bookmark {
     QVector<ApplicationEntry> applications;
 };
 
-QString nowIso()
-{
+QString nowIso() {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-QString toHref(const QString& path)
-{
+QString toHref(const QString& path) {
     return QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath()).toString(QUrl::FullyEncoded);
 }
 
-QString fromHref(const QString& href)
-{
+QString fromHref(const QString& href) {
     const QUrl url(href);
     return url.isLocalFile() ? url.toLocalFile() : QString();
 }
 
-QVector<Bookmark> readBookmarks(const QString& path, bool* ok)
-{
+QVector<Bookmark> readBookmarks(const QString& path, bool* ok) {
     QVector<Bookmark> bookmarks;
     *ok = true;
 
@@ -121,8 +117,7 @@ QVector<Bookmark> readBookmarks(const QString& path, bool* ok)
     return bookmarks;
 }
 
-bool writeBookmarks(const QString& path, const QVector<Bookmark>& bookmarks)
-{
+bool writeBookmarks(const QString& path, const QVector<Bookmark>& bookmarks) {
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return false;
@@ -203,8 +198,7 @@ bool writeBookmarks(const QString& path, const QVector<Bookmark>& bookmarks)
 
 } // namespace
 
-QString RecentFilesManager::storagePath()
-{
+QString RecentFilesManager::storagePath() {
     if (!s_storagePathOverride.isEmpty()) {
         return s_storagePathOverride;
     }
@@ -217,13 +211,11 @@ QString RecentFilesManager::storagePath()
     return dataDirectory + QStringLiteral("/recently-used.xbel");
 }
 
-void RecentFilesManager::setStoragePathForTesting(const QString& path)
-{
+void RecentFilesManager::setStoragePathForTesting(const QString& path) {
     s_storagePathOverride = path;
 }
 
-bool RecentFilesManager::add(const QString& path, const QString& mimeType, const QString& appName)
-{
+bool RecentFilesManager::add(const QString& path, const QString& mimeType, const QString& appName) {
     if (path.isEmpty()) {
         return false;
     }
@@ -309,8 +301,7 @@ bool RecentFilesManager::add(const QString& path, const QString& mimeType, const
     return writeBookmarks(storage, bookmarks);
 }
 
-QList<RecentFile> RecentFilesManager::list(int limit)
-{
+QList<RecentFile> RecentFilesManager::list(int limit) {
     QList<RecentFile> result;
     if (limit <= 0) {
         return result;
@@ -360,8 +351,7 @@ QList<RecentFile> RecentFilesManager::list(int limit)
     return result;
 }
 
-void RecentFilesManager::clear()
-{
+void RecentFilesManager::clear() {
     const QString storage = storagePath();
     if (storage.isEmpty()) {
         return;

@@ -8,6 +8,7 @@
 #include "ListView.h"
 #include "PreviewManager.h"
 #include "PreviewPane.h"
+#include "RecentFilesManager.h"
 #include "TabManager.h"
 #include "TabPage.h"
 #include "TagManager.h"
@@ -52,6 +53,8 @@ private slots:
     void testPreviewPaneToggle();
     void testMultiItemGetInfo();
     void testToolbarSearchToggle();
+    void testRecentFilesView();
+    void testRecentFolderHistory();
     void testOfficePreviewDetection();
     void testOfficePreviewConversion();
     void testAppChooserDialog();
@@ -798,6 +801,53 @@ void TestSelection::testToolbarSearchToggle() {
 
     toolbar.setSearchVisible(false);
     QVERIFY(!toolbar.isSearchVisible());
+}
+
+void TestSelection::testRecentFilesView() {
+    QTemporaryDir settingsDir;
+    QTemporaryDir filesDir;
+    QVERIFY(settingsDir.isValid());
+    QVERIFY(filesDir.isValid());
+    AppSettings::setSettingsFilePath(settingsDir.path() + QStringLiteral("/settings.ini"));
+    RecentFilesManager::setStoragePathForTesting(filesDir.path() + QStringLiteral("/recent.xbel"));
+
+    const QString first = filesDir.filePath(QStringLiteral("first.txt"));
+    const QString second = filesDir.filePath(QStringLiteral("second.txt"));
+    for (const QString& path : {first, second}) {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        file.close();
+    }
+    QVERIFY(RecentFilesManager::add(first, QStringLiteral("text/plain")));
+    QTest::qWait(5);
+    QVERIFY(RecentFilesManager::add(second, QStringLiteral("text/plain")));
+
+    TabPage page(QDir::homePath());
+    page.showRecentFiles();
+    QCOMPARE(page.currentPath(), QStringLiteral("recent://Recents"));
+    QCOMPARE(page.model()->rowCount(), 2);
+    QCOMPARE(page.model()->index(0, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("second.txt"));
+    QCOMPARE(page.model()->index(1, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("first.txt"));
+
+    RecentFilesManager::setStoragePathForTesting(QString());
+}
+
+void TestSelection::testRecentFolderHistory() {
+    QTemporaryDir settingsDir;
+    QTemporaryDir folder;
+    QVERIFY(settingsDir.isValid());
+    QVERIFY(folder.isValid());
+    AppSettings::setSettingsFilePath(settingsDir.path() + QStringLiteral("/settings.ini"));
+
+    TabPage page(QDir::homePath());
+    page.navigateTo(folder.path());
+    QVERIFY(AppSettings::instance().recentFolders().contains(folder.path()));
+
+    AppSettings::instance().clearRecentFolders();
+    QVERIFY(AppSettings::instance().recentFolders().isEmpty());
 }
 
 void TestSelection::testOfficePreviewDetection() {

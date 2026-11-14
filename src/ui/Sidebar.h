@@ -51,6 +51,7 @@ signals:
                             Qt::DropAction action);
     void itemsDroppedOnTrash(const QStringList& sourcePaths);
     void tagSelected(const QString& tag);
+    void serverSelected(const QString& uri);
     void newSmartFolderRequested();
     void editSmartFolderRequested(const QString& name);
     void deleteSmartFolderRequested(const QString& name);
@@ -79,8 +80,10 @@ private:
     void mountDeviceAsync(const QString& device);
     void ejectVolumeAsync(const QString& path);
 
+    void populateSmartLocations();
     void populateFavorites();
     void populateLocations();
+    void populateServers();
     void populateTags();
     void populateSmartFolders();
     void requestVolumeScan(bool force = false);
@@ -97,6 +100,7 @@ private:
     QElapsedTimer m_volumeScanTimestamp;
     QTreeWidgetItem* m_favoritesHeader{nullptr};
     QTreeWidgetItem* m_locationsHeader{nullptr};
+    QTreeWidgetItem* m_serversHeader{nullptr};
     QTreeWidgetItem* m_smartFoldersHeader{nullptr};
     QTreeWidgetItem* m_tagsHeader{nullptr};
     QTreeWidgetItem* m_trashHeader{nullptr};

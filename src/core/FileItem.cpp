@@ -161,6 +161,8 @@ void FileItem::initFromInfo(const QFileInfo& info) {
     m_tagsLoaded = false;
     m_comment.clear();
     m_commentLoaded = false;
+    m_version.clear();
+    m_versionLoaded = false;
 }
 
 void FileItem::setCalculatedFolderSize(qint64 size, int itemCount) {
@@ -213,6 +215,40 @@ bool FileItem::setComment(const QString& comment) {
     }
     m_comment = comment;
     m_commentLoaded = true;
+    return true;
+}
+
+QString FileItem::version() const {
+    if (!m_versionLoaded) {
+        const QByteArray localPath = QFile::encodeName(m_path);
+        char buffer[1024];
+        const ssize_t length =
+            getxattr(localPath.constData(), "user.xdg.version", buffer, sizeof(buffer));
+        if (length > 0) {
+            m_version = QString::fromUtf8(buffer, static_cast<int>(length));
+        } else {
+            m_version.clear();
+        }
+        m_versionLoaded = true;
+    }
+    return m_version;
+}
+
+bool FileItem::setVersion(const QString& version) {
+    const QByteArray localPath = QFile::encodeName(m_path);
+    if (version.isEmpty()) {
+        const int rc = removexattr(localPath.constData(), "user.xdg.version");
+        if (rc != 0 && errno != ENODATA)
+            return false;
+    } else {
+        const QByteArray data = version.toUtf8();
+        if (setxattr(localPath.constData(), "user.xdg.version", data.constData(),
+                     static_cast<size_t>(data.size()), 0) != 0) {
+            return false;
+        }
+    }
+    m_version = version;
+    m_versionLoaded = true;
     return true;
 }
 

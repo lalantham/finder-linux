@@ -114,6 +114,17 @@ public:
     void setIconPositions(const QString& path, const QVariantMap& positions);
     void clearIconPositions(const QString& path);
 
+    [[nodiscard]] QStringList recentFolders() const noexcept {
+        return m_recentFolders;
+    }
+    void addRecentFolder(const QString& path);
+    void clearRecentFolders();
+    [[nodiscard]] QStringList recentServers() const noexcept {
+        return m_recentServers;
+    }
+    void addRecentServer(const QString& uri);
+    void clearRecentServers();
+
     [[nodiscard]] QList<SmartFolder> smartFolders() const;
     [[nodiscard]] SmartFolder smartFolder(const QString& name) const;
     void saveSmartFolder(const SmartFolder& folder);
@@ -288,6 +299,8 @@ private:
     QVariantMap m_folderViewOptions;
     QVariantMap m_iconPositions;
     QVariantList m_smartFolders;
+    QStringList m_recentFolders;
+    QStringList m_recentServers;
     QStringList m_listVisibleColumns;
     QStringList m_listColumnOrder;
     QVariantMap m_listColumnWidths;

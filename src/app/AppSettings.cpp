@@ -31,6 +31,7 @@ QVariantMap filterToMap(const SearchFilter& filter) {
     map.insert(QStringLiteral("caseSensitive"), filter.caseSensitive);
     map.insert(QStringLiteral("includeHidden"), filter.includeHidden);
     map.insert(QStringLiteral("searchContents"), filter.searchContents);
+    map.insert(QStringLiteral("useIndex"), filter.useIndex);
     map.insert(QStringLiteral("kindFilter"), filter.kindFilter);
     map.insert(QStringLiteral("tags"), filter.tags);
     map.insert(QStringLiteral("extensions"), filter.extensions);
@@ -56,6 +57,7 @@ SearchFilter filterFromMap(const QVariantMap& map) {
     filter.caseSensitive = map.value(QStringLiteral("caseSensitive"), false).toBool();
     filter.includeHidden = map.value(QStringLiteral("includeHidden"), false).toBool();
     filter.searchContents = map.value(QStringLiteral("searchContents"), false).toBool();
+    filter.useIndex = map.value(QStringLiteral("useIndex"), false).toBool();
     filter.kindFilter = map.value(QStringLiteral("kindFilter")).toString();
     filter.tags = map.value(QStringLiteral("tags")).toStringList();
     filter.extensions = map.value(QStringLiteral("extensions")).toStringList();
@@ -105,6 +107,8 @@ void AppSettings::load() {
     m_folderViewOptions = s.value(QStringLiteral("folderViewOptions")).toMap();
     m_iconPositions = s.value(QStringLiteral("iconPositions")).toMap();
     m_smartFolders = s.value(QStringLiteral("smartFolders")).toList();
+    m_recentFolders = s.value(QStringLiteral("recentFolders")).toStringList();
+    m_recentServers = s.value(QStringLiteral("recentServers")).toStringList();
     m_listVisibleColumns =
         s.value(QStringLiteral("listVisibleColumns"), defaultListColumns()).toStringList();
     m_listColumnOrder =
@@ -153,6 +157,8 @@ void AppSettings::save() {
     s.setValue(QStringLiteral("folderViewOptions"), m_folderViewOptions);
     s.setValue(QStringLiteral("iconPositions"), m_iconPositions);
     s.setValue(QStringLiteral("smartFolders"), m_smartFolders);
+    s.setValue(QStringLiteral("recentFolders"), m_recentFolders);
+    s.setValue(QStringLiteral("recentServers"), m_recentServers);
     s.setValue(QStringLiteral("listVisibleColumns"), m_listVisibleColumns);
     s.setValue(QStringLiteral("listColumnOrder"), m_listColumnOrder);
     s.setValue(QStringLiteral("listColumnWidths"), m_listColumnWidths);
@@ -288,6 +294,48 @@ void AppSettings::clearIconPositions(const QString& path) {
     if (m_iconPositions.remove(path) > 0) {
         save();
     }
+}
+
+void AppSettings::addRecentFolder(const QString& path) {
+    if (path.isEmpty() || path.startsWith(QStringLiteral("tag://")) ||
+        path.startsWith(QStringLiteral("smart://")) ||
+        path.startsWith(QStringLiteral("recent://")) ||
+        path.startsWith(QStringLiteral("apps://"))) {
+        return;
+    }
+    const QString clean = QDir::cleanPath(path);
+    if (clean.isEmpty())
+        return;
+    m_recentFolders.removeAll(clean);
+    m_recentFolders.prepend(clean);
+    while (m_recentFolders.size() > 15)
+        m_recentFolders.removeLast();
+    save();
+}
+
+void AppSettings::clearRecentFolders() {
+    if (m_recentFolders.isEmpty())
+        return;
+    m_recentFolders.clear();
+    save();
+}
+
+void AppSettings::addRecentServer(const QString& uri) {
+    if (uri.trimmed().isEmpty())
+        return;
+    const QString clean = uri.trimmed();
+    m_recentServers.removeAll(clean);
+    m_recentServers.prepend(clean);
+    while (m_recentServers.size() > 10)
+        m_recentServers.removeLast();
+    save();
+}
+
+void AppSettings::clearRecentServers() {
+    if (m_recentServers.isEmpty())
+        return;
+    m_recentServers.clear();
+    save();
 }
 
 QList<SmartFolder> AppSettings::smartFolders() const {

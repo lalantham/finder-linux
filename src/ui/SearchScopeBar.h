@@ -24,6 +24,7 @@ public:
     void setStatusText(const QString& text);
     void setFilterSummary(const QString& text);
     void setSaveSearchEnabled(bool enabled);
+    void setIndexProvider(const QString& provider);
     void setFromFilter(const SearchFilter& filter);
     void reset();
 
@@ -34,12 +35,14 @@ public:
     [[nodiscard]] bool isSubfolders() const;
     [[nodiscard]] bool isContentSearch() const;
     void setContentSearch(bool enabled);
+    [[nodiscard]] bool isIndexEnabled() const;
 
 signals:
     void scopeChanged(SearchScope scope);
     void kindChanged(const QString& kind);
     void subfoldersToggled(bool subfolders);
     void contentToggled(bool enabled);
+    void indexToggled(bool enabled);
     void clearRequested();
     void saveSearchRequested();
 
@@ -63,6 +66,7 @@ private:
     QPushButton* m_thisPCBtn{nullptr};
     QCheckBox* m_subfoldersCb{nullptr};
     QCheckBox* m_contentsCb{nullptr};
+    QCheckBox* m_indexCb{nullptr};
     QLabel* m_kindLabel{nullptr};
     QComboBox* m_kindCombo{nullptr};
     QLabel* m_filterSummaryLabel{nullptr};

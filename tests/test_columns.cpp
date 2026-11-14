@@ -1,8 +1,12 @@
 #include "AppSettings.h"
+#include "DiskImageManager.h"
 #include "FileItem.h"
+#include "FileMetadataManager.h"
 #include "FileSystemModel.h"
+#include "MediaMetadata.h"
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -17,6 +21,10 @@ private slots:
     void testSortBySizeAndDates();
     void testViewOptionsPersistence();
     void testSmartFolderPersistence();
+    void testRecentLocationsPersistence();
+    void testDiskImageDetection();
+    void testDateAddedMetadata();
+    void testMediaMetadata();
     void testCommentXattr();
 
 private:
@@ -247,6 +255,76 @@ void TestColumns::testSmartFolderPersistence() {
 
     settings.removeSmartFolder(QStringLiteral("Large recent images"));
     QVERIFY(!settings.smartFolder(QStringLiteral("Large recent images")).isValid());
+}
+
+void TestColumns::testRecentLocationsPersistence() {
+    AppSettings& settings = AppSettings::instance();
+    settings.addRecentFolder(QStringLiteral("/tmp/one"));
+    settings.addRecentFolder(QStringLiteral("/tmp/two"));
+    settings.addRecentServer(QStringLiteral("sftp://example.test/home"));
+
+    AppSettings::setSettingsFilePath(m_settingsDir.filePath(QStringLiteral("columns.ini")));
+    QCOMPARE(settings.recentFolders().first(), QStringLiteral("/tmp/two"));
+    QVERIFY(settings.recentFolders().contains(QStringLiteral("/tmp/one")));
+    QCOMPARE(settings.recentServers().first(), QStringLiteral("sftp://example.test/home"));
+
+    settings.clearRecentFolders();
+    settings.clearRecentServers();
+    QVERIFY(settings.recentFolders().isEmpty());
+    QVERIFY(settings.recentServers().isEmpty());
+}
+
+void TestColumns::testDiskImageDetection() {
+    QVERIFY(DiskImageManager::isDiskImage(QStringLiteral("image.iso")));
+    QVERIFY(DiskImageManager::isDiskImage(QStringLiteral("image.IMG")));
+    QVERIFY(DiskImageManager::isDiskImage(QStringLiteral("image.raw")));
+    QVERIFY(DiskImageManager::isDiskImage(QStringLiteral("image.dmg")));
+    QVERIFY(DiskImageManager::isDiskImage(QStringLiteral("image.squashfs")));
+    QVERIFY(!DiskImageManager::isDiskImage(QStringLiteral("image.zip")));
+    QVERIFY(!DiskImageManager::isDiskImage(QStringLiteral("image.txt")));
+}
+
+void TestColumns::testDateAddedMetadata() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString metadataPath = dir.filePath(QStringLiteral("metadata.json"));
+    FileMetadataManager::setStoragePathForTesting(metadataPath);
+
+    const QString filePath = dir.filePath(QStringLiteral("tracked.txt"));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+
+    FileSystemModel model;
+    model.setRootPath(dir.path());
+    const QModelIndex idx = model.indexForPath(filePath);
+    QVERIFY(idx.isValid());
+    const QVariant added = model.data(idx, FileSystemModel::FileDateAddedRole);
+    QVERIFY(added.toDateTime().isValid());
+    QVERIFY(!model.data(model.index(idx.row(), FileSystemModel::ColDateAdded), Qt::DisplayRole)
+                 .toString()
+                 .isEmpty());
+
+    FileMetadataManager::instance().markOpened(filePath);
+    QVERIFY(FileMetadataManager::instance().lastOpened(filePath).isValid());
+    FileMetadataManager::instance().save();
+    FileMetadataManager::setStoragePathForTesting(metadataPath);
+    QVERIFY(FileMetadataManager::instance().dateAdded(filePath).isValid());
+    QVERIFY(FileMetadataManager::instance().lastOpened(filePath).isValid());
+}
+
+void TestColumns::testMediaMetadata() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("image.png"));
+    QImage image(3, 2, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    QVERIFY(image.save(path));
+
+    const MediaMetadata metadata = MediaMetadataReader::inspect(path);
+    QVERIFY(metadata.dimensions.contains(QStringLiteral("3")));
+    QVERIFY(metadata.dimensions.contains(QStringLiteral("2")));
 }
 
 void TestColumns::testCommentXattr() {

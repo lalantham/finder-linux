@@ -31,6 +31,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
+#include <unistd.h>
 
 static constexpr int PathRole = Qt::UserRole + 10;
 static constexpr int IsCustomFavRole = Qt::UserRole + 11;
@@ -47,6 +48,7 @@ static constexpr int IsMountedRole = Qt::UserRole + 21;
 static constexpr int IsUsbRole = Qt::UserRole + 22;
 static constexpr int IsSmartFolderRole = Qt::UserRole + 23;
 static constexpr int SmartFolderNameRole = Qt::UserRole + 24;
+static constexpr int ServerUriRole = Qt::UserRole + 25;
 
 namespace {
 
@@ -277,9 +279,11 @@ void Sidebar::refresh() {
 
     clear();
 
+    populateSmartLocations();
     populateFavorites();
     populateSmartFolders();
     populateLocations();
+    populateServers();
     populateTags();
     requestVolumeScan();
 
@@ -310,6 +314,23 @@ void Sidebar::requestVolumeScan(bool force) {
     watcher->setFuture(QtConcurrent::run([]() { return VolumeManager::mountedVolumes(); }));
 }
 
+void Sidebar::populateSmartLocations() {
+    auto* recents = new QTreeWidgetItem(this);
+    recents->setText(0, QStringLiteral("Recents"));
+    recents->setData(0, PathRole, QStringLiteral("recent://Recents"));
+    recents->setIcon(0, QIcon::fromTheme(QStringLiteral("document-open-recent"),
+                                         QIcon::fromTheme(QStringLiteral("folder-recent"))));
+
+    const QString gvfs = QStringLiteral("/run/user/%1/gvfs").arg(::getuid());
+    if (QDir(gvfs).exists() && !QDir(gvfs).entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty()) {
+        auto* shared = new QTreeWidgetItem(this);
+        shared->setText(0, QStringLiteral("Shared"));
+        shared->setData(0, PathRole, gvfs);
+        shared->setIcon(0, QIcon::fromTheme(QStringLiteral("network-workgroup"),
+                                            QIcon::fromTheme(QStringLiteral("folder-network"))));
+    }
+}
+
 void Sidebar::populateFavorites() {
     m_favoritesHeader = new QTreeWidgetItem(this);
     m_favoritesHeader->setText(0, QStringLiteral("Favorites"));
@@ -338,6 +359,13 @@ void Sidebar::populateFavorites() {
             QIcon::fromTheme(QStringLiteral("folder"), iconProv.icon(QFileIconProvider::Folder)));
         item->setIcon(0, icon);
     };
+
+    const QString applicationsPath = QStringLiteral("/usr/share/applications");
+    const bool hasApplications = QDir(applicationsPath).exists();
+    if (hasApplications) {
+        addFavItem(QStringLiteral("Applications"), applicationsPath,
+                   QStringLiteral("applications-other"), false);
+    }
 
     const QStringList orderedFavs = AppSettings::instance().favoriteOrder();
     const QString homePath = QDir::homePath();
@@ -504,6 +532,34 @@ void Sidebar::populateLocations() {
     }
 }
 
+void Sidebar::populateServers() {
+    m_serversHeader = nullptr;
+    const QStringList servers = AppSettings::instance().recentServers();
+    if (servers.isEmpty())
+        return;
+
+    m_serversHeader = new QTreeWidgetItem(this);
+    m_serversHeader->setText(0, QStringLiteral("Servers"));
+    m_serversHeader->setData(0, HeaderTypeRole, 5);
+    QFont hf = m_serversHeader->font(0);
+    hf.setBold(true);
+    hf.setPointSize(9);
+    m_serversHeader->setFont(0, hf);
+    m_serversHeader->setForeground(0, QBrush(QColor(128, 128, 128)));
+    m_serversHeader->setFlags(Qt::ItemIsEnabled);
+
+    for (const QString& uri : servers) {
+        auto* item = new QTreeWidgetItem(m_serversHeader);
+        const QUrl url(uri);
+        const QString label = url.host().isEmpty() ? uri : url.host();
+        item->setText(0, label);
+        item->setData(0, ServerUriRole, uri);
+        item->setToolTip(0, uri);
+        item->setIcon(0, QIcon::fromTheme(QStringLiteral("network-server"),
+                                          QIcon::fromTheme(QStringLiteral("folder-network"))));
+    }
+}
+
 void Sidebar::populateTags() {
     m_tagsHeader = new QTreeWidgetItem(this);
     m_tagsHeader->setText(0, QStringLiteral("Tags"));
@@ -596,6 +652,10 @@ void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/) {
         emit tagSelected(tag);
         return;
     }
+    if (item->data(0, ServerUriRole).isValid()) {
+        emit serverSelected(item->data(0, ServerUriRole).toString());
+        return;
+    }
     if (item->data(0, IsLocationRole).toBool()) {
         bool isMounted =
             item->data(0, IsMountedRole).isValid() ? item->data(0, IsMountedRole).toBool() : true;
@@ -614,6 +674,17 @@ void Sidebar::onItemClicked(QTreeWidgetItem* item, int /*column*/) {
 }
 
 void Sidebar::selectPath(const QString& path) {
+    if (path.startsWith(QStringLiteral("recent://"))) {
+        for (int i = 0; i < topLevelItemCount(); ++i) {
+            QTreeWidgetItem* top = topLevelItem(i);
+            if (top->data(0, PathRole).toString() == path) {
+                setCurrentItem(top);
+                return;
+            }
+        }
+        return;
+    }
+
     if (path.startsWith(QStringLiteral("smart://"))) {
         const QString name = path.mid(8);
         for (int i = 0; i < topLevelItemCount(); ++i) {
@@ -791,6 +862,37 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event) {
             return;
         }
 
+        if (headerType == 5) {
+            menu.addAction(QStringLiteral("Clear Recent Servers"), this, [this]() {
+                AppSettings::instance().clearRecentServers();
+                refresh();
+            });
+            menu.exec(event->globalPos());
+            return;
+        }
+
+        if (item->data(0, ServerUriRole).isValid()) {
+            const QString uri = item->data(0, ServerUriRole).toString();
+            auto* connectAct = menu.addAction(QIcon::fromTheme(QStringLiteral("network-connect")),
+                                              QStringLiteral("Connect"), this,
+                                              [this, uri]() { emit serverSelected(uri); });
+            QFont f = connectAct->font();
+            f.setBold(true);
+            connectAct->setFont(f);
+            menu.addSeparator();
+            menu.addAction(QStringLiteral("Remove from Recent Servers"), this, [this, uri]() {
+                QStringList servers = AppSettings::instance().recentServers();
+                servers.removeAll(uri);
+                AppSettings::instance().clearRecentServers();
+                for (const QString& server : servers) {
+                    AppSettings::instance().addRecentServer(server);
+                }
+                refresh();
+            });
+            menu.exec(event->globalPos());
+            return;
+        }
+
         // 3. Right clicked on Smart Folder item
         if (item->data(0, IsSmartFolderRole).toBool()) {
             const QString name = item->data(0, SmartFolderNameRole).toString();
@@ -874,8 +976,13 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event) {
             });
         }
 
+        const bool isVirtual = path.startsWith(QStringLiteral("recent://")) ||
+                               path.startsWith(QStringLiteral("smart://")) ||
+                               path.startsWith(QStringLiteral("apps://")) ||
+                               path.startsWith(QStringLiteral("tag://"));
+
         // Open in Terminal
-        if (!isTrash && !path.isEmpty()) {
+        if (!isTrash && !isVirtual && !path.isEmpty()) {
             menu.addAction(QIcon::fromTheme(QStringLiteral("utilities-terminal")),
                            QStringLiteral("Open in Terminal"), this,
                            [path]() { DesktopAppsManager::openTerminal(path); });

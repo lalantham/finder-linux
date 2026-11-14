@@ -8,6 +8,7 @@
 #include <QFutureWatcher>
 #include <QLabel>
 #include <QPushButton>
+#include <QTableWidget>
 #include <QThread>
 #include <QVBoxLayout>
 #include <QVector>
@@ -51,10 +52,17 @@ private slots:
     void onApplyRecursiveOwnership();
     void onLockToggled(bool locked);
     void onEditAcl();
+    void onVersionEdited();
+    void onCommentEdited();
+    void onAddXattr();
+    void onEditXattr();
+    void onRemoveXattr();
 
 private:
     void setupGeneralSection(QVBoxLayout* layout, const FileItem& item);
     void setupMetadataSection(QVBoxLayout* layout, const FileItem& item);
+    void setupDetailedMetadataTab(QVBoxLayout* layout, const FileItem& item);
+    void refreshXattrTable();
     void setupChecksumSection(QVBoxLayout* layout, const FileItem& item);
     void setupTagsSection(QVBoxLayout* layout, const QStringList& paths);
     void setupOpenWithSection(QVBoxLayout* layout, const FileItem& item);
@@ -91,6 +99,11 @@ private:
     QPushButton* m_checksumCopyBtn{nullptr};
     QFutureWatcher<QString>* m_checksumWatcher{nullptr};
     QFutureWatcher<QPair<qint64, int>>* m_multiSizeWatcher{nullptr};
+    QLineEdit* m_versionEdit{nullptr};
+    QLineEdit* m_commentEdit{nullptr};
+    QLabel* m_dateAddedValue{nullptr};
+    QLabel* m_lastOpenedValue{nullptr};
+    QTableWidget* m_xattrTable{nullptr};
     bool m_updatingPermissions{false};
 
     // Permission checkboxes

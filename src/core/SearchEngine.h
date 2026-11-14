@@ -48,6 +48,9 @@ public:
     // Local filesystem roots used by the "This PC" scope.
     [[nodiscard]] static QStringList localSearchRoots();
 
+    // Optional native index detection (Baloo, Tracker, Recoll).
+    [[nodiscard]] static QString availableIndexProvider();
+
 signals:
     void itemsFound(const QVector<FileItem>& items);
     void searchFinished(int totalFound);

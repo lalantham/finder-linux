@@ -61,6 +61,14 @@ Designed as a native desktop application with genuine filesystem operations, res
 * **Smart Folders**: save any search from **Save Search...** or **File → New Smart Folder...**.
   Saved searches appear in the sidebar and can be opened, edited, renamed, or deleted.
 * Active filters are summarized below the search controls; `F5` re-runs the current search.
+* Optional **Index** toggle uses Baloo, Tracker 3, or Recoll when installed, with automatic fallback to the filesystem walk.
+
+### Smart Locations
+* **Recents** — recent documents and folders from the freedesktop recent-files database.
+* **Applications** — installed desktop applications as a browsable folder.
+* **Shared** — mounted GVFS network locations when available.
+* **Recent Folders** and **Recent Servers** menus under **Go**.
+* **Servers** sidebar section for recently used network connections.
 
 ### 2. Quick Look (`Space`)
 * Dedicated floating HUD overlay.
@@ -108,7 +116,7 @@ Designed as a native desktop application with genuine filesystem operations, res
 * A compact **search icon** that opens the search field only when needed.
 * Segmented pill buttons for navigation and the four view modes.
 * Interactive Breadcrumb path bar with direct segment navigation and `Ctrl+L` editable path mode.
-* Rounded sidebar divided into **Favorites** (Home, Desktop, Documents, Downloads, custom pinned folders), **Locations** (Mounted drives, Root drive, Trash), Smart Folders, and Tags.
+* Rounded sidebar with **Recents**, **Shared**, **Favorites** (Applications, Home, Desktop, Documents, Downloads, custom pinned folders), **Locations** (Mounted drives, Root drive, Trash), **Servers**, Smart Folders, and Tags.
 * Dynamic **Light** and **Dark** themes following modern desktop design conventions.
 
 ### 6. Desktop Integration & Tabs
@@ -325,6 +333,13 @@ File Manager for Linux provides a dependable, responsive daily alternative to KD
   - Custom command line support with `%f`, `%F`, `%u`, `%U` token expansion.
   - Atomically updates `mimeapps.list` and triggers `kbuildsycoca6` when set as default.
   - AppImage files run directly as applications instead of being passed to a package manager; non-executable AppImages prompt to set the execute bit first. *Open With* still allows using Shelly, Ark, or another handler explicitly.
+* **Disk Images & Removable Media**:
+  - Mount `.iso`, `.img`, `.raw`, `.squashfs`, and `.udf` images through UDisks2 loop devices.
+  - Open a disk image by double-clicking it or via **File → Mount Disk Image...**.
+  - Mounted images appear in the sidebar and can be ejected normally; the loop device is cleaned up automatically.
+  - `.dmg` images can be mounted when `dmg2img` is installed.
+  - Create ISO images from a folder via **File → Create Disk Image from Current Folder...** or the folder context menu, using `xorriso`, `genisoimage`, or `mkisofs`.
+
 * **Removable Media & Drive Management**:
   - Mount, unmount, and eject operations prefer the UDisks2 D-Bus API, with `udisksctl`, `gio`, and `umount` fallbacks.
   - Safely remove USB drives via UDisks2 drive eject/power-off.
@@ -334,7 +349,11 @@ File Manager for Linux provides a dependable, responsive daily alternative to KD
   - Formats folder rows in List and Column views with total bytes and enclosed item counts.
   - Easily toggleable via the View menu or Preferences dialog.
 * **Get Info & Metadata**:
-  - Tabbed Get Info window: **General**, **Permissions**, **Open With**, and **Checksums**.
+  - Tabbed Get Info window: **General**, **Metadata**, **Permissions**, **Open With**, and **Checksums**.
+  - Tracks **Date Added** and **Date Last Opened** across sessions.
+  - Editable **Version** and **Comments** metadata.
+  - Image dimensions and EXIF camera details, plus audio/video duration, codec, and bitrate.
+  - Editable extended-attribute table with add, edit, and remove support.
   - Shows inode, device, hard-link count, and on-disk usage.
   - Lists extended attributes, POSIX ACL presence, and SELinux context.
   - On-demand SHA-256 checksum with a one-click copy button.

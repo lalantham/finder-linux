@@ -14,6 +14,32 @@ All notable changes to File Manager for Linux are documented here.
 - Added active-filter summaries and a Save Search action to the search bar.
 - `F5` re-runs an active search to pick up filesystem changes.
 
+### Search index support
+- Added optional Baloo, Tracker 3, and Recoll backend detection.
+- Added an **Index** search toggle that appears when a supported index is available.
+- Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
+
+### File metadata
+- Added persistent **Date Added** and **Date Last Opened** tracking.
+- Added a **Metadata** tab to Get Info with version and comments editing.
+- Added image dimensions/EXIF and audio/video duration, codec, and bitrate information.
+- Added an editable extended-attribute table with add/edit/remove actions.
+- Added a **Date Added** list column and sort order.
+
+### Disk images and removable media
+- Added ISO/IMG/RAW/SquashFS/UDF mounting through UDisks2 loop devices.
+- Added optional DMG conversion and mounting via `dmg2img`.
+- Added disk image mounting to double-click and the File menu.
+- Added ISO creation from folders using `xorriso`, `genisoimage`, or `mkisofs`.
+- Loop devices are now detached automatically after unmount/eject.
+
+### Smart sidebar locations
+- Added a **Recents** smart location backed by the freedesktop recent-files database.
+- Added **Applications** and **Shared** sidebar locations.
+- Added **Go → Recent Folders** and **Go → Recent Servers** menus.
+- Added a **Servers** sidebar section with reconnect and remove actions.
+- Recent folders and servers persist between sessions.
+
 ### Desktop-style UI polish
 - Restyled the toolbar and sidebar with rounded surfaces and spacing.
 - Combined back/forward controls and the breadcrumb path into one rounded path capsule.

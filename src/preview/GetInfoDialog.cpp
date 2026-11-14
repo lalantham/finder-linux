@@ -1,4 +1,6 @@
 #include "GetInfoDialog.h"
+#include "FileMetadataManager.h"
+#include "MediaMetadata.h"
 #include "TagManager.h"
 #include "WrappingLabel.h"
 #include <QApplication>
@@ -12,6 +14,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -23,6 +26,7 @@
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QTableWidgetItem>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
@@ -142,6 +146,25 @@ QByteArray readXattrValue(const QString& path, const char* name, bool symlink) {
         value.resize(static_cast<int>(readSize));
     }
     return value;
+}
+
+QString xattrDisplayValue(const QByteArray& value, bool* binary = nullptr) {
+    if (binary)
+        *binary = false;
+    if (value.isEmpty())
+        return QStringLiteral("(empty)");
+    if (value.contains('\0')) {
+        if (binary)
+            *binary = true;
+        return QStringLiteral("[binary: %1 bytes]").arg(value.size());
+    }
+    const QString text = QString::fromUtf8(value);
+    if (text.contains(QChar::ReplacementCharacter)) {
+        if (binary)
+            *binary = true;
+        return QStringLiteral("[binary: %1 bytes]").arg(value.size());
+    }
+    return text;
 }
 
 } // namespace
@@ -283,6 +306,15 @@ GetInfoDialog::GetInfoDialog(const QStringList& paths, QWidget* parent) : QDialo
     setupTagsSection(generalLayout, m_paths);
     generalLayout->addStretch();
     tabs->addTab(generalPage, QStringLiteral("General"));
+
+    if (!m_isMulti && !m_path.isEmpty()) {
+        auto* metadataPage = new QWidget(tabs);
+        auto* metadataLayout = new QVBoxLayout(metadataPage);
+        metadataLayout->setContentsMargins(8, 10, 8, 8);
+        setupDetailedMetadataTab(metadataLayout, m_item);
+        metadataLayout->addStretch();
+        tabs->addTab(metadataPage, QStringLiteral("Metadata"));
+    }
 
     if (!m_path.isEmpty()) {
         auto* permissionsPage = new QWidget(tabs);
@@ -562,6 +594,242 @@ void GetInfoDialog::setupMetadataSection(QVBoxLayout* layout, const FileItem& it
     }
 
     layout->addWidget(metadataBox);
+}
+
+void GetInfoDialog::setupDetailedMetadataTab(QVBoxLayout* layout, const FileItem& item) {
+    auto* infoBox = new QGroupBox(QStringLiteral("Dates & Version:"), this);
+    auto* form = new QFormLayout(infoBox);
+    form->setLabelAlignment(Qt::AlignRight);
+
+    const QDateTime added = FileMetadataManager::instance().dateAdded(m_path);
+    m_dateAddedValue =
+        new QLabel(added.isValid() ? added.toString(QStringLiteral("yyyy-MM-dd hh:mm"))
+                                   : QStringLiteral("Unknown"),
+                   infoBox);
+    form->addRow(QStringLiteral("Date Added:"), m_dateAddedValue);
+
+    const QDateTime opened = FileMetadataManager::instance().lastOpened(m_path);
+    m_lastOpenedValue = new QLabel(
+        (opened.isValid() ? opened : item.accessed()).toString(QStringLiteral("yyyy-MM-dd hh:mm")),
+        infoBox);
+    form->addRow(QStringLiteral("Last Opened:"), m_lastOpenedValue);
+
+    m_versionEdit = new QLineEdit(item.version(), infoBox);
+    m_versionEdit->setPlaceholderText(QStringLiteral("Optional version label"));
+    connect(m_versionEdit, &QLineEdit::editingFinished, this, &GetInfoDialog::onVersionEdited);
+    form->addRow(QStringLiteral("Version:"), m_versionEdit);
+
+    m_commentEdit = new QLineEdit(item.comment(), infoBox);
+    m_commentEdit->setPlaceholderText(QStringLiteral("Optional comment"));
+    connect(m_commentEdit, &QLineEdit::editingFinished, this, &GetInfoDialog::onCommentEdited);
+    form->addRow(QStringLiteral("Comments:"), m_commentEdit);
+    layout->addWidget(infoBox);
+
+    if (!item.isDir()) {
+        const MediaMetadata media = MediaMetadataReader::inspect(m_path);
+        if (!media.dimensions.isEmpty() || !media.duration.isEmpty() || !media.codec.isEmpty() ||
+            !media.bitrate.isEmpty() || !media.exif.isEmpty()) {
+            auto* mediaBox = new QGroupBox(QStringLiteral("Media Metadata:"), this);
+            auto* mediaForm = new QFormLayout(mediaBox);
+            mediaForm->setLabelAlignment(Qt::AlignRight);
+            if (!media.dimensions.isEmpty())
+                mediaForm->addRow(QStringLiteral("Dimensions:"),
+                                  new QLabel(media.dimensions, mediaBox));
+            if (!media.duration.isEmpty())
+                mediaForm->addRow(QStringLiteral("Duration:"),
+                                  new QLabel(media.duration, mediaBox));
+            if (!media.codec.isEmpty())
+                mediaForm->addRow(QStringLiteral("Codec:"), new QLabel(media.codec, mediaBox));
+            if (!media.bitrate.isEmpty())
+                mediaForm->addRow(QStringLiteral("Bitrate:"), new QLabel(media.bitrate, mediaBox));
+            for (const QString& line : media.exif) {
+                const qsizetype colon = line.indexOf(QLatin1Char(':'));
+                if (colon > 0) {
+                    mediaForm->addRow(line.left(colon + 1),
+                                      new QLabel(line.mid(colon + 1).trimmed(), mediaBox));
+                }
+            }
+            layout->addWidget(mediaBox);
+        }
+    }
+
+    auto* xattrBox = new QGroupBox(QStringLiteral("Extended Attributes:"), this);
+    auto* xattrLayout = new QVBoxLayout(xattrBox);
+    m_xattrTable = new QTableWidget(0, 3, xattrBox);
+    m_xattrTable->setHorizontalHeaderLabels(
+        {QStringLiteral("Name"), QStringLiteral("Value"), QStringLiteral("Size")});
+    m_xattrTable->horizontalHeader()->setStretchLastSection(false);
+    m_xattrTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    m_xattrTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_xattrTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    m_xattrTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_xattrTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_xattrTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_xattrTable->setMinimumHeight(140);
+    xattrLayout->addWidget(m_xattrTable);
+
+    auto* xattrButtons = new QHBoxLayout();
+    auto* addBtn = new QPushButton(QStringLiteral("Add..."), xattrBox);
+    auto* editBtn = new QPushButton(QStringLiteral("Edit..."), xattrBox);
+    auto* removeBtn = new QPushButton(QStringLiteral("Remove"), xattrBox);
+    connect(addBtn, &QPushButton::clicked, this, &GetInfoDialog::onAddXattr);
+    connect(editBtn, &QPushButton::clicked, this, &GetInfoDialog::onEditXattr);
+    connect(removeBtn, &QPushButton::clicked, this, &GetInfoDialog::onRemoveXattr);
+    xattrButtons->addWidget(addBtn);
+    xattrButtons->addWidget(editBtn);
+    xattrButtons->addWidget(removeBtn);
+    xattrButtons->addStretch();
+    xattrLayout->addLayout(xattrButtons);
+    layout->addWidget(xattrBox);
+
+    refreshXattrTable();
+}
+
+void GetInfoDialog::refreshXattrTable() {
+    if (!m_xattrTable)
+        return;
+    const QStringList names = readXattrNames(m_path, m_item.isSymLink());
+    const int count = static_cast<int>(names.size());
+    m_xattrTable->setRowCount(count);
+    for (int row = 0; row < count; ++row) {
+        const QString& name = names.at(row);
+        const QByteArray value =
+            readXattrValue(m_path, name.toUtf8().constData(), m_item.isSymLink());
+        auto* nameItem = new QTableWidgetItem(name);
+        nameItem->setData(Qt::UserRole, name);
+        auto* valueItem = new QTableWidgetItem(xattrDisplayValue(value));
+        auto* sizeItem = new QTableWidgetItem(QString::number(value.size()));
+        m_xattrTable->setItem(row, 0, nameItem);
+        m_xattrTable->setItem(row, 1, valueItem);
+        m_xattrTable->setItem(row, 2, sizeItem);
+    }
+}
+
+void GetInfoDialog::onVersionEdited() {
+    if (!m_versionEdit)
+        return;
+    if (!m_item.setVersion(m_versionEdit->text())) {
+        QMessageBox::warning(this, QStringLiteral("Version Not Saved"),
+                             QStringLiteral("Could not write the version metadata."));
+        m_versionEdit->setText(m_item.version());
+    }
+}
+
+void GetInfoDialog::onCommentEdited() {
+    if (!m_commentEdit)
+        return;
+    if (!m_item.setComment(m_commentEdit->text())) {
+        QMessageBox::warning(this, QStringLiteral("Comment Not Saved"),
+                             QStringLiteral("Could not write the comment metadata."));
+        m_commentEdit->setText(m_item.comment());
+    }
+}
+
+void GetInfoDialog::onAddXattr() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Add Extended Attribute"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    auto* nameEdit = new QLineEdit(&dialog);
+    nameEdit->setPlaceholderText(QStringLiteral("user.example"));
+    auto* valueEdit = new QLineEdit(&dialog);
+    form->addRow(QStringLiteral("Name:"), nameEdit);
+    form->addRow(QStringLiteral("Value:"), valueEdit);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted || nameEdit->text().trimmed().isEmpty())
+        return;
+
+    const QByteArray name = nameEdit->text().trimmed().toUtf8();
+    const QByteArray value = valueEdit->text().toUtf8();
+    const QByteArray path = QFile::encodeName(m_path);
+    const int rc = m_item.isSymLink()
+                       ? ::lsetxattr(path.constData(), name.constData(), value.constData(),
+                                     static_cast<size_t>(value.size()), 0)
+                       : ::setxattr(path.constData(), name.constData(), value.constData(),
+                                    static_cast<size_t>(value.size()), 0);
+    if (rc != 0) {
+        QMessageBox::warning(this, QStringLiteral("Extended Attribute"),
+                             QString::fromLocal8Bit(std::strerror(errno)));
+        return;
+    }
+    refreshXattrTable();
+}
+
+void GetInfoDialog::onEditXattr() {
+    if (!m_xattrTable)
+        return;
+    const int row = m_xattrTable->currentRow();
+    if (row < 0)
+        return;
+    const QString name = m_xattrTable->item(row, 0)->data(Qt::UserRole).toString();
+    const QByteArray value = readXattrValue(m_path, name.toUtf8().constData(), m_item.isSymLink());
+    bool binary = false;
+    const QString display = xattrDisplayValue(value, &binary);
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Edit Extended Attribute"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout();
+    auto* nameEdit = new QLineEdit(name, &dialog);
+    auto* valueEdit = new QLineEdit(binary ? QString() : display, &dialog);
+    if (binary)
+        valueEdit->setPlaceholderText(QStringLiteral("Binary value will be replaced"));
+    form->addRow(QStringLiteral("Name:"), nameEdit);
+    form->addRow(QStringLiteral("Value:"), valueEdit);
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+
+    const QByteArray path = QFile::encodeName(m_path);
+    const QByteArray oldName = name.toUtf8();
+    if (nameEdit->text().trimmed() != name) {
+        m_item.isSymLink() ? ::lremovexattr(path.constData(), oldName.constData())
+                           : ::removexattr(path.constData(), oldName.constData());
+    }
+    const QByteArray newName = nameEdit->text().trimmed().toUtf8();
+    const QByteArray newValue = valueEdit->text().toUtf8();
+    const int rc = m_item.isSymLink()
+                       ? ::lsetxattr(path.constData(), newName.constData(), newValue.constData(),
+                                     static_cast<size_t>(newValue.size()), 0)
+                       : ::setxattr(path.constData(), newName.constData(), newValue.constData(),
+                                    static_cast<size_t>(newValue.size()), 0);
+    if (rc != 0) {
+        QMessageBox::warning(this, QStringLiteral("Extended Attribute"),
+                             QString::fromLocal8Bit(std::strerror(errno)));
+    }
+    refreshXattrTable();
+}
+
+void GetInfoDialog::onRemoveXattr() {
+    if (!m_xattrTable)
+        return;
+    const int row = m_xattrTable->currentRow();
+    if (row < 0)
+        return;
+    const QString name = m_xattrTable->item(row, 0)->data(Qt::UserRole).toString();
+    if (QMessageBox::question(this, QStringLiteral("Remove Extended Attribute"),
+                              QStringLiteral("Remove \"%1\"?").arg(name),
+                              QMessageBox::Yes | QMessageBox::No,
+                              QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+    const QByteArray path = QFile::encodeName(m_path);
+    const QByteArray bytes = name.toUtf8();
+    const int rc = m_item.isSymLink() ? ::lremovexattr(path.constData(), bytes.constData())
+                                      : ::removexattr(path.constData(), bytes.constData());
+    if (rc != 0 && errno != ENODATA) {
+        QMessageBox::warning(this, QStringLiteral("Extended Attribute"),
+                             QString::fromLocal8Bit(std::strerror(errno)));
+    }
+    refreshXattrTable();
 }
 
 void GetInfoDialog::setupChecksumSection(QVBoxLayout* layout, const FileItem& item) {

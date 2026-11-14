@@ -98,6 +98,8 @@ private slots:
     void onNewSmartFolder();
     void onEditSmartFolder(const QString& name);
     void onDeleteSmartFolder(const QString& name);
+    void mountDiskImage(const QString& path);
+    void createDiskImageFromFolder(const QString& folder);
 
     // Undo / Redo
     void onUndo();

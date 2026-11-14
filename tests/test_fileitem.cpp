@@ -1,7 +1,7 @@
-#include <QTest>
+#include "FileItem.h"
 #include <QTemporaryDir>
 #include <QTemporaryFile>
-#include "FileItem.h"
+#include <QTest>
 
 class TestFileItem : public QObject {
     Q_OBJECT
@@ -11,10 +11,10 @@ private slots:
     void testFormatPermissions();
     void testItemProperties();
     void testCalculatedFolderSize();
+    void testVersionMetadata();
 };
 
-void TestFileItem::testFormatSize()
-{
+void TestFileItem::testFormatSize() {
     QCOMPARE(FileItem::formatSize(500), QStringLiteral("500 B"));
     QCOMPARE(FileItem::formatSize(1000), QStringLiteral("1.0 KB"));
     QCOMPARE(FileItem::formatSize(1500000), QStringLiteral("1.5 MB"));
@@ -22,8 +22,7 @@ void TestFileItem::testFormatSize()
     QCOMPARE(FileItem::formatSize(-1), QStringLiteral("--"));
 }
 
-void TestFileItem::testFormatPermissions()
-{
+void TestFileItem::testFormatPermissions() {
     mode_t regularMode = S_IFREG | 0644;
     QString regularPerms = FileItem::formatPermissions(regularMode);
     QCOMPARE(regularPerms, QStringLiteral("-rw-r--r--"));
@@ -33,8 +32,7 @@ void TestFileItem::testFormatPermissions()
     QCOMPARE(dirPerms, QStringLiteral("drwxr-xr-x"));
 }
 
-void TestFileItem::testItemProperties()
-{
+void TestFileItem::testItemProperties() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -58,8 +56,7 @@ void TestFileItem::testItemProperties()
     QVERIFY(item.hardLinks() >= 1);
 }
 
-void TestFileItem::testCalculatedFolderSize()
-{
+void TestFileItem::testCalculatedFolderSize() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -71,6 +68,26 @@ void TestFileItem::testCalculatedFolderSize()
     dirItem.setCalculatedFolderSize(2048576, 42);
     QCOMPARE(dirItem.size(), 2048576);
     QVERIFY(dirItem.formattedSize().contains(QStringLiteral("42 items")));
+}
+
+void TestFileItem::testVersionMetadata() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    const QString path = tempDir.filePath(QStringLiteral("versioned.txt"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("x");
+    file.close();
+
+    FileItem item(path);
+    if (!item.setVersion(QStringLiteral("2.1.0"))) {
+        QSKIP("Filesystem does not support user extended attributes");
+    }
+    QCOMPARE(item.version(), QStringLiteral("2.1.0"));
+    FileItem reloaded(path);
+    QCOMPARE(reloaded.version(), QStringLiteral("2.1.0"));
+    QVERIFY(reloaded.setVersion(QString()));
+    QCOMPARE(FileItem(path).version(), QString());
 }
 
 QTEST_MAIN(TestFileItem)

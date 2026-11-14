@@ -1,5 +1,6 @@
 #include "FileSystemModel.h"
 #include "AppSettings.h"
+#include "FileMetadataManager.h"
 #include "FileOperationEngine.h"
 #include "TagManager.h"
 #include <QCollator>
@@ -48,6 +49,8 @@ QString FileSystemModel::columnKey(int column) {
         return QStringLiteral("group");
     case ColComment:
         return QStringLiteral("comment");
+    case ColDateAdded:
+        return QStringLiteral("dateAdded");
     default:
         return {};
     }
@@ -86,6 +89,8 @@ QString FileSystemModel::columnTitle(int column) {
         return QStringLiteral("Group");
     case ColComment:
         return QStringLiteral("Comment");
+    case ColDateAdded:
+        return QStringLiteral("Date Added");
     default:
         return {};
     }
@@ -457,6 +462,15 @@ void FileSystemModel::applyFilterInternal() {
         }
     }
 
+    if (!m_items.isEmpty()) {
+        QStringList paths;
+        paths.reserve(m_items.size());
+        for (const FileItem& item : m_items) {
+            paths.append(item.path());
+        }
+        FileMetadataManager::instance().registerPaths(paths);
+    }
+
     scheduleFolderSizeCalculations();
 }
 
@@ -527,12 +541,13 @@ void FileSystemModel::setFilterQuery(const QString& query, const QString& kind) 
     emit directoryLoaded(m_rootPath, static_cast<int>(m_items.size()));
 }
 
-void FileSystemModel::setSearchResults(const QVector<FileItem>& items) {
+void FileSystemModel::setSearchResults(const QVector<FileItem>& items, bool applySorting) {
     cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
     m_items = items;
-    sortInternal();
+    if (applySorting)
+        sortInternal();
     endResetModel();
     emit directoryLoaded(QStringLiteral("search://"), static_cast<int>(m_items.size()));
 }
@@ -656,8 +671,13 @@ void FileSystemModel::sortInternal() {
         case ColDateCreated:
             entry.date = item.created();
             break;
-        case ColDateOpened:
-            entry.date = item.accessed();
+        case ColDateOpened: {
+            const QDateTime opened = FileMetadataManager::instance().lastOpened(item.path());
+            entry.date = opened.isValid() ? opened : item.accessed();
+            break;
+        }
+        case ColDateAdded:
+            entry.date = FileMetadataManager::instance().dateAdded(item.path());
             break;
         case ColSize:
             entry.number = item.size();
@@ -822,8 +842,11 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const {
             return item.kind();
         case ColDateCreated:
             return item.created().toString(QStringLiteral("yyyy-MM-dd hh:mm"));
-        case ColDateOpened:
-            return item.accessed().toString(QStringLiteral("yyyy-MM-dd hh:mm"));
+        case ColDateOpened: {
+            const QDateTime opened = FileMetadataManager::instance().lastOpened(item.path());
+            return (opened.isValid() ? opened : item.accessed())
+                .toString(QStringLiteral("yyyy-MM-dd hh:mm"));
+        }
         case ColTags:
             return item.tags().join(QStringLiteral(", "));
         case ColPermissions:
@@ -834,6 +857,11 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const {
             return item.group();
         case ColComment:
             return item.comment();
+        case ColDateAdded: {
+            const QDateTime added = FileMetadataManager::instance().dateAdded(item.path());
+            return added.isValid() ? added.toString(QStringLiteral("yyyy-MM-dd hh:mm"))
+                                   : QStringLiteral("--");
+        }
         default:
             return {};
         }
@@ -885,8 +913,12 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const {
         return item.tags();
     case FileDateCreatedRole:
         return item.created();
-    case FileDateOpenedRole:
-        return item.accessed();
+    case FileDateOpenedRole: {
+        const QDateTime opened = FileMetadataManager::instance().lastOpened(item.path());
+        return opened.isValid() ? opened : item.accessed();
+    }
+    case FileDateAddedRole:
+        return FileMetadataManager::instance().dateAdded(item.path());
     case FileCommentRole:
         return item.comment();
     case FileMimeTypeRole:
@@ -921,6 +953,8 @@ QVariant FileSystemModel::headerData(int section, Qt::Orientation orientation, i
                 return QStringLiteral("File group");
             case ColComment:
                 return QStringLiteral("File comment stored in the user.xdg.comment xattr");
+            case ColDateAdded:
+                return QStringLiteral("First time this item was seen by File Manager");
             default:
                 break;
             }
