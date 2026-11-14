@@ -44,6 +44,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     // Navigation
@@ -118,6 +119,8 @@ private slots:
 private:
     void setupUi();
     void setupMenusAndShortcuts();
+    void setupWindowControls();
+    void updateWindowMask();
     void updateNavigationState();
     void updateStatusInfo();
     bool ensureOperationsIdle();
@@ -164,4 +167,5 @@ private:
     bool m_isCutOperation{false};
     bool m_kwinActivationPending{false};
     qint64 m_operationStartTime{0};
+    bool m_customWindowChrome{false};
 };

@@ -114,6 +114,9 @@ Designed as a native desktop application with genuine filesystem operations, res
 * Confirmation dialog before permanent deletion or emptying the trash.
 
 ### 5. Native UI Design & Theming
+* Frameless desktop-style window shell with rounded corners and traffic-light controls.
+* Drag the toolbar to move the window; resize from window edges; double-click the toolbar to maximize.
+* Optional **Use native window title bar** preference for compositor-managed windows.
 * Rounded, desktop-style toolbar and sidebar surfaces.
 * Back/forward controls and the breadcrumb path share one rounded path capsule.
 * Theme icon toolbar buttons for navigation, views, tag actions, view options, more actions, and search.

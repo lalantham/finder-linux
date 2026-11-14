@@ -174,6 +174,12 @@ public:
     void setShowPreviewPane(bool show) {
         m_showPreviewPane = show;
     }
+    [[nodiscard]] bool useNativeTitleBar() const noexcept {
+        return m_useNativeTitleBar;
+    }
+    void setUseNativeTitleBar(bool use) {
+        m_useNativeTitleBar = use;
+    }
 
     [[nodiscard]] AppTheme theme() const noexcept {
         return m_theme;
@@ -309,6 +315,7 @@ private:
     bool m_showPathBar{true};
     bool m_showStatusBar{true};
     bool m_showPreviewPane{false};
+    bool m_useNativeTitleBar{false};
     AppTheme m_theme{AppTheme::System};
     QString m_defaultPath;
     QStringList m_customFavorites;

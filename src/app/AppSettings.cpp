@@ -119,6 +119,7 @@ void AppSettings::load() {
     m_showPathBar = s.value(QStringLiteral("showPathBar"), true).toBool();
     m_showStatusBar = s.value(QStringLiteral("showStatusBar"), true).toBool();
     m_showPreviewPane = s.value(QStringLiteral("showPreviewPane"), false).toBool();
+    m_useNativeTitleBar = s.value(QStringLiteral("useNativeTitleBar"), false).toBool();
     m_theme = static_cast<AppTheme>(
         s.value(QStringLiteral("theme"), static_cast<int>(AppTheme::System)).toInt());
     m_customFavorites = s.value(QStringLiteral("customFavorites")).toStringList();
@@ -167,6 +168,7 @@ void AppSettings::save() {
     s.setValue(QStringLiteral("showPathBar"), m_showPathBar);
     s.setValue(QStringLiteral("showStatusBar"), m_showStatusBar);
     s.setValue(QStringLiteral("showPreviewPane"), m_showPreviewPane);
+    s.setValue(QStringLiteral("useNativeTitleBar"), m_useNativeTitleBar);
     s.setValue(QStringLiteral("theme"), static_cast<int>(m_theme));
     s.setValue(QStringLiteral("customFavorites"), m_customFavorites);
     s.setValue(QStringLiteral("favoriteOrder"), m_favoriteOrder);
