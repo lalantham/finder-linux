@@ -19,11 +19,6 @@ All notable changes to File Manager for Linux are documented here.
 - Added an **Index** search toggle that appears when a supported index is available.
 - Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
 
-### Desktop-style window shell
-- Added a frameless window with rounded outer corners and traffic-light close/minimize/maximize controls.
-- Added toolbar drag-to-move, toolbar double-click maximize, and system edge resizing.
-- Added a **Use native window title bar** preference for compositor-managed fallback.
-
 ### Custom tag management
 - Added custom tag creation, color selection, rename, and delete.
 - Added a **Manage Tags** dialog from the sidebar and toolbar tag menu.

@@ -23,12 +23,10 @@
 #include "ViewOptionsDialog.h"
 #include "VolumeManager.h"
 #include "XdgTrash.h"
-#include <QAbstractButton>
 #include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
-#include <QComboBox>
 #include <QCryptographicHash>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -51,13 +49,10 @@
 #include <QMimeData>
 #include <QMimeDatabase>
 #include <QMouseEvent>
-#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QProgressDialog>
 #include <QPushButton>
-#include <QRegion>
-#include <QResizeEvent>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -241,15 +236,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     qApp->installEventFilter(this);
 
-    m_customWindowChrome = !AppSettings::instance().useNativeTitleBar();
-    if (m_customWindowChrome) {
-        setWindowFlag(Qt::FramelessWindowHint, true);
-    }
-
     setupUi();
     setupMenusAndShortcuts();
-    if (m_customWindowChrome)
-        setupWindowControls();
 
     // Restore geometry and toolbar/dock state before the first frame.
     if (!AppSettings::instance().windowGeometry().isEmpty()) {
@@ -261,7 +249,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         restoreState(AppSettings::instance().windowState());
     }
     applyChromeVisibility();
-    QTimer::singleShot(0, this, &MainWindow::updateWindowMask);
 
     // Initial navigation
     const QStringList savedTabs = AppSettings::instance().savedTabs();
@@ -476,47 +463,6 @@ void MainWindow::activateDesktopAction(const QString& actionName, const QVariant
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (m_customWindowChrome && event->type() == QEvent::MouseButtonPress) {
-        auto* me = static_cast<QMouseEvent*>(event);
-        if (me->button() == Qt::LeftButton) {
-            const QPoint global = me->globalPosition().toPoint();
-            const QPoint local = mapFromGlobal(global);
-            constexpr int edge = 6;
-            Qt::Edges edges;
-            if (local.x() <= edge)
-                edges |= Qt::LeftEdge;
-            if (local.y() <= edge)
-                edges |= Qt::TopEdge;
-            if (local.x() >= width() - edge)
-                edges |= Qt::RightEdge;
-            if (local.y() >= height() - edge)
-                edges |= Qt::BottomEdge;
-            if (edges && windowHandle() && windowHandle()->startSystemResize(edges)) {
-                return true;
-            }
-
-            auto* widget = qobject_cast<QWidget*>(watched);
-            if (widget && (widget == m_toolbar || m_toolbar->isAncestorOf(widget))) {
-                if (!qobject_cast<QAbstractButton*>(widget) && !qobject_cast<QLineEdit*>(widget) &&
-                    !qobject_cast<QComboBox*>(widget) && windowHandle() &&
-                    windowHandle()->startSystemMove()) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    if (m_customWindowChrome && event->type() == QEvent::MouseButtonDblClick) {
-        auto* me = static_cast<QMouseEvent*>(event);
-        auto* widget = qobject_cast<QWidget*>(watched);
-        if (me->button() == Qt::LeftButton && widget &&
-            (widget == m_toolbar || m_toolbar->isAncestorOf(widget)) &&
-            !qobject_cast<QAbstractButton*>(widget) && !qobject_cast<QLineEdit*>(widget)) {
-            isMaximized() ? showNormal() : showMaximized();
-            return true;
-        }
-    }
-
     if (event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::BackButton) {
@@ -528,57 +474,6 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
         }
     }
     return QMainWindow::eventFilter(watched, event);
-}
-
-void MainWindow::setupWindowControls() {
-    auto* controls = new QWidget(menuBar());
-    controls->setObjectName(QStringLiteral("windowControls"));
-    auto* layout = new QHBoxLayout(controls);
-    layout->setContentsMargins(10, 0, 6, 0);
-    layout->setSpacing(8);
-
-    auto makeLight = [controls](const QColor& color, const QString& tooltip) {
-        auto* button = new QToolButton(controls);
-        button->setFixedSize(12, 12);
-        button->setToolTip(tooltip);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setStyleSheet(
-            QStringLiteral("QToolButton { background: %1; border: 1px solid %2; "
-                           "border-radius: 6px; } QToolButton:hover { background: %3; }")
-                .arg(color.name(), color.darker(125).name(), color.lighter(115).name()));
-        return button;
-    };
-
-    auto* closeBtn = makeLight(QColor(QStringLiteral("#ff5f57")), QStringLiteral("Close"));
-    auto* minimizeBtn = makeLight(QColor(QStringLiteral("#febc2e")), QStringLiteral("Minimize"));
-    auto* maximizeBtn = makeLight(QColor(QStringLiteral("#28c840")), QStringLiteral("Maximize"));
-    layout->addWidget(closeBtn);
-    layout->addWidget(minimizeBtn);
-    layout->addWidget(maximizeBtn);
-    controls->setFixedHeight(26);
-
-    connect(closeBtn, &QToolButton::clicked, this, &QWidget::close);
-    connect(minimizeBtn, &QToolButton::clicked, this, &QWidget::showMinimized);
-    connect(maximizeBtn, &QToolButton::clicked, this,
-            [this]() { isMaximized() ? showNormal() : showMaximized(); });
-    menuBar()->setCornerWidget(controls, Qt::TopLeftCorner);
-}
-
-void MainWindow::updateWindowMask() {
-    if (!m_customWindowChrome)
-        return;
-    if (isMaximized() || isFullScreen()) {
-        clearMask();
-        return;
-    }
-    QPainterPath path;
-    path.addRoundedRect(QRectF(rect()), 12.0, 12.0);
-    setMask(QRegion(path.toFillPolygon().toPolygon()));
-}
-
-void MainWindow::resizeEvent(QResizeEvent* event) {
-    QMainWindow::resizeEvent(event);
-    updateWindowMask();
 }
 
 void MainWindow::setupUi() {
@@ -2167,11 +2062,6 @@ void MainWindow::onPreferences() {
     form->addRow(QStringLiteral("Auto-purge Trash older than:"), trashPurgeDays);
     layout->addLayout(form);
 
-    auto* nativeTitle = new QCheckBox(QStringLiteral("Use native window title bar"), &dialog);
-    nativeTitle->setChecked(settings.useNativeTitleBar());
-    nativeTitle->setToolTip(QStringLiteral("Restart File Manager to apply."));
-    layout->addWidget(nativeTitle);
-
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
@@ -2214,11 +2104,9 @@ void MainWindow::onPreferences() {
             this, QStringLiteral("Default File Manager"),
             registered
                 ? QStringLiteral(
-                      "File Manager is now registered as the default file manager for "
-                      "folders.\n\n"
+                      "File Manager is now registered as the default file manager for folders.\n\n"
                       "If another file manager was handling \"Show in folder\", restarting "
-                      "the session (or that file manager) once will hand it over to File "
-                      "Manager.")
+                      "the session (or that file manager) once will hand it over to File Manager.")
                 : QStringLiteral("Could not register File Manager as the default file manager."));
     });
 
@@ -2233,14 +2121,7 @@ void MainWindow::onPreferences() {
     settings.setRememberFolderViewModes(rememberFolderViews->isChecked());
     settings.setCalculateFolderSizes(calcFolderSizes->isChecked());
     settings.setTrashAutoPurgeDays(trashPurgeDays->value());
-    const bool titleBarChanged = settings.useNativeTitleBar() != nativeTitle->isChecked();
-    settings.setUseNativeTitleBar(nativeTitle->isChecked());
     settings.save();
-    if (titleBarChanged) {
-        QMessageBox::information(
-            this, QStringLiteral("Restart Required"),
-            QStringLiteral("Restart File Manager to change the window title bar."));
-    }
 
     m_tabManager->setCalculateFolderSizes(calcFolderSizes->isChecked());
 
@@ -2815,8 +2696,8 @@ void MainWindow::onOperationFinished(const OperationResult& result) {
                                  result.warnings.join(QLatin1Char('\n')));
     }
 
-    // Surface as desktop notification when window is inactive, for long-running operations (>
-    // 3s), or errors
+    // Surface as desktop notification when window is inactive, for long-running operations (> 3s),
+    // or errors
     qint64 durationMs = QDateTime::currentMSecsSinceEpoch() - m_operationStartTime;
     if (!isActiveWindow() || durationMs > 3000 || !result.success) {
         QString verb = QStringLiteral("Operation");
@@ -3311,17 +3192,16 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
         clearDotBtn->setText(QStringLiteral("✕"));
         clearDotBtn->setCursor(Qt::PointingHandCursor);
         clearDotBtn->setToolTip(QStringLiteral("Remove All Tags"));
-        clearDotBtn->setStyleSheet(
-            QStringLiteral("QToolButton {"
-                           "  background-color: rgba(128, 128, 128, 0.25);"
-                           "  color: #888888;"
-                           "  border-radius: 9px;"
-                           "  border: 1px solid rgba(128, 128, 128, 0.4);"
-                           "  font-size: 10px;"
-                           "  font-weight: bold;"
-                           "}"
-                           "QToolButton:hover { background-color: rgba(128, 128, 128, 0.45); "
-                           "color: #ffffff; }"));
+        clearDotBtn->setStyleSheet(QStringLiteral(
+            "QToolButton {"
+            "  background-color: rgba(128, 128, 128, 0.25);"
+            "  color: #888888;"
+            "  border-radius: 9px;"
+            "  border: 1px solid rgba(128, 128, 128, 0.4);"
+            "  font-size: 10px;"
+            "  font-weight: bold;"
+            "}"
+            "QToolButton:hover { background-color: rgba(128, 128, 128, 0.45); color: #ffffff; }"));
         QObject::connect(clearDotBtn, &QToolButton::clicked, &menu, [&menu, selectedPaths]() {
             for (const auto& sp : selectedPaths) {
                 TagManager::instance().clearTags(sp);
