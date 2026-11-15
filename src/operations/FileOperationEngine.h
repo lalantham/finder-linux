@@ -102,6 +102,7 @@ private:
 
     OperationProgress m_currentProgress;
     qint64 m_progressStartMs{0};
+    qint64 m_lastProgressEmitMs{0};
     qint64 m_lastTimeMs{0};
     qint64 m_lastBytes{0};
 

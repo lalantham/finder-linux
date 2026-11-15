@@ -25,6 +25,7 @@ class QuickLookDialog : public QDialog {
 
 public:
     explicit QuickLookDialog(QWidget* parent = nullptr);
+    ~QuickLookDialog() override;
 
     void setFiles(const QStringList& filePaths, int currentIndex = 0);
     void showFile(const QString& filePath);
@@ -74,6 +75,7 @@ private:
     qreal m_zoom{1.0};
     int m_rotation{0};
     bool m_fitImage{true};
+    int m_fontId{-1};
     QString m_pdfPath;
     int m_pdfPage{0};
     int m_pdfPageCount{0};

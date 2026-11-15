@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFont>
+#include <QPixmapCache>
 #include <QStyledItemDelegate>
 
 class FileItemDelegate : public QStyledItemDelegate {
@@ -22,6 +23,9 @@ public:
     enum class LabelPosition { Bottom, Right };
 
     void setIconSize(int size) {
+        if (m_iconSize != size) {
+            QPixmapCache::clear();
+        }
         m_iconSize = size;
     }
     [[nodiscard]] int iconSize() const noexcept {

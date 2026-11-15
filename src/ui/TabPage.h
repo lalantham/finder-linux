@@ -135,6 +135,7 @@ private:
     SearchEngine* m_searchEngine{nullptr};
     QTimer* m_searchBatchTimer{nullptr};
     QTimer* m_filterDebounceTimer{nullptr};
+    QTimer* m_previewDebounceTimer{nullptr};
     QVector<FileItem> m_pendingSearchResults;
     SmartFolder m_activeSmartFolder;
     bool m_isSmartFolderView{false};

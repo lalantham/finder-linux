@@ -619,6 +619,18 @@ ColumnPreviewPane::ColumnPreviewPane(QWidget* parent) : QWidget(parent) {
     });
     layout->addWidget(m_qlBtn);
 
+    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this,
+            [this](const QString& path) {
+                if (path != m_currentPath)
+                    return;
+                auto& pm = PreviewManager::instance();
+                if (!pm.isImage(path))
+                    return;
+                const QPixmap pix = pm.iconThumbnail(path, 256);
+                if (!pix.isNull())
+                    m_iconLabel->setPixmap(pix);
+            });
+
     layout->addStretch();
 }
 
@@ -674,8 +686,8 @@ void ColumnPreviewPane::setItem(const QString& path) {
 
     auto& pm = PreviewManager::instance();
     if (pm.isImage(path)) {
-        QPixmap pix = pm.getThumbnail(path, QSize(220, 140));
-        m_iconLabel->setPixmap(pix);
+        const QPixmap pix = pm.iconThumbnail(path, 256);
+        m_iconLabel->setPixmap(pix.isNull() ? item.icon().pixmap(96, 96) : pix);
     } else {
         m_iconLabel->setPixmap(item.icon().pixmap(96, 96));
     }

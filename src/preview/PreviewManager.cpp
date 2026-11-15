@@ -11,6 +11,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
+#include <QThreadPool>
 #include <QUrl>
 #include <QtConcurrent/QtConcurrentRun>
 #include <memory>
@@ -25,6 +26,28 @@ constexpr int NormalBucket = 128;
 constexpr int LargeBucket = 256;
 constexpr int XLargeBucket = 512;
 constexpr int XXLargeBucket = 1024;
+
+QThreadPool& thumbnailPool() {
+    static QThreadPool pool;
+    static const bool initialized = []() {
+        pool.setMaxThreadCount(2);
+        pool.setExpiryTimeout(30000);
+        return true;
+    }();
+    Q_UNUSED(initialized);
+    return pool;
+}
+
+QThreadPool& officePool() {
+    static QThreadPool pool;
+    static const bool initialized = []() {
+        pool.setMaxThreadCount(1);
+        pool.setExpiryTimeout(30000);
+        return true;
+    }();
+    Q_UNUSED(initialized);
+    return pool;
+}
 
 const QSet<QString>& officeExtensions() {
     static const QSet<QString> exts = {
@@ -80,7 +103,10 @@ QImage renderPdfFirstPage(const QString& path, int bucket) {
     std::unique_ptr<Poppler::Page> page(doc->page(0));
     if (!page)
         return {};
-    const QImage rendered = page->renderToImage(150.0, 150.0);
+    const QSizeF pageSize = page->pageSizeF();
+    const qreal maxSide = qMax(pageSize.width(), pageSize.height());
+    const qreal dpi = maxSide > 0.0 ? qBound<qreal>(72.0, 72.0 * bucket / maxSide, 300.0) : 150.0;
+    const QImage rendered = page->renderToImage(dpi, dpi);
     if (rendered.isNull())
         return {};
     return rendered.scaled(QSize(bucket, bucket), Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -107,37 +133,45 @@ quint32 readBigEndian32(const QByteArray& data, qsizetype offset) {
 }
 
 // QImageReader does not reliably expose PNG tEXt chunks, so parse them here to
-// validate the XDG thumbnail cache (Thumb::URI / Thumb::MTime).
+// validate the XDG thumbnail cache (Thumb::URI / Thumb::MTime). Read only the
+// chunk headers and small tEXt payloads; IDAT can be hundreds of KB.
 QHash<QString, QString> readPngTextChunks(const QString& filePath) {
     QHash<QString, QString> result;
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
         return result;
     }
-    const QByteArray data = file.readAll();
-    if (!data.startsWith(QByteArrayLiteral("\x89PNG\r\n\x1a\n"))) {
+
+    QByteArray signature(8, Qt::Uninitialized);
+    if (file.read(signature.data(), 8) != 8 ||
+        !signature.startsWith(QByteArrayLiteral("\x89PNG\r\n\x1a\n"))) {
         return result;
     }
 
-    qsizetype offset = 8;
-    while (offset + 12 <= data.size()) {
-        const quint32 length = readBigEndian32(data, offset);
-        const QByteArray type = data.mid(offset + 4, 4);
-        const qsizetype payloadOffset = offset + 8;
-        if (payloadOffset + static_cast<qsizetype>(length) + 4 > data.size()) {
+    while (true) {
+        QByteArray header(8, Qt::Uninitialized);
+        if (file.read(header.data(), 8) != 8) {
             break;
         }
-
-        if (type == QByteArrayLiteral("tEXt")) {
-            const QByteArray payload = data.mid(payloadOffset, static_cast<qsizetype>(length));
+        const quint32 length = readBigEndian32(header, 0);
+        const QByteArray type = header.mid(4, 4);
+        constexpr quint32 MaxTextChunk = 4096;
+        if (type == QByteArrayLiteral("tEXt") && length <= MaxTextChunk &&
+            file.bytesAvailable() >= static_cast<qint64>(length) + 4) {
+            const QByteArray payload = file.read(length);
             const qsizetype separator = payload.indexOf('\0');
             if (separator > 0) {
                 result.insert(QString::fromLatin1(payload.left(separator)),
                               QString::fromLatin1(payload.mid(separator + 1)));
             }
+            file.seek(file.pos() + 4); // CRC
+        } else {
+            const qint64 payloadAndCrc = static_cast<qint64>(length) + 4;
+            if (payloadAndCrc > file.size() - file.pos() ||
+                !file.seek(file.pos() + payloadAndCrc)) {
+                break;
+            }
         }
-
-        offset = payloadOffset + static_cast<qsizetype>(length) + 4;
         if (type == QByteArrayLiteral("IEND")) {
             break;
         }
@@ -291,7 +325,7 @@ QString PreviewManager::cacheFilePath(const QString& path, int bucket) const {
            QString::fromLatin1(hash) + QStringLiteral(".png");
 }
 
-QPixmap PreviewManager::loadFromDiskCache(const QString& path, int bucket) {
+QImage PreviewManager::loadImageFromDiskCache(const QString& path, int bucket) {
     const QString cachePath = cacheFilePath(path, bucket);
     if (!QFile::exists(cachePath)) {
         return {};
@@ -306,11 +340,11 @@ QPixmap PreviewManager::loadFromDiskCache(const QString& path, int bucket) {
     }
 
     QImageReader reader(cachePath);
-    const QImage image = reader.read();
-    if (image.isNull()) {
-        return {};
-    }
-    return QPixmap::fromImage(image);
+    return reader.read();
+}
+
+QPixmap PreviewManager::loadFromDiskCache(const QString& path, int bucket) {
+    return QPixmap::fromImage(loadImageFromDiskCache(path, bucket));
 }
 
 void PreviewManager::saveToDiskCache(const QString& path, int bucket, const QImage& image) {
@@ -425,7 +459,7 @@ void PreviewManager::requestOfficePreview(const QString& path) {
         return;
     m_officePending.insert(path);
 
-    (void)QtConcurrent::run([this, path]() {
+    (void)QtConcurrent::run(&officePool(), [this, path]() {
         QString error;
         const QString pdfPath = ensureOfficePdf(path, &error);
         QMetaObject::invokeMethod(
@@ -576,22 +610,20 @@ QPixmap PreviewManager::iconThumbnail(const QString& path, int iconSize) {
         return *cached;
     }
 
-    QPixmap thumbnail = loadFromDiskCache(path, bucket);
-    if (!thumbnail.isNull()) {
-        m_thumbnailCache.insert(cacheKey, new QPixmap(thumbnail),
-                                thumbnail.width() * thumbnail.height() * 4);
-        return thumbnail;
-    }
-
+    // Repaints for pending/failed items must not touch the disk again.
     if (m_pending.contains(cacheKey) || m_failed.contains(cacheKey)) {
         return {};
     }
     m_pending.insert(cacheKey);
 
-    (void)QtConcurrent::run([this, path, bucket, cacheKey]() {
-        const QImage image = generateThumbnailImage(path, bucket);
-        if (!image.isNull()) {
-            saveToDiskCache(path, bucket, image);
+    (void)QtConcurrent::run(&thumbnailPool(), [this, path, bucket, cacheKey]() {
+        // Disk probing and generation both run away from the UI thread.
+        QImage image = loadImageFromDiskCache(path, bucket);
+        if (image.isNull()) {
+            image = generateThumbnailImage(path, bucket);
+            if (!image.isNull()) {
+                saveToDiskCache(path, bucket, image);
+            }
         }
 
         QMetaObject::invokeMethod(
@@ -645,7 +677,13 @@ QPixmap PreviewManager::getPdfPreview(const QString& path, const QSize& targetSi
         return {};
     }
 
-    QImage img = documentPage->renderToImage(150.0, 150.0);
+    const QSizeF pageSize = documentPage->pageSizeF();
+    const qreal widthDpi =
+        pageSize.width() > 0.0 ? 72.0 * targetSize.width() / pageSize.width() : 150.0;
+    const qreal heightDpi =
+        pageSize.height() > 0.0 ? 72.0 * targetSize.height() / pageSize.height() : 150.0;
+    const qreal dpi = qBound<qreal>(24.0, qMin(widthDpi, heightDpi), 300.0);
+    QImage img = documentPage->renderToImage(dpi, dpi);
     if (img.isNull()) {
         return {};
     }

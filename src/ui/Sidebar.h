@@ -72,6 +72,7 @@ private slots:
     void onItemClicked(QTreeWidgetItem* item, int column);
     void onSpringTimeout();
     void checkVolumeChanges();
+    void scheduleRefresh();
     void onUdisksInterfacesAdded(const QDBusObjectPath& path, const QVariantMap& interfaces);
     void onUdisksInterfacesRemoved(const QDBusObjectPath& path, const QStringList& interfaces);
 
@@ -94,6 +95,7 @@ private:
     QFileSystemWatcher* m_volumeWatcher{nullptr};
     QTimer* m_volumePollTimer{nullptr};
     QTimer* m_volumeDebounceTimer{nullptr};
+    QTimer* m_refreshCoalescer{nullptr};
     QString m_lastVolumeFingerprint;
     QVector<VolumeEntry> m_lastVolumes;
     bool m_volumeScanRunning{false};

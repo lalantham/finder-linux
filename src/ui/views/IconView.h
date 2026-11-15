@@ -27,6 +27,7 @@ signals:
     void contextMenuRequested(const QPoint& globalPos, const QStringList& selectedPaths);
 
 protected:
+    void showEvent(QShowEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
@@ -50,6 +51,7 @@ private:
     FileSystemModel* m_fsModel{nullptr};
     FileItemDelegate* m_delegate{nullptr};
     QTimer* m_springTimer{nullptr};
+    QTimer* m_thumbnailRepaintTimer{nullptr};
     QString m_springHoverPath;
     QString m_folderPath;
     QHash<QString, QPoint> m_iconPositions;

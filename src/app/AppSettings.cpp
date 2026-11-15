@@ -12,6 +12,7 @@ AppSettings& AppSettings::instance() {
 }
 
 void AppSettings::setSettingsFilePath(const QString& path) {
+    instance().flush();
     s_customSettingsPath = path;
     instance().load();
 }
@@ -79,6 +80,10 @@ static std::unique_ptr<QSettings> createQSettings() {
 }
 
 AppSettings::AppSettings() {
+    m_saveTimer.setSingleShot(true);
+    m_saveTimer.setInterval(400);
+    QObject::connect(&m_saveTimer, &QTimer::timeout, [this]() { save(); });
+
     m_defaultPath = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
     if (m_defaultPath.isEmpty()) {
         m_defaultPath = QDir::homePath();
@@ -87,6 +92,8 @@ AppSettings::AppSettings() {
 }
 
 void AppSettings::load() {
+    m_saveTimer.stop();
+    m_savePending = false;
     auto sPtr = createQSettings();
     QSettings& s = *sPtr;
     m_viewMode = static_cast<ViewMode>(
@@ -138,7 +145,20 @@ void AppSettings::load() {
     m_trashAutoPurgeDays = s.value(QStringLiteral("trashAutoPurgeDays"), 0).toInt();
 }
 
+void AppSettings::scheduleSave() {
+    m_savePending = true;
+    m_saveTimer.start();
+}
+
+void AppSettings::flush() {
+    if (m_savePending) {
+        save();
+    }
+}
+
 void AppSettings::save() {
+    m_saveTimer.stop();
+    m_savePending = false;
     auto sPtr = createQSettings();
     QSettings& s = *sPtr;
     s.setValue(QStringLiteral("viewMode"), static_cast<int>(m_viewMode));
@@ -199,7 +219,7 @@ void AppSettings::setFolderViewMode(const QString& path, ViewMode mode) {
     if (path.isEmpty() || path.startsWith(QStringLiteral("tag://")))
         return;
     m_folderViewModes.insert(path, static_cast<int>(mode));
-    save();
+    scheduleSave();
 }
 
 QStringList AppSettings::defaultListColumns() {
@@ -227,7 +247,7 @@ void AppSettings::setDefaultViewOptions(const FolderViewOptions& options) {
     m_viewShowItemInfo = options.showItemInfo;
     m_viewShowIconPreview = options.showIconPreview;
     m_viewManualArrangement = options.manualArrangement;
-    save();
+    scheduleSave();
 }
 
 FolderViewOptions AppSettings::viewOptions(const QString& path) const {
@@ -264,12 +284,12 @@ void AppSettings::setViewOptions(const QString& path, const FolderViewOptions& o
            << ((options.labelPosition == 1) ? 1 : 0) << qBound(0, options.gridSpacing, 48)
            << options.showItemInfo << options.showIconPreview << options.manualArrangement;
     m_folderViewOptions.insert(path, values);
-    save();
+    scheduleSave();
 }
 
 void AppSettings::clearViewOptions(const QString& path) {
     if (m_folderViewOptions.remove(path) > 0) {
-        save();
+        scheduleSave();
     }
 }
 
@@ -287,12 +307,12 @@ void AppSettings::setIconPositions(const QString& path, const QVariantMap& posit
         return;
     }
     m_iconPositions.insert(path, positions);
-    save();
+    scheduleSave();
 }
 
 void AppSettings::clearIconPositions(const QString& path) {
     if (m_iconPositions.remove(path) > 0) {
-        save();
+        scheduleSave();
     }
 }
 
@@ -310,14 +330,14 @@ void AppSettings::addRecentFolder(const QString& path) {
     m_recentFolders.prepend(clean);
     while (m_recentFolders.size() > 15)
         m_recentFolders.removeLast();
-    save();
+    scheduleSave();
 }
 
 void AppSettings::clearRecentFolders() {
     if (m_recentFolders.isEmpty())
         return;
     m_recentFolders.clear();
-    save();
+    scheduleSave();
 }
 
 void AppSettings::addRecentServer(const QString& uri) {
@@ -328,14 +348,14 @@ void AppSettings::addRecentServer(const QString& uri) {
     m_recentServers.prepend(clean);
     while (m_recentServers.size() > 10)
         m_recentServers.removeLast();
-    save();
+    scheduleSave();
 }
 
 void AppSettings::clearRecentServers() {
     if (m_recentServers.isEmpty())
         return;
     m_recentServers.clear();
-    save();
+    scheduleSave();
 }
 
 QList<SmartFolder> AppSettings::smartFolders() const {
@@ -390,7 +410,7 @@ void AppSettings::saveSmartFolder(const SmartFolder& folder) {
         updated.append(map);
     }
     m_smartFolders = updated;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::removeSmartFolder(const QString& name) {
@@ -404,23 +424,23 @@ void AppSettings::removeSmartFolder(const QString& name) {
     }
     if (updated.size() != m_smartFolders.size()) {
         m_smartFolders = updated;
-        save();
+        scheduleSave();
     }
 }
 
 void AppSettings::setListVisibleColumns(const QStringList& columns) {
     m_listVisibleColumns = columns;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::setListColumnOrder(const QStringList& order) {
     m_listColumnOrder = order;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::setListColumnWidths(const QVariantMap& widths) {
     m_listColumnWidths = widths;
-    save();
+    scheduleSave();
 }
 
 int AppSettings::columnViewWidth(const QString& path) const {
@@ -434,14 +454,14 @@ void AppSettings::setColumnViewWidth(const QString& path, int width) {
     if (path.isEmpty() || path.startsWith(QStringLiteral("tag://")) || width <= 0)
         return;
     m_columnViewWidths.insert(path, width);
-    save();
+    scheduleSave();
 }
 
 void AppSettings::removeColumnViewWidth(const QString& path) {
     if (path.isEmpty())
         return;
     if (m_columnViewWidths.remove(path) > 0) {
-        save();
+        scheduleSave();
     }
 }
 
@@ -457,7 +477,7 @@ void AppSettings::addFavorite(const QString& path) {
     } else if (!m_favoriteOrder.contains(path)) {
         m_favoriteOrder.append(path);
     }
-    save();
+    scheduleSave();
 }
 
 void AppSettings::removeFavorite(const QString& path) {
@@ -472,7 +492,7 @@ void AppSettings::removeFavorite(const QString& path) {
         changed = true;
     }
     if (changed) {
-        save();
+        scheduleSave();
     }
 }
 
@@ -523,7 +543,7 @@ QStringList AppSettings::favoriteOrder() const {
 
 void AppSettings::setFavoriteOrder(const QStringList& order) {
     m_favoriteOrder = order;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::reorderFavorite(const QString& path, int newIndex) {
@@ -571,51 +591,51 @@ void AppSettings::moveFavoriteToBottom(const QString& path) {
 
 void AppSettings::setHiddenFavorites(const QStringList& list) {
     m_hiddenFavorites = list;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::hideFavorite(const QString& path) {
     if (!m_hiddenFavorites.contains(path)) {
         m_hiddenFavorites.append(path);
-        save();
+        scheduleSave();
     }
 }
 
 void AppSettings::unhideFavorite(const QString& path) {
     if (m_hiddenFavorites.removeAll(path) > 0) {
-        save();
+        scheduleSave();
     }
 }
 
 void AppSettings::unhideAllFavorites() {
     if (!m_hiddenFavorites.isEmpty()) {
         m_hiddenFavorites.clear();
-        save();
+        scheduleSave();
     }
 }
 
 void AppSettings::setHiddenLocations(const QStringList& list) {
     m_hiddenLocations = list;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::hideLocation(const QString& pathOrName) {
     if (!m_hiddenLocations.contains(pathOrName)) {
         m_hiddenLocations.append(pathOrName);
-        save();
+        scheduleSave();
     }
 }
 
 void AppSettings::unhideLocation(const QString& pathOrName) {
     if (m_hiddenLocations.removeAll(pathOrName) > 0) {
-        save();
+        scheduleSave();
     }
 }
 
 void AppSettings::unhideAllLocations() {
     if (!m_hiddenLocations.isEmpty()) {
         m_hiddenLocations.clear();
-        save();
+        scheduleSave();
     }
 }
 
@@ -624,7 +644,7 @@ void AppSettings::resetSidebarDefaults() {
     m_locationOrder.clear();
     m_hiddenFavorites.clear();
     m_hiddenLocations.clear();
-    save();
+    scheduleSave();
 }
 
 QStringList AppSettings::locationOrder() const {
@@ -660,7 +680,7 @@ QStringList AppSettings::locationOrder() const {
 
 void AppSettings::setLocationOrder(const QStringList& order) {
     m_locationOrder = order;
-    save();
+    scheduleSave();
 }
 
 void AppSettings::reorderLocation(const QString& path, int newIndex) {

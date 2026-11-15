@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <Qt>
@@ -34,6 +35,8 @@ public:
 
     void load();
     void save();
+    void scheduleSave();
+    void flush();
 
     [[nodiscard]] ViewMode viewMode() const noexcept {
         return m_viewMode;
@@ -326,4 +329,6 @@ private:
     QVariantMap m_folderViewModes;
     QVariantMap m_columnViewWidths;
     int m_trashAutoPurgeDays{0};
+    QTimer m_saveTimer;
+    bool m_savePending{false};
 };

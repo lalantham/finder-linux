@@ -15,6 +15,7 @@ private slots:
     void testFileItemTags();
     void testTagQueries();
     void testCustomTagLifecycle();
+    void testCachedTagsForFile();
 
 private:
     std::unique_ptr<QTemporaryDir> m_tempDir;
@@ -145,6 +146,22 @@ void TestTags::testCustomTagLifecycle() {
 
     QVERIFY2(tm.removeTagDefinition(renamed, &error), qPrintable(error));
     QVERIFY(!tm.hasTag(filePath, renamed));
+}
+
+void TestTags::testCachedTagsForFile() {
+    const QString filePath = m_tempDir->filePath(QStringLiteral("cached_tags.txt"));
+    QFile file(filePath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("cached");
+    file.close();
+
+    auto& tm = TagManager::instance();
+    tm.clearTags(filePath);
+    QVERIFY(tm.cachedTagsForFile(filePath).isEmpty());
+    QVERIFY(tm.addTag(filePath, QStringLiteral("Green")));
+    QVERIFY(tm.cachedTagsForFile(filePath).contains(QStringLiteral("Green")));
+    QVERIFY(tm.clearTags(filePath));
+    QVERIFY(tm.cachedTagsForFile(filePath).isEmpty());
 }
 
 QTEST_MAIN(TestTags)

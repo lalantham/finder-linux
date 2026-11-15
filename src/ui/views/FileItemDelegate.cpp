@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmapCache>
 #include <QTimer>
 
 FileItemDelegate::FileItemDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
@@ -78,12 +79,24 @@ void FileItemDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
             thumbnail = PreviewManager::instance().iconThumbnail(itemPath, iconSize);
         }
         if (!thumbnail.isNull()) {
-            const QSize scaled = thumbnail.size().scaled(iconRect.size(), Qt::KeepAspectRatio);
-            const QRect target(iconRect.x() + (iconRect.width() - scaled.width()) / 2,
-                               iconRect.y() + (iconRect.height() - scaled.height()) / 2,
-                               scaled.width(), scaled.height());
-            painter->drawPixmap(
-                target, thumbnail.scaled(scaled, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            const QSize scaledSize = thumbnail.size().scaled(iconRect.size(), Qt::KeepAspectRatio);
+            const QRect target(iconRect.x() + (iconRect.width() - scaledSize.width()) / 2,
+                               iconRect.y() + (iconRect.height() - scaledSize.height()) / 2,
+                               scaledSize.width(), scaledSize.height());
+            const qreal dpr = painter->device() ? painter->device()->devicePixelRatioF() : 1.0;
+            const QString cacheKey = QStringLiteral("%1#%2#%3x%4@%5")
+                                         .arg(itemPath)
+                                         .arg(thumbnail.cacheKey())
+                                         .arg(scaledSize.width())
+                                         .arg(scaledSize.height())
+                                         .arg(dpr);
+            QPixmap scaled;
+            if (!QPixmapCache::find(cacheKey, &scaled)) {
+                scaled =
+                    thumbnail.scaled(scaledSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                QPixmapCache::insert(cacheKey, scaled);
+            }
+            painter->drawPixmap(target, scaled);
         } else {
             QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
             if (icon.isNull()) {

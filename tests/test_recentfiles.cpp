@@ -14,6 +14,7 @@ private slots:
     void testAddAndList();
     void testPreservesExistingApplications();
     void testClear();
+    void testTrailingSlashFolderHrefs();
 
 private:
     static void writeFile(const QString& path, const QByteArray& contents);
@@ -115,6 +116,40 @@ void TestRecentFiles::testClear() {
     RecentFilesManager::clear();
     QVERIFY(!QFile::exists(storage));
     QVERIFY(RecentFilesManager::list(10).isEmpty());
+}
+
+void TestRecentFiles::testTrailingSlashFolderHrefs() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString storage = directory.path() + QStringLiteral("/recently-used.xbel");
+    RecentFilesManager::setStoragePathForTesting(storage);
+
+    const QString folderPath = directory.path() + QStringLiteral("/Vulnerability Report");
+    QVERIFY(QDir().mkpath(folderPath));
+
+    // Folder hrefs written with a trailing slash must still yield a named entry.
+    const QString href =
+        QUrl::fromLocalFile(folderPath + QStringLiteral("/")).toString(QUrl::FullyEncoded);
+    writeFile(
+        storage,
+        QStringLiteral("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                       "<xbel version=\"1.0\" "
+                       "xmlns:bookmark=\"http://www.freedesktop.org/standards/desktop-bookmarks\" "
+                       "xmlns:mime=\"http://www.freedesktop.org/standards/shared-mime-info\">\n"
+                       "  <bookmark href=\"%1\" added=\"2026-01-01T00:00:00Z\" "
+                       "modified=\"2026-01-01T00:00:00Z\" visited=\"2026-01-01T00:00:00Z\">\n"
+                       "    <info><metadata owner=\"http://freedesktop.org\">\n"
+                       "      <mime:mime-type type=\"inode/directory\"/>\n"
+                       "    </metadata></info>\n"
+                       "  </bookmark>\n"
+                       "</xbel>\n")
+            .arg(href)
+            .toUtf8());
+
+    const QList<RecentFile> recent = RecentFilesManager::list(10);
+    QCOMPARE(recent.size(), 1);
+    QCOMPARE(recent.at(0).path, folderPath);
+    QCOMPARE(QFileInfo(recent.at(0).path).fileName(), QStringLiteral("Vulnerability Report"));
 }
 
 QTEST_MAIN(TestRecentFiles)

@@ -202,11 +202,13 @@ private:
     QVector<FileItem> m_items;
     QVector<FileItem> m_allFolderItems;
     QHash<QString, QPair<qint64, int>> m_folderSizeCache;
+    QHash<QString, qint64> m_folderSizeCacheTime;
     QString m_longestFileName;
     QFileSystemWatcher m_watcher;
     QTimer* m_refreshTimer{nullptr};
 
     static bool s_asyncLoading;
     quint64 m_generation{0};
+    quint64 m_folderSizeGeneration{0};
     std::shared_ptr<std::atomic<bool>> m_cancelFlag;
 };

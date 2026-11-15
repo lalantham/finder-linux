@@ -30,6 +30,7 @@ public:
 
     // Tag inspection
     QStringList tagsForFile(const QString& path);
+    [[nodiscard]] QStringList cachedTagsForFile(const QString& path) const;
     bool hasTag(const QString& path, const QString& tag);
 
     // Tag mutations
@@ -65,6 +66,7 @@ private:
 
     mutable QMutex m_mutex;
     QMap<QString, QStringList> m_fileTags;
+    QSet<QString> m_noXattr;
     QMap<QString, QSet<QString>> m_tagFiles;
     QList<TagInfo> m_customTags;
     QString m_registryPath;

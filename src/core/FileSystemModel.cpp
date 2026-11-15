@@ -6,14 +6,41 @@
 #include <QCollator>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QFuture>
 #include <QFutureWatcher>
 #include <QHash>
 #include <QLocale>
 #include <QSet>
 #include <QStorageInfo>
+#include <QThreadPool>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+
+namespace {
+
+QHash<QString, QFuture<QPair<qint64, int>>>& folderSizeFutures() {
+    static QHash<QString, QFuture<QPair<qint64, int>>> futures;
+    return futures;
+}
+
+QHash<QString, qint64>& folderSizeFutureTimes() {
+    static QHash<QString, qint64> times;
+    return times;
+}
+
+QThreadPool& folderSizePool() {
+    static QThreadPool pool;
+    static const bool initialized = []() {
+        pool.setMaxThreadCount(1);
+        pool.setExpiryTimeout(30000);
+        return true;
+    }();
+    Q_UNUSED(initialized);
+    return pool;
+}
+
+} // namespace
 
 bool FileSystemModel::s_asyncLoading = false;
 
@@ -147,6 +174,10 @@ void FileSystemModel::setRootPath(const QString& path) {
     if (m_rootPath == cleanPath)
         return;
 
+    m_folderSizeCache.clear();
+    m_folderSizeCacheTime.clear();
+    ++m_folderSizeGeneration;
+
     if (!m_rootPath.isEmpty()) {
         m_watcher.removePath(m_rootPath);
     }
@@ -169,6 +200,9 @@ void FileSystemModel::setTaggedFiles(const QString& tag) {
     }
     m_activeTag = tag;
     m_rootPath = QStringLiteral("tag://") + tag;
+    m_folderSizeCache.clear();
+    m_folderSizeCacheTime.clear();
+    ++m_folderSizeGeneration;
     populate();
     emit rootPathChanged(m_rootPath);
 }
@@ -192,6 +226,9 @@ void FileSystemModel::setCalculateFolderSizes(bool enabled) {
         return;
     m_calculateFolderSizes = enabled;
     if (m_calculateFolderSizes) {
+        m_folderSizeCache.clear();
+        m_folderSizeCacheTime.clear();
+        ++m_folderSizeGeneration;
         scheduleFolderSizeCalculations();
     } else {
         refresh();
@@ -483,22 +520,75 @@ void FileSystemModel::scheduleFolderSizeCalculations() {
         if (!m_items[i].isDir())
             continue;
         const QString dirPath = m_items[i].path();
+        const qint64 modified = QFileInfo(dirPath).lastModified().toMSecsSinceEpoch();
         if (m_folderSizeCache.contains(dirPath)) {
-            const auto& p = m_folderSizeCache.value(dirPath);
-            m_items[i].setCalculatedFolderSize(p.first, p.second);
-            emit dataChanged(index(i, ColSize), index(i, ColSize));
-            continue;
+            if (m_folderSizeCacheTime.value(dirPath) == modified) {
+                const auto& p = m_folderSizeCache.value(dirPath);
+                m_items[i].setCalculatedFolderSize(p.first, p.second);
+                emit dataChanged(index(i, ColSize), index(i, ColSize));
+                continue;
+            }
+            m_folderSizeCache.remove(dirPath);
+            m_folderSizeCacheTime.remove(dirPath);
+            folderSizeFutures().remove(dirPath);
+            folderSizeFutureTimes().remove(dirPath);
         }
 
-        quint64 gen = m_generation;
+        QFuture<QPair<qint64, int>> future;
+        auto existing = folderSizeFutures().constFind(dirPath);
+        if (existing != folderSizeFutures().constEnd() && existing.value().isFinished()) {
+            if (folderSizeFutureTimes().value(dirPath) == modified) {
+                // Reuse a completed shared walk instead of starting another one.
+                const QPair<qint64, int> res = existing.value().result();
+                m_folderSizeCache[dirPath] = res;
+                m_folderSizeCacheTime[dirPath] = modified;
+                m_items[i].setCalculatedFolderSize(res.first, res.second);
+                emit dataChanged(index(i, ColSize), index(i, ColSize));
+                continue;
+            }
+            folderSizeFutures().remove(dirPath);
+            folderSizeFutureTimes().remove(dirPath);
+            existing = folderSizeFutures().constFind(dirPath);
+        }
+        if (existing != folderSizeFutures().constEnd()) {
+            future = existing.value();
+        } else {
+            future = QtConcurrent::run(&folderSizePool(), [dirPath]() -> QPair<qint64, int> {
+                qint64 total = 0;
+                int count = 0;
+                QDirIterator it(dirPath,
+                                QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
+                                QDirIterator::Subdirectories);
+                while (it.hasNext()) {
+                    it.next();
+                    const QFileInfo fi = it.fileInfo();
+                    if (!fi.isDir()) {
+                        total += fi.size();
+                    }
+                    ++count;
+                    if (count > 50000)
+                        break;
+                }
+                return {total, count};
+            });
+            folderSizeFutures().insert(dirPath, future);
+            folderSizeFutureTimes().insert(dirPath, modified);
+        }
+
+        const quint64 gen = m_folderSizeGeneration;
         auto* watcher = new QFutureWatcher<QPair<qint64, int>>(this);
         connect(watcher, &QFutureWatcher<QPair<qint64, int>>::finished, this,
-                [this, watcher, dirPath, gen]() {
-                    QPair<qint64, int> res = watcher->result();
+                [this, watcher, dirPath, gen, modified]() {
+                    const QPair<qint64, int> res = watcher->result();
                     watcher->deleteLater();
-                    if (gen != m_generation)
+                    if (gen != m_folderSizeGeneration)
+                        return;
+                    if (!QFileInfo(dirPath).isDir())
+                        return;
+                    if (QFileInfo(dirPath).lastModified().toMSecsSinceEpoch() != modified)
                         return;
                     m_folderSizeCache[dirPath] = res;
+                    m_folderSizeCacheTime[dirPath] = modified;
                     for (int r = 0; r < m_items.size(); ++r) {
                         if (m_items[r].path() == dirPath) {
                             m_items[r].setCalculatedFolderSize(res.first, res.second);
@@ -507,27 +597,7 @@ void FileSystemModel::scheduleFolderSizeCalculations() {
                         }
                     }
                 });
-
-        auto cancel = m_cancelFlag;
-        watcher->setFuture(QtConcurrent::run([dirPath, cancel]() -> QPair<qint64, int> {
-            qint64 total = 0;
-            int count = 0;
-            QDirIterator it(dirPath, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
-                            QDirIterator::Subdirectories);
-            while (it.hasNext()) {
-                if (cancel && cancel->load(std::memory_order_relaxed))
-                    break;
-                it.next();
-                QFileInfo fi = it.fileInfo();
-                if (!fi.isDir()) {
-                    total += fi.size();
-                }
-                count++;
-                if (count > 50000)
-                    break;
-            }
-            return {total, count};
-        }));
+        watcher->setFuture(future);
     }
 }
 

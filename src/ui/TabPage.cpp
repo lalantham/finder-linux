@@ -71,7 +71,10 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     auto connectPreviewSelection = [this](QAbstractItemView* view) {
         if (view && view->selectionModel()) {
             connect(view->selectionModel(), &QItemSelectionModel::currentChanged, this,
-                    [this](const QModelIndex&, const QModelIndex&) { updatePreviewPane(); });
+                    [this](const QModelIndex&, const QModelIndex&) {
+                        if (m_previewDebounceTimer)
+                            m_previewDebounceTimer->start();
+                    });
         }
     };
     connectPreviewSelection(m_iconView);
@@ -100,6 +103,11 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     m_filterDebounceTimer->setSingleShot(true);
     m_filterDebounceTimer->setInterval(250);
     connect(m_filterDebounceTimer, &QTimer::timeout, this, &TabPage::runSearch);
+
+    m_previewDebounceTimer = new QTimer(this);
+    m_previewDebounceTimer->setSingleShot(true);
+    m_previewDebounceTimer->setInterval(120);
+    connect(m_previewDebounceTimer, &QTimer::timeout, this, &TabPage::updatePreviewPane);
 
     connect(m_searchScopeBar, &SearchScopeBar::scopeChanged, this,
             [this](SearchScope) { runSearch(); });

@@ -287,6 +287,19 @@ File Manager for Linux provides a dependable, responsive daily alternative to KD
   - **Metadata Preservation**: Copies and cross-filesystem moves preserve permissions, timestamps, extended attributes, ACLs, and ownership where permitted.
   - **Archive Security**: Hardened against Zip Slip / directory traversal (`../`) and unauthorized symlink target escapes outside the extraction root.
 * **Performance & Responsiveness**:
+  - Thumbnail cache probes, PDF rendering, and media probing run off the UI thread.
+  - Thumbnail repaints are coalesced and scaled previews are cached.
+  - Thumbnail, Office-conversion, and folder-size work use separate bounded thread pools.
+  - Folder-size walks survive directory refreshes and are shared by Column View.
+  - Search reads cached tags first and bounds cold xattr probes.
+  - Settings writes are debounced and flushed on exit.
+  - Preview pane updates are debounced; image/PDF/video thumbnails load asynchronously.
+  - Get Info media probing and EXIF/ffprobe work run off the UI thread.
+  - PDF pages render at a DPI fitted to the requested target size.
+  - Copy uses 1 MB chunks and throttled progress updates.
+  - Same-filesystem moves skip recursive size pre-walks.
+  - Search cancellation no longer blocks the UI waiting for a scan thread.
+  - Sidebar tag and volume refreshes are coalesced.
   - Desktop-app and MIME lookups are cached and invalidated when associations change.
   - Sidebar device discovery runs on a worker thread instead of blocking the UI.
   - Default-application updates avoid a second blocking `gio` process.

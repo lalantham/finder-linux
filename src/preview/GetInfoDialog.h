@@ -2,6 +2,7 @@
 
 #include "DesktopAppsManager.h"
 #include "FileItem.h"
+#include "MediaMetadata.h"
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -14,6 +15,9 @@
 #include <QVector>
 #include <atomic>
 #include <functional>
+
+class QFormLayout;
+class QGroupBox;
 
 class FolderSizeWorker : public QObject {
     Q_OBJECT
@@ -57,6 +61,7 @@ private slots:
     void onAddXattr();
     void onEditXattr();
     void onRemoveXattr();
+    void onMediaMetadataReady();
 
 private:
     void setupGeneralSection(QVBoxLayout* layout, const FileItem& item);
@@ -104,6 +109,9 @@ private:
     QLabel* m_dateAddedValue{nullptr};
     QLabel* m_lastOpenedValue{nullptr};
     QTableWidget* m_xattrTable{nullptr};
+    QGroupBox* m_mediaBox{nullptr};
+    QFormLayout* m_mediaForm{nullptr};
+    QFutureWatcher<MediaMetadata>* m_mediaWatcher{nullptr};
     bool m_updatingPermissions{false};
 
     // Permission checkboxes

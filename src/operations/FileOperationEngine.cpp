@@ -253,6 +253,7 @@ void FileOperationEngine::waitIfPaused() {
 
 void FileOperationEngine::resetProgressTiming() {
     m_progressStartMs = QDateTime::currentMSecsSinceEpoch();
+    m_lastProgressEmitMs = m_progressStartMs;
     m_lastTimeMs = m_progressStartMs;
     m_lastBytes = m_currentProgress.bytesProcessed;
     m_currentProgress.elapsedMs = 0;
@@ -583,12 +584,33 @@ bool FileOperationEngine::createSymlink(const QString& target, const QString& li
 
 void FileOperationEngine::executeCopyOrMove(OperationType type, const QStringList& sources,
                                             const QString& destDir, ConflictResolution defaultRes) {
-    // Calculate total items and total size
+    // A same-filesystem move is a rename, so walking the whole source tree
+    // first is wasted work. Cross-device moves still need the full estimate.
     qint64 totalBytes = 0;
     int totalItems = 0;
+    bool sameDeviceMove = (type == OperationType::Move) && !sources.isEmpty();
+    struct stat destStat{};
+    if (sameDeviceMove) {
+        sameDeviceMove = ::lstat(QFile::encodeName(destDir).constData(), &destStat) == 0;
+    }
+    if (sameDeviceMove) {
+        for (const QString& src : sources) {
+            struct stat srcStat{};
+            if (::lstat(QFile::encodeName(src).constData(), &srcStat) != 0 ||
+                srcStat.st_dev != destStat.st_dev) {
+                sameDeviceMove = false;
+                break;
+            }
+        }
+    }
 
     for (const auto& src : sources) {
         QFileInfo fi(src);
+        if (sameDeviceMove) {
+            ++totalItems;
+            totalBytes += fi.size();
+            continue;
+        }
         if (fi.isDir()) {
             QDirIterator it(src,
                             QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
@@ -813,7 +835,7 @@ FileOperationEngine::ItemOutcome FileOperationEngine::copySingleFile(const QStri
         return ItemOutcome::Failed;
     }
 
-    constexpr qint64 ChunkSize = 64 * 1024; // 64 KB
+    constexpr qint64 ChunkSize = 1024 * 1024; // 1 MB
     QByteArray buffer(ChunkSize, Qt::Uninitialized);
 
     while (!srcFile.atEnd()) {
@@ -849,8 +871,12 @@ FileOperationEngine::ItemOutcome FileOperationEngine::copySingleFile(const QStri
                                        m_currentProgress.totalBytes)
                     : 100;
             m_currentProgress.currentItem = finalDst;
-            updateProgressTiming();
-            emit progress(m_currentProgress);
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (now - m_lastProgressEmitMs >= 100) {
+                updateProgressTiming();
+                emit progress(m_currentProgress);
+                m_lastProgressEmitMs = now;
+            }
         }
     }
 

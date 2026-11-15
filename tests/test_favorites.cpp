@@ -1,9 +1,9 @@
-#include <QTest>
-#include <QSignalSpy>
-#include <QTemporaryDir>
-#include <QDir>
-#include <QStandardPaths>
 #include "AppSettings.h"
+#include <QDir>
+#include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTest>
 
 class TestFavorites : public QObject {
     Q_OBJECT
@@ -25,44 +25,40 @@ private slots:
     void testReorderLocation();
     void testSpringLoadedSettings();
     void testPerFolderViewMode();
+    void testDebouncedSaveFlushes();
 
 private:
     std::unique_ptr<QTemporaryDir> m_testSettingsDir;
 };
 
-void TestFavorites::initTestCase()
-{
+void TestFavorites::initTestCase() {
     m_testSettingsDir = std::make_unique<QTemporaryDir>();
     QVERIFY(m_testSettingsDir->isValid());
-    AppSettings::setSettingsFilePath(m_testSettingsDir->filePath(QStringLiteral("test_config.ini")));
+    AppSettings::setSettingsFilePath(
+        m_testSettingsDir->filePath(QStringLiteral("test_config.ini")));
 }
 
-void TestFavorites::cleanupTestCase()
-{
+void TestFavorites::cleanupTestCase() {
     AppSettings::setSettingsFilePath(QString());
     m_testSettingsDir.reset();
 }
 
-void TestFavorites::init()
-{
+void TestFavorites::init() {
     AppSettings::instance().resetSidebarDefaults();
 }
 
-void TestFavorites::cleanup()
-{
+void TestFavorites::cleanup() {
     AppSettings::instance().resetSidebarDefaults();
 }
 
-void TestFavorites::testDefaultFavorites()
-{
+void TestFavorites::testDefaultFavorites() {
     QStringList order = AppSettings::instance().favoriteOrder();
     QVERIFY(!order.isEmpty());
     QVERIFY(order.contains(QDir::homePath()));
     QCOMPARE(order.first(), QDir::homePath());
 }
 
-void TestFavorites::testAddAndOrder()
-{
+void TestFavorites::testAddAndOrder() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
     QString testPath = tempDir.path();
@@ -77,8 +73,7 @@ void TestFavorites::testAddAndOrder()
     QCOMPARE(order.last(), testPath);
 }
 
-void TestFavorites::testMoveToTop()
-{
+void TestFavorites::testMoveToTop() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
     QString testPath = tempDir.path();
@@ -98,8 +93,7 @@ void TestFavorites::testMoveToTop()
     }
 }
 
-void TestFavorites::testMoveUpAndDown()
-{
+void TestFavorites::testMoveUpAndDown() {
     QStringList initial = AppSettings::instance().favoriteOrder();
     QVERIFY(initial.size() >= 3);
 
@@ -113,8 +107,7 @@ void TestFavorites::testMoveUpAndDown()
     QCOMPARE(afterDown.at(1), secondItem);
 }
 
-void TestFavorites::testReorder()
-{
+void TestFavorites::testReorder() {
     QStringList initial = AppSettings::instance().favoriteOrder();
     QVERIFY(initial.size() >= 3);
 
@@ -125,8 +118,7 @@ void TestFavorites::testReorder()
     QCOMPARE(afterReorder.at(2), firstItem);
 }
 
-void TestFavorites::testRemoveFavorite()
-{
+void TestFavorites::testRemoveFavorite() {
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
     QString testPath = tempDir.path();
@@ -139,15 +131,13 @@ void TestFavorites::testRemoveFavorite()
     QVERIFY(!AppSettings::instance().favoriteOrder().contains(testPath));
 }
 
-void TestFavorites::testLocationOrder()
-{
+void TestFavorites::testLocationOrder() {
     QStringList order = AppSettings::instance().locationOrder();
     QVERIFY(!order.isEmpty());
     QVERIFY(order.contains(QStringLiteral("/")));
 }
 
-void TestFavorites::testMoveLocationToTop()
-{
+void TestFavorites::testMoveLocationToTop() {
     QStringList order = AppSettings::instance().locationOrder();
     if (order.size() >= 2) {
         QString secondItem = order.at(1);
@@ -157,8 +147,7 @@ void TestFavorites::testMoveLocationToTop()
     }
 }
 
-void TestFavorites::testMoveLocationUpAndDown()
-{
+void TestFavorites::testMoveLocationUpAndDown() {
     QStringList initial = AppSettings::instance().locationOrder();
     if (initial.size() >= 2) {
         QString item = initial.at(1);
@@ -172,8 +161,7 @@ void TestFavorites::testMoveLocationUpAndDown()
     }
 }
 
-void TestFavorites::testReorderLocation()
-{
+void TestFavorites::testReorderLocation() {
     QStringList initial = AppSettings::instance().locationOrder();
     if (initial.size() >= 3) {
         QString firstItem = initial.at(0);
@@ -183,8 +171,7 @@ void TestFavorites::testReorderLocation()
     }
 }
 
-void TestFavorites::testSpringLoadedSettings()
-{
+void TestFavorites::testSpringLoadedSettings() {
     // Default values
     QVERIFY(AppSettings::instance().springLoadedFoldersEnabled());
     QCOMPARE(AppSettings::instance().springLoadDelayMs(), 750);
@@ -201,8 +188,7 @@ void TestFavorites::testSpringLoadedSettings()
     AppSettings::instance().setSpringLoadDelayMs(750);
 }
 
-void TestFavorites::testPerFolderViewMode()
-{
+void TestFavorites::testPerFolderViewMode() {
     auto& settings = AppSettings::instance();
     settings.setRememberFolderViewModes(false);
     QVERIFY(!settings.rememberFolderViewModes());
@@ -234,6 +220,26 @@ void TestFavorites::testPerFolderViewMode()
 
     // Clean up
     settings.setRememberFolderViewModes(false);
+}
+
+void TestFavorites::testDebouncedSaveFlushes() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString settingsPath = dir.filePath(QStringLiteral("debounced.ini"));
+    AppSettings::setSettingsFilePath(settingsPath);
+
+    QTemporaryDir favoriteDir;
+    QVERIFY(favoriteDir.isValid());
+    AppSettings::instance().addFavorite(favoriteDir.path());
+    AppSettings::instance().flush();
+
+    // Reloading must see the flushed value even though the debounce timer
+    // would normally still be pending.
+    AppSettings::setSettingsFilePath(settingsPath);
+    QVERIFY(AppSettings::instance().customFavorites().contains(favoriteDir.path()));
+
+    AppSettings::setSettingsFilePath(
+        m_testSettingsDir->filePath(QStringLiteral("test_config.ini")));
 }
 
 QTEST_MAIN(TestFavorites)

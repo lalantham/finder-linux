@@ -626,31 +626,18 @@ void GetInfoDialog::setupDetailedMetadataTab(QVBoxLayout* layout, const FileItem
     layout->addWidget(infoBox);
 
     if (!item.isDir()) {
-        const MediaMetadata media = MediaMetadataReader::inspect(m_path);
-        if (!media.dimensions.isEmpty() || !media.duration.isEmpty() || !media.codec.isEmpty() ||
-            !media.bitrate.isEmpty() || !media.exif.isEmpty()) {
-            auto* mediaBox = new QGroupBox(QStringLiteral("Media Metadata:"), this);
-            auto* mediaForm = new QFormLayout(mediaBox);
-            mediaForm->setLabelAlignment(Qt::AlignRight);
-            if (!media.dimensions.isEmpty())
-                mediaForm->addRow(QStringLiteral("Dimensions:"),
-                                  new QLabel(media.dimensions, mediaBox));
-            if (!media.duration.isEmpty())
-                mediaForm->addRow(QStringLiteral("Duration:"),
-                                  new QLabel(media.duration, mediaBox));
-            if (!media.codec.isEmpty())
-                mediaForm->addRow(QStringLiteral("Codec:"), new QLabel(media.codec, mediaBox));
-            if (!media.bitrate.isEmpty())
-                mediaForm->addRow(QStringLiteral("Bitrate:"), new QLabel(media.bitrate, mediaBox));
-            for (const QString& line : media.exif) {
-                const qsizetype colon = line.indexOf(QLatin1Char(':'));
-                if (colon > 0) {
-                    mediaForm->addRow(line.left(colon + 1),
-                                      new QLabel(line.mid(colon + 1).trimmed(), mediaBox));
-                }
-            }
-            layout->addWidget(mediaBox);
-        }
+        m_mediaBox = new QGroupBox(QStringLiteral("Media Metadata:"), this);
+        m_mediaForm = new QFormLayout(m_mediaBox);
+        m_mediaForm->setLabelAlignment(Qt::AlignRight);
+        m_mediaForm->addRow(new QLabel(QStringLiteral("Reading media metadata…"), m_mediaBox));
+        layout->addWidget(m_mediaBox);
+
+        m_mediaWatcher = new QFutureWatcher<MediaMetadata>(this);
+        connect(m_mediaWatcher, &QFutureWatcher<MediaMetadata>::finished, this,
+                &GetInfoDialog::onMediaMetadataReady);
+        const QString mediaPath = m_path;
+        m_mediaWatcher->setFuture(
+            QtConcurrent::run([mediaPath]() { return MediaMetadataReader::inspect(mediaPath); }));
     }
 
     auto* xattrBox = new QGroupBox(QStringLiteral("Extended Attributes:"), this);
@@ -703,6 +690,38 @@ void GetInfoDialog::refreshXattrTable() {
         m_xattrTable->setItem(row, 1, valueItem);
         m_xattrTable->setItem(row, 2, sizeItem);
     }
+}
+
+void GetInfoDialog::onMediaMetadataReady() {
+    if (!m_mediaWatcher || !m_mediaBox || !m_mediaForm)
+        return;
+    const MediaMetadata media = m_mediaWatcher->result();
+    m_mediaWatcher->deleteLater();
+    m_mediaWatcher = nullptr;
+    m_mediaForm->removeRow(0);
+
+    if (media.dimensions.isEmpty() && media.duration.isEmpty() && media.codec.isEmpty() &&
+        media.bitrate.isEmpty() && media.exif.isEmpty()) {
+        m_mediaBox->hide();
+        return;
+    }
+    if (!media.dimensions.isEmpty())
+        m_mediaForm->addRow(QStringLiteral("Dimensions:"),
+                            new QLabel(media.dimensions, m_mediaBox));
+    if (!media.duration.isEmpty())
+        m_mediaForm->addRow(QStringLiteral("Duration:"), new QLabel(media.duration, m_mediaBox));
+    if (!media.codec.isEmpty())
+        m_mediaForm->addRow(QStringLiteral("Codec:"), new QLabel(media.codec, m_mediaBox));
+    if (!media.bitrate.isEmpty())
+        m_mediaForm->addRow(QStringLiteral("Bitrate:"), new QLabel(media.bitrate, m_mediaBox));
+    for (const QString& line : media.exif) {
+        const qsizetype colon = line.indexOf(QLatin1Char(':'));
+        if (colon > 0) {
+            m_mediaForm->addRow(line.left(colon + 1),
+                                new QLabel(line.mid(colon + 1).trimmed(), m_mediaBox));
+        }
+    }
+    m_mediaBox->show();
 }
 
 void GetInfoDialog::onVersionEdited() {

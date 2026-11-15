@@ -216,13 +216,14 @@ void TagManager::saveRegistry() {
 }
 
 QStringList TagManager::tagsForFile(const QString& path) {
-    QString clean = QDir::cleanPath(path);
-    QMutexLocker locker(&m_mutex);
+    const QString clean = QDir::cleanPath(path);
 
-    // 1. Try xattr first for native interop
-    QStringList xattrTags = readXattr(clean);
+    // Filesystem syscalls must not run while the registry mutex is held.
+    const QStringList xattrTags = readXattr(clean);
+
+    QMutexLocker locker(&m_mutex);
     if (!xattrTags.isEmpty()) {
-        // Sync into memory cache
+        m_noXattr.remove(clean);
         m_fileTags.insert(clean, xattrTags);
         for (const auto& t : xattrTags) {
             m_tagFiles[t].insert(clean);
@@ -230,8 +231,13 @@ QStringList TagManager::tagsForFile(const QString& path) {
         return xattrTags;
     }
 
-    // 2. Fall back to internal persistent registry
+    m_noXattr.insert(clean);
     return m_fileTags.value(clean);
+}
+
+QStringList TagManager::cachedTagsForFile(const QString& path) const {
+    QMutexLocker locker(&m_mutex);
+    return m_fileTags.value(QDir::cleanPath(path));
 }
 
 bool TagManager::hasTag(const QString& path, const QString& tag) {
@@ -245,6 +251,7 @@ bool TagManager::setTagsForFile(const QString& path, const QStringList& tags) {
 
     {
         QMutexLocker locker(&m_mutex);
+        m_noXattr.remove(clean);
 
         // Remove previous mappings from m_tagFiles
         QStringList oldTags = m_fileTags.value(clean);

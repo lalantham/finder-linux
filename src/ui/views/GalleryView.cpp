@@ -1,17 +1,15 @@
 #include "GalleryView.h"
 #include "DesktopAppsManager.h"
-#include "PreviewManager.h"
 #include "FileItem.h"
 #include "FileItemDelegate.h"
-#include <QVBoxLayout>
-#include <QHBoxLayout>
+#include "PreviewManager.h"
 #include <QDesktopServices>
-#include <QUrl>
+#include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QUrl>
+#include <QVBoxLayout>
 
-GalleryView::GalleryView(QWidget* parent)
-    : QWidget(parent)
-{
+GalleryView::GalleryView(QWidget* parent) : QWidget(parent) {
     auto* mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
@@ -76,14 +74,24 @@ GalleryView::GalleryView(QWidget* parent)
     m_previewTimer->setSingleShot(true);
     m_previewTimer->setInterval(120);
     connect(m_previewTimer, &QTimer::timeout, this, &GalleryView::updatePendingPreview);
+    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this,
+            [this](const QString& path) {
+                if (path != m_selectedPath)
+                    return;
+                if (!PreviewManager::instance().isImage(path))
+                    return;
+                const QPixmap pix = PreviewManager::instance().iconThumbnail(path, 512);
+                if (!pix.isNull())
+                    m_heroImageLabel->setPixmap(pix);
+            });
 }
 
-void GalleryView::setFileSystemModel(FileSystemModel* model)
-{
+void GalleryView::setFileSystemModel(FileSystemModel* model) {
     m_model = model;
     m_filmstrip->setModel(model);
 
-    connect(m_filmstrip->selectionModel(), &QItemSelectionModel::currentChanged, this, &GalleryView::onSelectionChanged);
+    connect(m_filmstrip->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &GalleryView::onSelectionChanged);
 
     if (model && model->rowCount() > 0) {
         QModelIndex firstIdx = model->index(0, 0);
@@ -92,14 +100,14 @@ void GalleryView::setFileSystemModel(FileSystemModel* model)
     }
 }
 
-void GalleryView::onSelectionChanged()
-{
+void GalleryView::onSelectionChanged() {
     QModelIndex idx = m_filmstrip->currentIndex();
     if (!idx.isValid()) {
         m_heroImageLabel->clear();
         m_heroInfoLabel->clear();
         m_pendingPreviewPath.clear();
-        if (m_previewTimer) m_previewTimer->stop();
+        if (m_previewTimer)
+            m_previewTimer->stop();
         return;
     }
 
@@ -112,30 +120,30 @@ void GalleryView::onSelectionChanged()
     }
 }
 
-void GalleryView::updatePendingPreview()
-{
+void GalleryView::updatePendingPreview() {
     if (!m_pendingPreviewPath.isEmpty()) {
         updateHeroPreview(m_pendingPreviewPath);
     }
 }
 
-void GalleryView::updateHeroPreview(const QString& path)
-{
+void GalleryView::updateHeroPreview(const QString& path) {
     FileItem item(path);
-    m_heroInfoLabel->setText(QStringLiteral("<b>%1</b> &nbsp;|&nbsp; %2 &nbsp;|&nbsp; %3 &nbsp;|&nbsp; Modified %4")
-        .arg(item.fileName(), item.kind(), item.formattedSize(), item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm"))));
+    m_heroInfoLabel->setText(
+        QStringLiteral("<b>%1</b> &nbsp;|&nbsp; %2 &nbsp;|&nbsp; %3 &nbsp;|&nbsp; Modified %4")
+            .arg(item.fileName(), item.kind(), item.formattedSize(),
+                 item.modified().toString(QStringLiteral("yyyy-MM-dd hh:mm"))));
 
     auto& pm = PreviewManager::instance();
 
     if (pm.isImage(path)) {
         m_heroTextEdit->hide();
         m_heroImageLabel->show();
-        QPixmap pix = pm.getThumbnail(path, QSize(600, 380));
-        m_heroImageLabel->setPixmap(pix);
+        const QPixmap pix = pm.iconThumbnail(path, 512);
+        m_heroImageLabel->setPixmap(pix.isNull() ? item.icon().pixmap(128, 128) : pix);
     } else if (pm.isText(path)) {
         m_heroImageLabel->hide();
         m_heroTextEdit->show();
-        m_heroTextEdit->setPlainText(pm.getTextPreview(path));
+        m_heroTextEdit->setPlainText(pm.getTextPreview(path, 16 * 1024));
     } else {
         m_heroTextEdit->hide();
         m_heroImageLabel->show();
@@ -143,9 +151,9 @@ void GalleryView::updateHeroPreview(const QString& path)
     }
 }
 
-void GalleryView::onItemDoubleClicked(const QModelIndex& index)
-{
-    if (!index.isValid()) return;
+void GalleryView::onItemDoubleClicked(const QModelIndex& index) {
+    if (!index.isValid())
+        return;
     QString path = index.data(FileSystemModel::FilePathRole).toString();
     bool isDir = index.data(FileSystemModel::FileIsDirRole).toBool();
 
@@ -156,8 +164,7 @@ void GalleryView::onItemDoubleClicked(const QModelIndex& index)
     }
 }
 
-void GalleryView::keyPressEvent(QKeyEvent* event)
-{
+void GalleryView::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Space) {
         if (!m_selectedPath.isEmpty()) {
             emit quickLookRequested(m_selectedPath);
@@ -167,28 +174,28 @@ void GalleryView::keyPressEvent(QKeyEvent* event)
     QWidget::keyPressEvent(event);
 }
 
-QStringList GalleryView::selectedFilePaths() const
-{
+QStringList GalleryView::selectedFilePaths() const {
     QStringList paths;
-    if (!m_filmstrip || !m_filmstrip->selectionModel()) return paths;
+    if (!m_filmstrip || !m_filmstrip->selectionModel())
+        return paths;
     for (const auto& idx : m_filmstrip->selectionModel()->selectedIndexes()) {
         QString p = idx.data(FileSystemModel::FilePathRole).toString();
         if (!p.isEmpty() && !paths.contains(p)) {
             paths.append(p);
         }
     }
-    return paths.isEmpty() ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{}) : paths;
+    return paths.isEmpty()
+               ? (!m_selectedPath.isEmpty() ? QStringList{m_selectedPath} : QStringList{})
+               : paths;
 }
 
-void GalleryView::selectAll()
-{
+void GalleryView::selectAll() {
     if (m_filmstrip) {
         m_filmstrip->selectAll();
     }
 }
 
-void GalleryView::contextMenuEvent(QContextMenuEvent* event)
-{
+void GalleryView::contextMenuEvent(QContextMenuEvent* event) {
     QStringList paths = selectedFilePaths();
     if (paths.isEmpty() && !m_selectedPath.isEmpty()) {
         paths.append(m_selectedPath);

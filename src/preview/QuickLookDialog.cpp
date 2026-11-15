@@ -256,6 +256,27 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
     connect(m_nextBtn, &QPushButton::clicked, this, &QuickLookDialog::showNext);
     connect(&PreviewManager::instance(), &PreviewManager::officePreviewReady, this,
             &QuickLookDialog::onOfficePreviewReady);
+    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this,
+            [this](const QString& path) {
+                if (m_files.isEmpty() || m_currentIndex < 0 || m_currentIndex >= m_files.size() ||
+                    path != m_files.at(m_currentIndex)) {
+                    return;
+                }
+                auto& pm = PreviewManager::instance();
+                if (!pm.isImage(path) && !pm.isVideo(path))
+                    return;
+                const QPixmap pix = pm.iconThumbnail(path, 1024);
+                if (pix.isNull())
+                    return;
+                m_imageBase = pix;
+                m_zoom = 1.0;
+                m_rotation = 0;
+                m_fitImage = true;
+                QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
+                m_imageScrollArea->show();
+                m_textViewer->hide();
+                m_fallbackWidget->hide();
+            });
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     // Apply preview HUD styling
@@ -287,6 +308,12 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
                                  "  border: none;"
                                  "  background-color: transparent;"
                                  "}"));
+}
+
+QuickLookDialog::~QuickLookDialog() {
+    if (m_fontId >= 0) {
+        QFontDatabase::removeApplicationFont(m_fontId);
+    }
 }
 
 void QuickLookDialog::stopMediaPlayback() {
@@ -357,7 +384,6 @@ void QuickLookDialog::displayPdfPage() {
     m_zoom = 1.0;
     m_rotation = 0;
     m_fitImage = true;
-    fitImageToView();
     QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
     m_imageScrollArea->show();
     m_fallbackWidget->hide();
@@ -492,15 +518,23 @@ void QuickLookDialog::updateContent() {
     auto& pm = PreviewManager::instance();
 
     if (pm.isImage(currentPath)) {
-        m_imageBase = pm.getThumbnail(currentPath, QSize(1200, 900));
-        m_zoom = 1.0;
-        m_rotation = 0;
-        m_fitImage = true;
-        fitImageToView();
-        QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
-        m_imageScrollArea->show();
-        m_textViewer->hide();
-        m_fallbackWidget->hide();
+        m_imageBase = pm.iconThumbnail(currentPath, 1024);
+        if (!m_imageBase.isNull()) {
+            m_zoom = 1.0;
+            m_rotation = 0;
+            m_fitImage = true;
+            QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
+            m_imageScrollArea->show();
+            m_textViewer->hide();
+            m_fallbackWidget->hide();
+        } else {
+            m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
+            m_fallbackTextLabel->setText(
+                QStringLiteral("<b>%1</b><br>Loading preview…").arg(item.fileName()));
+            m_fallbackWidget->show();
+            m_imageScrollArea->hide();
+            m_textViewer->hide();
+        }
     } else if (pm.isPdf(currentPath)) {
         m_pdfPath = currentPath;
         m_pdfPage = 0;
@@ -536,13 +570,12 @@ void QuickLookDialog::updateContent() {
         } else
 #endif
         {
-            QPixmap pix = pm.getThumbnail(currentPath, QSize(1200, 900));
+            QPixmap pix = pm.iconThumbnail(currentPath, 1024);
             if (!pix.isNull()) {
                 m_imageBase = pix;
                 m_zoom = 1.0;
                 m_rotation = 0;
                 m_fitImage = true;
-                fitImageToView();
                 QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
                 m_imageScrollArea->show();
                 m_textViewer->hide();
@@ -550,8 +583,8 @@ void QuickLookDialog::updateContent() {
             } else {
                 m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
                 m_fallbackTextLabel->setText(
-                    QStringLiteral("<b>%1</b><br>%2<br>%3")
-                        .arg(item.fileName(), item.kind(), item.formattedSize()));
+                    QStringLiteral("<b>%1</b><br>Generating preview…<br>%2")
+                        .arg(item.fileName(), item.formattedSize()));
                 m_fallbackWidget->show();
                 m_imageScrollArea->hide();
                 m_textViewer->hide();
@@ -581,9 +614,9 @@ void QuickLookDialog::updateContent() {
             m_textViewer->hide();
         }
     } else if (pm.isFont(currentPath)) {
-        const int fontId = QFontDatabase::addApplicationFont(currentPath);
+        m_fontId = QFontDatabase::addApplicationFont(currentPath);
         const QStringList families =
-            fontId >= 0 ? QFontDatabase::applicationFontFamilies(fontId) : QStringList();
+            m_fontId >= 0 ? QFontDatabase::applicationFontFamilies(m_fontId) : QStringList();
         if (!families.isEmpty()) {
             m_textViewer->setFont(QFont(families.first(), 22));
             m_textViewer->setPlainText(QStringLiteral(

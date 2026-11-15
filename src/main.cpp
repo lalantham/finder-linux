@@ -160,6 +160,8 @@ int main(int argc, char* argv[]) {
     }
 
     QApplication app(argc, argv);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     []() { AppSettings::instance().flush(); });
     app.setApplicationName(QStringLiteral("File Manager"));
     app.setApplicationDisplayName(QStringLiteral("File Manager"));
     app.setOrganizationName(QStringLiteral("FinderLinux"));

@@ -43,7 +43,9 @@ QString toHref(const QString& path) {
 
 QString fromHref(const QString& href) {
     const QUrl url(href);
-    return url.isLocalFile() ? url.toLocalFile() : QString();
+    // Some writers keep a trailing slash on folder hrefs. QFileInfo::fileName()
+    // is empty for such paths, so normalise them to match the rest of the app.
+    return url.isLocalFile() ? QDir::cleanPath(url.toLocalFile()) : QString();
 }
 
 QVector<Bookmark> readBookmarks(const QString& path, bool* ok) {

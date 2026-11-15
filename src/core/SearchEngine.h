@@ -32,6 +32,7 @@ private:
     int m_count{0};
     int m_progressCounter{0};
     mutable QMimeDatabase m_mimeDb;
+    mutable int m_metadataProbes{0};
 };
 
 class SearchEngine : public QObject {

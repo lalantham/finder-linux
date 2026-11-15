@@ -20,6 +20,8 @@ public:
     QPixmap iconThumbnail(const QString& path, int iconSize);
 
     QString getTextPreview(const QString& path, int maxBytes = 64 * 1024);
+    QImage renderPdfPageImage(const QString& path, const QSize& targetSize = QSize(600, 800),
+                              int page = 0);
     QPixmap getPdfPreview(const QString& path, const QSize& targetSize = QSize(600, 800),
                           int page = 0);
     [[nodiscard]] int pdfPageCount(const QString& path) const;
@@ -51,6 +53,7 @@ private:
     static bool isThumbnailCandidate(const QString& path);
 
     QString cacheFilePath(const QString& path, int bucket) const;
+    QImage loadImageFromDiskCache(const QString& path, int bucket);
     QPixmap loadFromDiskCache(const QString& path, int bucket);
     void saveToDiskCache(const QString& path, int bucket, const QImage& image);
     QImage generateThumbnailImage(const QString& path, int bucket);

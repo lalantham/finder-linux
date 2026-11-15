@@ -19,6 +19,23 @@ All notable changes to File Manager for Linux are documented here.
 - Added an **Index** search toggle that appears when a supported index is available.
 - Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
 
+### Performance polish
+- Moved thumbnail disk-cache probing and PNG metadata parsing off the UI thread; huge PNGs are no longer read in full.
+- Coalesced thumbnail repaints, skipped hidden views, and cached scaled thumbnails.
+- Split thumbnail, Office-conversion, and folder-size work into bounded thread pools.
+- Folder-size walks survive unrelated directory refreshes, share in-flight work across Column View, and invalidate on directory changes.
+- Search uses cached tags first, shortens TagManager lock scope, and budgets cold xattr probes.
+- Debounced AppSettings writes and flush pending settings on exit.
+- Async Quick Look image/PDF rendering and gallery/column preview thumbnails.
+- Debounced preview pane selection updates and moved thumbnail generation off the UI thread.
+- Moved Get Info media metadata probing to a background task.
+- Render PDF thumbnails at target-appropriate DPI instead of fixed 150 DPI.
+- Reduced Quick Look font leaks and duplicate fit operations.
+- Copy now uses 1 MB chunks with 100 ms progress throttling.
+- Same-filesystem moves skip recursive pre-walks.
+- Search stop no longer blocks the UI on slow scans or conversion processes.
+- Coalesced sidebar refreshes after tag and volume changes.
+
 ### Custom tag management
 - Added custom tag creation, color selection, rename, and delete.
 - Added a **Manage Tags** dialog from the sidebar and toolbar tag menu.

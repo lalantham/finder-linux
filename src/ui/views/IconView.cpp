@@ -38,10 +38,26 @@ IconView::IconView(QWidget* parent) : QListView(parent) {
     m_springTimer->setSingleShot(true);
     connect(m_springTimer, &QTimer::timeout, this, &IconView::onSpringTimeout);
 
+    m_thumbnailRepaintTimer = new QTimer(this);
+    m_thumbnailRepaintTimer->setSingleShot(true);
+    m_thumbnailRepaintTimer->setInterval(60);
+    connect(m_thumbnailRepaintTimer, &QTimer::timeout, this, [this]() {
+        if (isVisible())
+            viewport()->update();
+    });
     connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this,
-            [this](const QString&) { viewport()->update(); });
+            [this](const QString&) {
+                if (isVisible())
+                    m_thumbnailRepaintTimer->start();
+            });
 
     connect(this, &QListView::activated, this, &IconView::onItemActivated);
+}
+
+void IconView::showEvent(QShowEvent* event) {
+    QListView::showEvent(event);
+    if (m_thumbnailRepaintTimer)
+        m_thumbnailRepaintTimer->start();
 }
 
 void IconView::setFileSystemModel(FileSystemModel* model) {

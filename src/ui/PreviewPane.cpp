@@ -85,6 +85,19 @@ PreviewPane::PreviewPane(QWidget* parent) : QWidget(parent) {
     buttons->addStretch();
     layout->addLayout(buttons);
 
+    connect(&PreviewManager::instance(), &PreviewManager::thumbnailReady, this,
+            [this](const QString& path) {
+                if (path != m_path && path != m_officePdf)
+                    return;
+                auto& previews = PreviewManager::instance();
+                if (!previews.isImage(path) && !previews.isPdf(path) && !previews.isVideo(path)) {
+                    return;
+                }
+                const QPixmap pixmap = previews.iconThumbnail(path, 256);
+                if (!pixmap.isNull())
+                    showImage(pixmap);
+            });
+
     connect(m_previewBtn, &QPushButton::clicked, this, [this]() {
         if (!m_path.isEmpty())
             emit previewRequested(m_path);
@@ -147,12 +160,12 @@ void PreviewPane::showFallback(const QIcon& icon, const QString& message) {
 }
 
 void PreviewPane::showPdf(const QString& pdfPath) {
-    const QPixmap pixmap = PreviewManager::instance().getPdfPreview(pdfPath, QSize(280, 220));
+    const QPixmap pixmap = PreviewManager::instance().iconThumbnail(pdfPath, 256);
     if (!pixmap.isNull()) {
         showImage(pixmap);
     } else {
         showFallback(QIcon::fromTheme(QStringLiteral("application-pdf")),
-                     QStringLiteral("PDF preview unavailable."));
+                     QStringLiteral("Loading preview…"));
     }
 }
 
@@ -172,9 +185,19 @@ void PreviewPane::updateContent() {
     if (item.isDir()) {
         showFallback(item.icon(), QStringLiteral("Folder"));
     } else if (previews.isImage(m_path)) {
-        showImage(previews.getThumbnail(m_path, QSize(280, 220)));
+        const QPixmap pixmap = previews.iconThumbnail(m_path, 256);
+        if (!pixmap.isNull())
+            showImage(pixmap);
+        else
+            showFallback(QIcon::fromTheme(QStringLiteral("image-x-generic")),
+                         QStringLiteral("Loading preview…"));
     } else if (previews.isPdf(m_path)) {
-        showPdf(m_path);
+        const QPixmap pixmap = previews.iconThumbnail(m_path, 256);
+        if (!pixmap.isNull())
+            showImage(pixmap);
+        else
+            showFallback(QIcon::fromTheme(QStringLiteral("application-pdf")),
+                         QStringLiteral("Loading preview…"));
     } else if (previews.isOffice(m_path)) {
         showFallback(QIcon::fromTheme(QStringLiteral("x-office-document")),
                      QStringLiteral("Converting document…"));
@@ -182,11 +205,11 @@ void PreviewPane::updateContent() {
     } else if (previews.isText(m_path)) {
         showText(previews.getTextPreview(m_path, 16 * 1024));
     } else if (previews.isVideo(m_path)) {
-        const QPixmap pixmap = previews.getThumbnail(m_path, QSize(280, 220));
+        const QPixmap pixmap = previews.iconThumbnail(m_path, 256);
         if (!pixmap.isNull()) {
             showImage(pixmap);
         } else {
-            showFallback(item.icon(), QStringLiteral("Video"));
+            showFallback(item.icon(), QStringLiteral("Loading preview…"));
         }
     } else if (previews.isAudio(m_path)) {
         showFallback(item.icon(), QStringLiteral("Audio"));

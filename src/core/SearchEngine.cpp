@@ -317,7 +317,15 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const {
     const bool needMetadata = needTagFilter || !m_filter.excludeTerms.isEmpty() ||
                               (!filenameMatches && !m_filter.nameTerms.isEmpty());
     if (needMetadata) {
-        tags = TagManager::instance().tagsForFile(path);
+        // Memory-first lookup avoids an xattr syscall for every file on every
+        // search. Cold probes are bounded so large trees cannot stall a scan.
+        tags = TagManager::instance().cachedTagsForFile(path);
+        constexpr int MetadataProbeBudget = 50000;
+        if (needTagFilter || (!m_filter.excludeTerms.isEmpty()) ||
+            (tags.isEmpty() && m_metadataProbes < MetadataProbeBudget)) {
+            tags = TagManager::instance().tagsForFile(path);
+            ++m_metadataProbes;
+        }
         if (!m_filter.excludeTerms.isEmpty() || !filenameMatches) {
             comment = readComment(path);
         }
@@ -595,10 +603,11 @@ void SearchEngine::stopSearch() {
     }
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
 
+    // Do not block the UI waiting for a slow scan or a child conversion
+    // process. The worker observes the cancel flag and cleans itself up when
+    // the thread eventually finishes.
+    thread->setParent(nullptr);
     thread->quit();
-    if (!thread->wait(1500)) {
-        thread->setParent(nullptr);
-    }
 }
 
 bool SearchEngine::isRunning() const {

@@ -221,6 +221,11 @@ Sidebar::Sidebar(QWidget* parent) : QTreeWidget(parent) {
     m_springTimer->setSingleShot(true);
     connect(m_springTimer, &QTimer::timeout, this, &Sidebar::onSpringTimeout);
 
+    m_refreshCoalescer = new QTimer(this);
+    m_refreshCoalescer->setSingleShot(true);
+    m_refreshCoalescer->setInterval(120);
+    connect(m_refreshCoalescer, &QTimer::timeout, this, &Sidebar::refresh);
+
     m_volumeWatcher = new QFileSystemWatcher(this);
     QStringList watchDirs;
     if (QDir(QStringLiteral("/run/media")).exists()) {
@@ -264,12 +269,18 @@ Sidebar::Sidebar(QWidget* parent) : QTreeWidget(parent) {
 
     connect(this, &QTreeWidget::itemClicked, this, &Sidebar::onItemClicked);
     connect(this, &QTreeWidget::itemActivated, this, &Sidebar::onItemClicked);
-    connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::refresh);
-    connect(&TagManager::instance(), &TagManager::tagDefinitionsChanged, this, &Sidebar::refresh);
+    connect(&TagManager::instance(), &TagManager::tagsChanged, this, &Sidebar::scheduleRefresh);
+    connect(&TagManager::instance(), &TagManager::tagDefinitionsChanged, this,
+            &Sidebar::scheduleRefresh);
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged, this,
             [this]() { viewport()->update(); });
 
     refresh();
+}
+
+void Sidebar::scheduleRefresh() {
+    if (m_refreshCoalescer)
+        m_refreshCoalescer->start();
 }
 
 void Sidebar::refresh() {
@@ -311,7 +322,7 @@ void Sidebar::requestVolumeScan(bool force) {
         m_lastVolumes = watcher->result();
         watcher->deleteLater();
         m_volumeScanTimestamp.start();
-        refresh();
+        scheduleRefresh();
     });
     watcher->setFuture(QtConcurrent::run([]() { return VolumeManager::mountedVolumes(); }));
 }
