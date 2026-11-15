@@ -29,6 +29,7 @@ public:
     void goUp();
     void refresh(const QString& pathToSelect = QString());
     void refreshWithSelection(const QStringList& pathsToSelect);
+    void revealFile(const QString& filePath);
     void showTaggedFiles(const QString& tag, bool recordHistory = true);
     void showSmartFolder(const SmartFolder& folder, bool recordHistory = true);
     void showSmartFolder(const QString& name, bool recordHistory = true);
@@ -94,6 +95,7 @@ signals:
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory,
                            Qt::DropAction action);
     void searchClearRequested();
+    void searchQueryEdited(const QString& query);
     void saveSearchRequested();
     void itemRenamed(const QString& oldPath, const QString& newPath);
 
@@ -106,6 +108,8 @@ private slots:
     void onSearchBatchTimer();
     void onSearchItemsFound(const QVector<FileItem>& items);
     void onSearchFinished(int total);
+    void onLiveSearchTimer();
+    void onRefineTimer();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -118,6 +122,8 @@ private:
     void applyPreviewPaneVisibility();
     [[nodiscard]] SearchFilter buildSearchFilter() const;
     void clearSmartFolderState();
+    void applyPendingSelection();
+    void sortSearchResults(const QString& mode);
 
     bool m_isActive{true};
     QString m_currentPath;
@@ -136,6 +142,8 @@ private:
     QTimer* m_searchBatchTimer{nullptr};
     QTimer* m_filterDebounceTimer{nullptr};
     QTimer* m_previewDebounceTimer{nullptr};
+    QTimer* m_liveSearchTimer{nullptr};
+    QTimer* m_refineDebounceTimer{nullptr};
     QVector<FileItem> m_pendingSearchResults;
     SmartFolder m_activeSmartFolder;
     bool m_isSmartFolderView{false};

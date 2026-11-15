@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
-project(FinderLinux VERSION 1.0.0 LANGUAGES CXX)
+set(FINDER_VERSION "1.0.0" CACHE STRING "File Manager release version")
+project(FinderLinux VERSION ${FINDER_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -202,6 +203,7 @@ target_link_libraries(finder-linux PRIVATE
     finder_core
     Qt6::Network
 )
+target_compile_definitions(finder-linux PRIVATE FINDER_VERSION="${PROJECT_VERSION}")
 
 include(GNUInstallDirs)
 
@@ -265,3 +267,24 @@ install(FILES data/icons/hicolor/scalable/apps/finder-linux.svg
 
 enable_testing()
 add_subdirectory(tests)
+
+# Release packaging -----------------------------------------------------------
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "finder-linux")
+set(CPACK_PACKAGE_VENDOR "Finder Linux contributors")
+set(CPACK_PACKAGE_CONTACT "Finder Linux contributors <lalantham@users.noreply.github.com>")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "KDE-friendly file manager with a polished, familiar workflow")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "finder-linux")
+set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postinst;${CMAKE_CURRENT_SOURCE_DIR}/packaging/debian/postrm")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/lalantham/finder-linux")
+set(CPACK_DEBIAN_PACKAGE_DESCRIPTION
+    "A KDE-friendly, brand-neutral file manager with tabs, split view, search, Quick Look previews, metadata-aware operations, and desktop integration.")
+include(CPack)

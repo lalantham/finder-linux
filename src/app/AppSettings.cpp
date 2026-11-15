@@ -143,6 +143,13 @@ void AppSettings::load() {
     m_folderViewModes = s.value(QStringLiteral("folderViewModes")).toMap();
     m_columnViewWidths = s.value(QStringLiteral("columnViewWidths")).toMap();
     m_trashAutoPurgeDays = s.value(QStringLiteral("trashAutoPurgeDays"), 0).toInt();
+    m_searchScope = s.value(QStringLiteral("searchScope"), QStringLiteral("folder")).toString();
+    if (m_searchScope != QStringLiteral("thispc"))
+        m_searchScope = QStringLiteral("folder");
+    m_searchSubfolders = s.value(QStringLiteral("searchSubfolders"), false).toBool();
+    m_searchLiveUpdates = s.value(QStringLiteral("searchLiveUpdates"), true).toBool();
+    m_searchSortMode =
+        s.value(QStringLiteral("searchSortMode"), QStringLiteral("relevance")).toString();
 }
 
 void AppSettings::scheduleSave() {
@@ -203,6 +210,10 @@ void AppSettings::save() {
     s.setValue(QStringLiteral("folderViewModes"), m_folderViewModes);
     s.setValue(QStringLiteral("columnViewWidths"), m_columnViewWidths);
     s.setValue(QStringLiteral("trashAutoPurgeDays"), m_trashAutoPurgeDays);
+    s.setValue(QStringLiteral("searchScope"), m_searchScope);
+    s.setValue(QStringLiteral("searchSubfolders"), m_searchSubfolders);
+    s.setValue(QStringLiteral("searchLiveUpdates"), m_searchLiveUpdates);
+    s.setValue(QStringLiteral("searchSortMode"), m_searchSortMode);
 }
 
 std::optional<ViewMode> AppSettings::folderViewMode(const QString& path) const {

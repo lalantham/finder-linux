@@ -240,6 +240,12 @@ void FileSystemModel::refresh() {
 }
 
 void FileSystemModel::onDirectoryChanged(const QString& path) {
+    if (m_isSearchResultsView) {
+        // A watcher event in the browsed folder must not replace the live
+        // search result set; the owning TabPage decides whether to re-run.
+        emit rootDirectoryChanged(path);
+        return;
+    }
     if (path == m_rootPath && m_refreshTimer) {
         m_refreshTimer->start();
     }
@@ -615,7 +621,16 @@ void FileSystemModel::setSearchResults(const QVector<FileItem>& items, bool appl
     cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
-    m_items = items;
+    m_searchResultItems = items;
+    m_items.clear();
+    m_items.reserve(items.size());
+    for (const FileItem& item : items) {
+        if (m_searchResultsFilter.isEmpty() ||
+            item.fileName().contains(m_searchResultsFilter, Qt::CaseInsensitive) ||
+            item.path().contains(m_searchResultsFilter, Qt::CaseInsensitive)) {
+            m_items.append(item);
+        }
+    }
     if (applySorting)
         sortInternal();
     endResetModel();
@@ -625,17 +640,60 @@ void FileSystemModel::setSearchResults(const QVector<FileItem>& items, bool appl
 void FileSystemModel::appendSearchResults(const QVector<FileItem>& items) {
     if (items.isEmpty())
         return;
-    int firstRow = static_cast<int>(m_items.size());
-    int lastRow = firstRow + static_cast<int>(items.size()) - 1;
+    m_searchResultItems += items;
+    QVector<FileItem> visible;
+    visible.reserve(items.size());
+    for (const FileItem& item : items) {
+        if (m_searchResultsFilter.isEmpty() ||
+            item.fileName().contains(m_searchResultsFilter, Qt::CaseInsensitive) ||
+            item.path().contains(m_searchResultsFilter, Qt::CaseInsensitive)) {
+            visible.append(item);
+        }
+    }
+    if (visible.isEmpty())
+        return;
+    const int firstRow = static_cast<int>(m_items.size());
+    const int lastRow = firstRow + static_cast<int>(visible.size()) - 1;
     beginInsertRows(QModelIndex(), firstRow, lastRow);
-    m_items.append(items);
+    m_items += visible;
     endInsertRows();
+}
+
+void FileSystemModel::setSearchResultsFilter(const QString& text) {
+    const QString clean = text.trimmed();
+    if (m_searchResultsFilter == clean)
+        return;
+    m_searchResultsFilter = clean;
+    if (!m_isSearchResultsView)
+        return;
+    beginResetModel();
+    rebuildSearchResults();
+    endResetModel();
+    emit directoryLoaded(QStringLiteral("search://"), static_cast<int>(m_items.size()));
+}
+
+void FileSystemModel::setSortByRelevance(bool enabled) {
+    m_sortByRelevance = enabled;
+}
+
+void FileSystemModel::rebuildSearchResults() {
+    m_items.clear();
+    m_items.reserve(m_searchResultItems.size());
+    for (const FileItem& item : m_searchResultItems) {
+        if (m_searchResultsFilter.isEmpty() ||
+            item.fileName().contains(m_searchResultsFilter, Qt::CaseInsensitive) ||
+            item.path().contains(m_searchResultsFilter, Qt::CaseInsensitive)) {
+            m_items.append(item);
+        }
+    }
+    sortInternal();
 }
 
 void FileSystemModel::clearSearchResults() {
     cancelPendingLoad();
     beginResetModel();
     m_isSearchResultsView = true;
+    m_searchResultItems.clear();
     m_items.clear();
     endResetModel();
     emit directoryLoaded(QStringLiteral("search://"), 0);
@@ -649,6 +707,8 @@ void FileSystemModel::exitSearchResults() {
     m_isSearchResultsView = false;
     m_filterQuery.clear();
     m_filterKind.clear();
+    m_searchResultItems.clear();
+    m_searchResultsFilter.clear();
     m_items = m_allFolderItems;
     sortInternal();
     endResetModel();
@@ -717,6 +777,7 @@ void FileSystemModel::sortInternal() {
         QString name;
         QString text;
         qint64 number{0};
+        int relevance{0};
         QDateTime date;
     };
 
@@ -734,6 +795,7 @@ void FileSystemModel::sortInternal() {
         entry.index = i;
         entry.isDir = item.isDir();
         entry.name = item.fileName();
+        entry.relevance = item.relevance();
         switch (m_sortColumn) {
         case ColDateModified:
             entry.date = item.modified();
@@ -779,47 +841,54 @@ void FileSystemModel::sortInternal() {
 
     const bool ascending = (m_sortOrder == Qt::AscendingOrder);
     const bool dirsFirst = m_directoriesFirst;
+    const bool relevanceSort = m_sortByRelevance && m_isSearchResultsView;
     const int sortColumn = m_sortColumn;
 
-    std::stable_sort(
-        entries.begin(), entries.end(),
-        [dirsFirst, ascending, sortColumn, &collator](const SortEntry& a, const SortEntry& b) {
-            // Folders stay on top regardless of ascending/descending order.
-            if (dirsFirst && a.isDir != b.isDir) {
-                return a.isDir;
-            }
+    std::stable_sort(entries.begin(), entries.end(),
+                     [dirsFirst, ascending, relevanceSort, sortColumn,
+                      &collator](const SortEntry& a, const SortEntry& b) {
+                         if (relevanceSort) {
+                             if (a.relevance != b.relevance)
+                                 return a.relevance > b.relevance;
+                             return naturalCompare(a.name, b.name, collator) < 0;
+                         }
+                         // Folders stay on top regardless of ascending/descending order.
+                         if (dirsFirst && a.isDir != b.isDir) {
+                             return a.isDir;
+                         }
 
-            int comparison = 0;
-            switch (sortColumn) {
-            case ColDateModified:
-            case ColDateCreated:
-            case ColDateOpened:
-                comparison = (a.date == b.date) ? 0 : (a.date < b.date ? -1 : 1);
-                break;
-            case ColSize:
-                comparison = (a.number == b.number) ? 0 : (a.number < b.number ? -1 : 1);
-                break;
-            case ColKind:
-            case ColTags:
-            case ColPermissions:
-            case ColOwner:
-            case ColGroup:
-            case ColComment:
-                comparison = collator.compare(a.text, b.text);
-                break;
-            case ColName:
-            default:
-                comparison = naturalCompare(a.name, b.name, collator);
-                break;
-            }
+                         int comparison = 0;
+                         switch (sortColumn) {
+                         case ColDateModified:
+                         case ColDateCreated:
+                         case ColDateOpened:
+                             comparison = (a.date == b.date) ? 0 : (a.date < b.date ? -1 : 1);
+                             break;
+                         case ColSize:
+                             comparison =
+                                 (a.number == b.number) ? 0 : (a.number < b.number ? -1 : 1);
+                             break;
+                         case ColKind:
+                         case ColTags:
+                         case ColPermissions:
+                         case ColOwner:
+                         case ColGroup:
+                         case ColComment:
+                             comparison = collator.compare(a.text, b.text);
+                             break;
+                         case ColName:
+                         default:
+                             comparison = naturalCompare(a.name, b.name, collator);
+                             break;
+                         }
 
-            // Deterministic tie-break: equal keys fall back to name.
-            if (comparison == 0 && sortColumn != ColName) {
-                comparison = naturalCompare(a.name, b.name, collator);
-            }
+                         // Deterministic tie-break: equal keys fall back to name.
+                         if (comparison == 0 && sortColumn != ColName) {
+                             comparison = naturalCompare(a.name, b.name, collator);
+                         }
 
-            return ascending ? comparison < 0 : comparison > 0;
-        });
+                         return ascending ? comparison < 0 : comparison > 0;
+                     });
 
     QVector<FileItem> sorted;
     sorted.reserve(entries.size());
@@ -989,6 +1058,8 @@ QVariant FileSystemModel::data(const QModelIndex& index, int role) const {
     }
     case FileDateAddedRole:
         return FileMetadataManager::instance().dateAdded(item.path());
+    case FileRelevanceRole:
+        return item.relevance();
     case FileCommentRole:
         return item.comment();
     case FileMimeTypeRole:

@@ -109,17 +109,75 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     m_previewDebounceTimer->setInterval(120);
     connect(m_previewDebounceTimer, &QTimer::timeout, this, &TabPage::updatePreviewPane);
 
-    connect(m_searchScopeBar, &SearchScopeBar::scopeChanged, this,
-            [this](SearchScope) { runSearch(); });
-    connect(m_searchScopeBar, &SearchScopeBar::kindChanged, this,
-            [this](const QString&) { runSearch(); });
-    connect(m_searchScopeBar, &SearchScopeBar::subfoldersToggled, this,
-            [this](bool) { runSearch(); });
-    connect(m_searchScopeBar, &SearchScopeBar::contentToggled, this, [this](bool) { runSearch(); });
+    m_liveSearchTimer = new QTimer(this);
+    m_liveSearchTimer->setSingleShot(true);
+    m_liveSearchTimer->setInterval(800);
+    connect(m_liveSearchTimer, &QTimer::timeout, this, &TabPage::onLiveSearchTimer);
+
+    m_refineDebounceTimer = new QTimer(this);
+    m_refineDebounceTimer->setSingleShot(true);
+    m_refineDebounceTimer->setInterval(150);
+    connect(m_refineDebounceTimer, &QTimer::timeout, this, &TabPage::onRefineTimer);
+
+    connect(m_searchScopeBar, &SearchScopeBar::scopeChanged, this, [this](SearchScope scope) {
+        if (!m_isSmartFolderView) {
+            AppSettings::instance().setSearchScope(
+                scope == SearchScope::ThisPC ? QStringLiteral("thispc") : QStringLiteral("folder"));
+        }
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::kindChanged, this, [this](const QString&) {
+        m_searchScopeBar->clearRefine();
+        m_model->setSearchResultsFilter(QString());
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::subfoldersToggled, this, [this](bool recursive) {
+        if (!m_isSmartFolderView) {
+            AppSettings::instance().setSearchSubfolders(recursive);
+        }
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::contentToggled, this, [this](bool) {
+        m_searchScopeBar->clearRefine();
+        m_model->setSearchResultsFilter(QString());
+        runSearch();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::sortModeChanged, this, [this](const QString& mode) {
+        if (!m_searchQuery.isEmpty() || m_isSmartFolderView) {
+            AppSettings::instance().setSearchSortMode(mode);
+            sortSearchResults(mode);
+        }
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::refineChanged, this, [this](const QString&) {
+        if (m_refineDebounceTimer)
+            m_refineDebounceTimer->start();
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::liveToggled, this, [this](bool enabled) {
+        if (!m_isSmartFolderView)
+            AppSettings::instance().setSearchLiveUpdates(enabled);
+    });
+    connect(m_searchScopeBar, &SearchScopeBar::chipRemoved, this, [this](const QString& token) {
+        const QString query = SearchQuery::removeToken(m_searchQuery, token).trimmed();
+        emit searchQueryEdited(query);
+        setFilterQuery(query);
+    });
     connect(m_searchScopeBar, &SearchScopeBar::saveSearchRequested, this,
             &TabPage::saveSearchRequested);
     connect(m_searchScopeBar, &SearchScopeBar::clearRequested, this,
             &TabPage::searchClearRequested);
+
+    connect(m_model, &FileSystemModel::rootDirectoryChanged, this, [this](const QString&) {
+        if ((m_searchQuery.isEmpty() && !m_isSmartFolderView) || !m_searchScopeBar->isVisible() ||
+            !m_searchScopeBar->isLiveEnabled()) {
+            return;
+        }
+        const SearchFilter filter = buildSearchFilter();
+        if (filter.thisPC)
+            return;
+        m_pendingSelections = selectedFilePaths();
+        if (m_liveSearchTimer)
+            m_liveSearchTimer->start();
+    });
 
     // Forward view signals
     auto connectView = [this](auto* view) {
@@ -389,6 +447,31 @@ void TabPage::refreshWithSelection(const QStringList& pathsToSelect) {
     updateStatus();
 }
 
+void TabPage::revealFile(const QString& filePath) {
+    const QFileInfo info(filePath);
+    const QString folder = info.absolutePath();
+    if (folder.isEmpty() || !QDir(folder).exists())
+        return;
+
+    const bool wasSearch =
+        m_model->isSearchResultsView() || !m_searchQuery.isEmpty() || m_isSmartFolderView;
+    if (m_isSmartFolderView)
+        clearSmartFolderState();
+    if (wasSearch) {
+        emit searchClearRequested();
+        if (!m_searchQuery.isEmpty() || m_model->isSearchResultsView())
+            setFilterQuery(QString());
+    }
+
+    m_pendingSelection = info.absoluteFilePath();
+    m_pendingSelections = QStringList{m_pendingSelection};
+    navigateTo(folder);
+
+    if (m_viewMode == ViewMode::Column && m_columnView) {
+        m_columnView->refresh(info.absoluteFilePath());
+    }
+}
+
 void TabPage::setViewMode(ViewMode mode) {
     m_viewMode = mode;
     m_viewStack->setCurrentIndex(static_cast<int>(mode));
@@ -543,9 +626,14 @@ void TabPage::showSmartFolder(const SmartFolder& folder, bool recordHistory) {
     m_isSmartFolderView = true;
     m_currentPath = virtualPath;
     m_searchQuery = folder.filter.query;
+    m_model->setSearchResultsFilter(QString());
+    m_searchScopeBar->clearRefine();
 
     m_searchScopeBar->setFromFilter(folder.filter);
     m_searchScopeBar->setCurrentFolderName(folder.name);
+    m_searchScopeBar->setLiveEnabled(AppSettings::instance().searchLiveUpdates());
+    m_searchScopeBar->setSortMode(AppSettings::instance().searchSortMode());
+    m_searchScopeBar->setChips(SearchQuery::chips(m_searchQuery));
     m_searchScopeBar->setSaveSearchEnabled(true);
     m_searchScopeBar->show();
     m_model->clearSearchResults();
@@ -584,6 +672,8 @@ void TabPage::showRecentFiles(bool recordHistory) {
     m_searchQuery.clear();
     m_searchScopeBar->hide();
     m_currentPath = virtualPath;
+    m_model->setSearchResultsFilter(QString());
+    m_model->setSortByRelevance(false);
 
     QVector<FileItem> items;
     for (const RecentFile& recent : RecentFilesManager::list(200)) {
@@ -600,6 +690,11 @@ void TabPage::showRecentFiles(bool recordHistory) {
 
 void TabPage::setFilterQuery(const QString& query) {
     m_searchQuery = query.trimmed();
+    if (m_searchScopeBar) {
+        m_searchScopeBar->setChips(SearchQuery::chips(m_searchQuery));
+        m_searchScopeBar->clearRefine();
+        m_model->setSearchResultsFilter(QString());
+    }
 
     if (m_searchQuery.isEmpty()) {
         if (m_filterDebounceTimer)
@@ -609,6 +704,7 @@ void TabPage::setFilterQuery(const QString& query) {
             m_searchBatchTimer->stop();
         m_pendingSearchResults.clear();
         m_model->setFilterQuery(QString(), QString());
+        m_model->setSearchResultsFilter(QString());
 
         if (m_isSmartFolderView) {
             // Clearing the field returns to the saved smart-folder results
@@ -619,6 +715,9 @@ void TabPage::setFilterQuery(const QString& query) {
         }
 
         m_model->exitSearchResults();
+        // Directory watcher events were intentionally ignored during the
+        // search; rescan once so the folder is current after clearing.
+        m_model->refresh();
         m_searchScopeBar->hide();
         if (m_viewMode != m_preSearchViewMode && m_preSearchViewMode == ViewMode::Column) {
             setViewMode(m_preSearchViewMode);
@@ -635,6 +734,12 @@ void TabPage::setFilterQuery(const QString& query) {
     if (m_searchScopeBar->isHidden()) {
         m_preSearchViewMode = m_viewMode;
         m_searchScopeBar->reset();
+        SearchFilter remembered;
+        remembered.thisPC = AppSettings::instance().searchScope() == QStringLiteral("thispc");
+        remembered.recursive = AppSettings::instance().searchSubfolders();
+        m_searchScopeBar->setFromFilter(remembered);
+        m_searchScopeBar->setLiveEnabled(AppSettings::instance().searchLiveUpdates());
+        m_searchScopeBar->setSortMode(AppSettings::instance().searchSortMode());
         m_searchScopeBar->show();
     }
 
@@ -730,6 +835,7 @@ void TabPage::runSearch() {
 
     const SearchFilter filter = buildSearchFilter();
     m_searchScopeBar->setFilterSummary(SearchQuery::summary(filter));
+    m_searchScopeBar->setChips(SearchQuery::chips(m_searchQuery));
 
     const bool structured =
         !filter.excludeTerms.isEmpty() || !filter.contentTerms.isEmpty() || filter.searchContents ||
@@ -785,15 +891,62 @@ void TabPage::onSearchBatchTimer() {
         m_pendingSearchResults.clear();
         const int count = m_model->rowCount();
         m_searchScopeBar->setStatusText(QStringLiteral("%1 items found...").arg(count));
+        m_searchScopeBar->setRefineVisible(m_model->isSearchResultsView() && count > 0);
     }
 }
 
 void TabPage::onSearchFinished(int total) {
     onSearchBatchTimer();
     m_searchBatchTimer->stop();
+    if (m_model->isSearchResultsView()) {
+        sortSearchResults(m_searchScopeBar->sortMode());
+        applyPendingSelection();
+    }
+    const int visible = m_model->rowCount();
+    m_searchScopeBar->setRefineVisible(m_model->isSearchResultsView() && visible > 0);
+    QString status = QStringLiteral("%1 item%2 found")
+                         .arg(visible)
+                         .arg(visible == 1 ? QString() : QStringLiteral("s"));
+    if (visible != total) {
+        status += QStringLiteral(" (filtered from %1)").arg(total);
+    }
+    m_searchScopeBar->setStatusText(status);
+}
+
+void TabPage::onLiveSearchTimer() {
+    if (m_searchQuery.isEmpty() && !m_isSmartFolderView)
+        return;
+    runSearch();
+}
+
+void TabPage::onRefineTimer() {
+    if (!m_model->isSearchResultsView())
+        return;
+    m_pendingSelections = selectedFilePaths();
+    m_pendingSelection = selectedFilePath();
+    if (m_pendingSelection.isEmpty() && !m_pendingSelections.isEmpty())
+        m_pendingSelection = m_pendingSelections.first();
+    m_model->setSearchResultsFilter(m_searchScopeBar->refineText());
+    applyPendingSelection();
+    const int count = m_model->rowCount();
     m_searchScopeBar->setStatusText(QStringLiteral("%1 item%2 found")
-                                        .arg(total)
-                                        .arg(total == 1 ? QString() : QStringLiteral("s")));
+                                        .arg(count)
+                                        .arg(count == 1 ? QString() : QStringLiteral("s")));
+}
+
+void TabPage::sortSearchResults(const QString& mode) {
+    if (!m_model->isSearchResultsView())
+        return;
+    m_model->setSortByRelevance(mode == QStringLiteral("relevance"));
+    if (mode == QStringLiteral("name")) {
+        m_model->sort(FileSystemModel::ColName, Qt::AscendingOrder);
+    } else if (mode == QStringLiteral("date")) {
+        m_model->sort(FileSystemModel::ColDateModified, Qt::DescendingOrder);
+    } else if (mode == QStringLiteral("size")) {
+        m_model->sort(FileSystemModel::ColSize, Qt::DescendingOrder);
+    } else {
+        m_model->sort(FileSystemModel::ColName, Qt::DescendingOrder);
+    }
 }
 
 void TabPage::updateThemeStyles(bool isDark) {
@@ -803,54 +956,70 @@ void TabPage::updateThemeStyles(bool isDark) {
 }
 
 void TabPage::onDirectoryLoaded(const QString& /*path*/, int itemCount) {
-    if (!m_pendingSelection.isEmpty()) {
-        const QString target = m_pendingSelection;
-        const QStringList multiSelection = m_pendingSelections;
-        m_pendingSelection.clear();
-        m_pendingSelections.clear();
+    Q_UNUSED(itemCount);
+    if (!m_model->isSearchResultsView())
+        applyPendingSelection();
+    updateStatus();
+}
 
-        if (QFileInfo::exists(target)) {
-            QStringList wanted = multiSelection;
-            if (wanted.isEmpty()) {
-                wanted.append(target);
-            }
+void TabPage::applyPendingSelection() {
+    if (m_pendingSelection.isEmpty())
+        return;
 
-            QModelIndex currentIndex;
-            QItemSelection selection;
-            for (int r = 0; r < m_model->rowCount(); ++r) {
-                const QModelIndex idx = m_model->index(r, 0);
-                const QString filePath = idx.data(FileSystemModel::FilePathRole).toString();
-                if (filePath == target) {
-                    currentIndex = idx;
-                }
-                if (wanted.contains(filePath)) {
-                    selection.select(idx, idx);
-                }
-            }
+    const QString target = m_pendingSelection;
+    const QStringList multiSelection = m_pendingSelections;
+    m_pendingSelection.clear();
+    m_pendingSelections.clear();
 
-            if (m_viewMode == ViewMode::Icon) {
-                if (currentIndex.isValid()) {
-                    m_iconView->setCurrentIndex(currentIndex);
-                    m_iconView->scrollTo(currentIndex);
-                }
-                if (!selection.isEmpty()) {
-                    m_iconView->selectionModel()->select(
-                        selection, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-                }
-            } else if (m_viewMode == ViewMode::List) {
-                if (currentIndex.isValid()) {
-                    m_listView->setCurrentIndex(currentIndex);
-                    m_listView->scrollTo(currentIndex);
-                }
-                if (!selection.isEmpty()) {
-                    m_listView->selectionModel()->select(
-                        selection, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-                }
-            }
-        }
+    if (!QFileInfo::exists(target))
+        return;
+
+    QStringList wanted = multiSelection;
+    if (wanted.isEmpty())
+        wanted.append(target);
+
+    QModelIndex currentIndex;
+    QItemSelection selection;
+    for (int r = 0; r < m_model->rowCount(); ++r) {
+        const QModelIndex idx = m_model->index(r, 0);
+        const QString filePath = idx.data(FileSystemModel::FilePathRole).toString();
+        if (filePath == target)
+            currentIndex = idx;
+        if (wanted.contains(filePath))
+            selection.select(idx, idx);
     }
 
-    updateStatus();
+    if (m_viewMode == ViewMode::Icon) {
+        if (currentIndex.isValid()) {
+            m_iconView->setCurrentIndex(currentIndex);
+            m_iconView->scrollTo(currentIndex);
+        }
+        if (!selection.isEmpty()) {
+            m_iconView->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect |
+                                                                QItemSelectionModel::Rows);
+        }
+    } else if (m_viewMode == ViewMode::List) {
+        if (currentIndex.isValid()) {
+            m_listView->setCurrentIndex(currentIndex);
+            m_listView->scrollTo(currentIndex);
+        }
+        if (!selection.isEmpty()) {
+            m_listView->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect |
+                                                                QItemSelectionModel::Rows);
+        }
+    } else if (m_viewMode == ViewMode::Gallery && m_galleryView) {
+        QListView* strip = m_galleryView->filmstripView();
+        if (!strip || !strip->selectionModel())
+            return;
+        if (currentIndex.isValid()) {
+            strip->setCurrentIndex(currentIndex);
+            strip->scrollTo(currentIndex);
+        }
+        if (!selection.isEmpty()) {
+            strip->selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect |
+                                                           QItemSelectionModel::Rows);
+        }
+    }
 }
 
 void TabPage::updateStatus() {

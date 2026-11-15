@@ -58,6 +58,36 @@ public:
     void setColumnViewWidth(const QString& path, int width);
     void removeColumnViewWidth(const QString& path);
 
+    [[nodiscard]] QString searchScope() const {
+        return m_searchScope;
+    }
+    void setSearchScope(const QString& scope) {
+        m_searchScope = (scope == QStringLiteral("thispc")) ? QStringLiteral("thispc")
+                                                            : QStringLiteral("folder");
+        scheduleSave();
+    }
+    [[nodiscard]] bool searchSubfolders() const noexcept {
+        return m_searchSubfolders;
+    }
+    void setSearchSubfolders(bool enabled) {
+        m_searchSubfolders = enabled;
+        scheduleSave();
+    }
+    [[nodiscard]] bool searchLiveUpdates() const noexcept {
+        return m_searchLiveUpdates;
+    }
+    void setSearchLiveUpdates(bool enabled) {
+        m_searchLiveUpdates = enabled;
+        scheduleSave();
+    }
+    [[nodiscard]] QString searchSortMode() const {
+        return m_searchSortMode;
+    }
+    void setSearchSortMode(const QString& mode) {
+        m_searchSortMode = mode;
+        scheduleSave();
+    }
+
     [[nodiscard]] int trashAutoPurgeDays() const noexcept {
         return m_trashAutoPurgeDays;
     }
@@ -329,6 +359,10 @@ private:
     QVariantMap m_folderViewModes;
     QVariantMap m_columnViewWidths;
     int m_trashAutoPurgeDays{0};
+    QString m_searchScope{QStringLiteral("folder")};
+    bool m_searchSubfolders{false};
+    bool m_searchLiveUpdates{true};
+    QString m_searchSortMode{QStringLiteral("relevance")};
     QTimer m_saveTimer;
     bool m_savePending{false};
 };

@@ -6,9 +6,13 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QVector>
 #include <QWidget>
 
 enum class SearchScope { ThisFolder, ThisPC };
+
+class QLineEdit;
+class QToolButton;
 
 class SearchScopeBar : public QWidget {
     Q_OBJECT
@@ -28,6 +32,16 @@ public:
     void setFromFilter(const SearchFilter& filter);
     void reset();
 
+    void setChips(const QVector<SearchQuery::Chip>& chips);
+    void setRefineVisible(bool visible);
+    void clearRefine();
+    [[nodiscard]] QString refineText() const;
+    void setLiveEnabled(bool enabled);
+    void setLiveVisible(bool visible);
+    [[nodiscard]] bool isLiveEnabled() const;
+    void setSortMode(const QString& mode);
+    [[nodiscard]] QString sortMode() const;
+
     [[nodiscard]] SearchScope currentScope() const noexcept {
         return m_scope;
     }
@@ -45,6 +59,10 @@ signals:
     void indexToggled(bool enabled);
     void clearRequested();
     void saveSearchRequested();
+    void chipRemoved(const QString& token);
+    void sortModeChanged(const QString& mode);
+    void refineChanged(const QString& text);
+    void liveToggled(bool enabled);
 
 public slots:
     void updateThemeStyles(bool isDark);
@@ -56,6 +74,7 @@ private slots:
 private:
     void setupUi();
     void updateScopeButtons();
+    void updateLiveVisibility();
 
     SearchScope m_scope{SearchScope::ThisFolder};
     QString m_folderName;
@@ -69,6 +88,11 @@ private:
     QCheckBox* m_indexCb{nullptr};
     QLabel* m_kindLabel{nullptr};
     QComboBox* m_kindCombo{nullptr};
+    QWidget* m_chipBar{nullptr};
+    QComboBox* m_sortCombo{nullptr};
+    QLineEdit* m_refineEdit{nullptr};
+    QCheckBox* m_liveCb{nullptr};
+    QVector<QToolButton*> m_chipButtons;
     QLabel* m_filterSummaryLabel{nullptr};
     QLabel* m_statusLabel{nullptr};
     QPushButton* m_saveSearchBtn{nullptr};

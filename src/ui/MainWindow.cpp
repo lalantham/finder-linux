@@ -219,12 +219,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             &MainWindow::onOperationFinished);
     connect(m_opEngine, &FileOperationEngine::queueStatusChanged, m_progressDialog,
             &ProgressDialog::updateQueueStatus);
+    connect(m_opEngine, &FileOperationEngine::operationItemsReset, m_progressDialog,
+            &ProgressDialog::setOperationItems);
+    connect(m_opEngine, &FileOperationEngine::operationItemChanged, m_progressDialog,
+            &ProgressDialog::updateOperationItem);
     connect(m_progressDialog, &ProgressDialog::cancelRequested, m_opEngine,
             &FileOperationEngine::cancelAll);
     connect(m_progressDialog, &ProgressDialog::skipRequested, m_opEngine,
             &FileOperationEngine::cancel);
     connect(m_progressDialog, &ProgressDialog::skipCurrentFileRequested, m_opEngine,
             &FileOperationEngine::skipCurrentFile);
+    connect(m_progressDialog, &ProgressDialog::cancelItemRequested, m_opEngine,
+            &FileOperationEngine::cancelItem);
+    connect(m_progressDialog, &ProgressDialog::closeRequested, m_progressDialog, &QWidget::hide);
     connect(m_progressDialog, &ProgressDialog::pauseRequested, this, [this]() {
         m_opEngine->pause();
         m_progressDialog->setPaused(true);
@@ -601,6 +608,8 @@ void MainWindow::setupUi() {
     connect(m_tabManager, &TabManager::fileDropRequested, this, &MainWindow::onFilesDropped);
     connect(m_tabManager, &TabManager::searchClearRequested, this,
             [this]() { m_toolbar->clearSearch(); });
+    connect(m_tabManager, &TabManager::searchQueryEdited, this,
+            [this](const QString& query) { m_toolbar->setSearchText(query); });
     connect(m_tabManager, &TabManager::saveSearchRequested, this, &MainWindow::onSaveSearch);
     connect(m_tabManager, &TabManager::itemRenamed, this,
             [this](const QString& oldPath, const QString& newPath) {
@@ -2642,8 +2651,14 @@ void MainWindow::onOperationConflict(const OperationConflict& conflict, Conflict
 }
 
 void MainWindow::onOperationFinished(const OperationResult& result) {
-    if (m_opEngine->activeAndPendingJobCount() == 0) {
-        m_progressDialog->hide();
+    const bool lastJob = m_opEngine->activeAndPendingJobCount() == 0;
+    if (lastJob) {
+        if (!result.success || !result.warnings.isEmpty() || result.cancelledCount > 0 ||
+            result.skippedCount > 0) {
+            m_progressDialog->finish(result);
+        } else {
+            m_progressDialog->hide();
+        }
     }
     QString pathToSelect;
     if (result.success && !result.createdPaths.isEmpty()) {
@@ -3009,6 +3024,21 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                             }
                         }
                     });
+            }
+        }
+
+        if (single) {
+            TabPage* contextPage = m_tabManager->currentPage();
+            const bool inSearchResults =
+                contextPage && contextPage->model() && contextPage->model()->isSearchResultsView();
+            const QString enclosingFolder = primaryFi.absolutePath();
+            if (inSearchResults && QDir(enclosingFolder).exists()) {
+                menu.addAction(QIcon::fromTheme(QStringLiteral("document-open-folder")),
+                               QStringLiteral("Open Enclosing Folder"), this,
+                               [this, primaryPath]() {
+                                   if (TabPage* page = m_tabManager->currentPage())
+                                       page->revealFile(primaryPath);
+                               });
             }
         } else {
             // Multiple items

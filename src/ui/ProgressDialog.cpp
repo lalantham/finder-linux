@@ -1,11 +1,114 @@
 #include "ProgressDialog.h"
 #include "FileItem.h"
+#include <QAbstractTableModel>
 #include <QHBoxLayout>
+#include <QHeaderView>
+#include <QItemSelectionModel>
+#include <QTableView>
 #include <QVBoxLayout>
+
+namespace {
+QString statusText(int status) {
+    switch (static_cast<OperationItemStatus>(status)) {
+    case OperationItemStatus::Pending:
+        return QStringLiteral("Pending");
+    case OperationItemStatus::Copying:
+        return QStringLiteral("Copying");
+    case OperationItemStatus::Moving:
+        return QStringLiteral("Moving");
+    case OperationItemStatus::Compressing:
+        return QStringLiteral("Compressing");
+    case OperationItemStatus::Extracting:
+        return QStringLiteral("Extracting");
+    case OperationItemStatus::Trashing:
+        return QStringLiteral("Trashing");
+    case OperationItemStatus::Deleting:
+        return QStringLiteral("Deleting");
+    case OperationItemStatus::Done:
+        return QStringLiteral("Done");
+    case OperationItemStatus::Failed:
+        return QStringLiteral("Failed");
+    case OperationItemStatus::Skipped:
+        return QStringLiteral("Skipped");
+    case OperationItemStatus::Cancelled:
+        return QStringLiteral("Cancelled");
+    }
+    return QStringLiteral("Pending");
+}
+} // namespace
+
+class OperationItemModel : public QAbstractTableModel {
+public:
+    explicit OperationItemModel(QObject* parent = nullptr) : QAbstractTableModel(parent) {}
+
+    int rowCount(const QModelIndex& parent = QModelIndex()) const override {
+        return parent.isValid() ? 0 : static_cast<int>(m_items.size());
+    }
+    int columnCount(const QModelIndex& parent = QModelIndex()) const override {
+        return parent.isValid() ? 0 : 2;
+    }
+    QVariant data(const QModelIndex& index, int role) const override {
+        if (!index.isValid() || index.row() < 0 || index.row() >= m_items.size())
+            return {};
+        const OperationItem& item = m_items.at(index.row());
+        if (role == Qt::DisplayRole) {
+            return index.column() == 0 ? item.displayName
+                                       : statusText(static_cast<int>(item.status));
+        }
+        if (role == Qt::ToolTipRole) {
+            return item.detail.isEmpty() ? item.sourcePath : item.detail;
+        }
+        if (role == Qt::TextAlignmentRole && index.column() == 1)
+            return static_cast<int>(Qt::AlignRight | Qt::AlignVCenter);
+        return {};
+    }
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override {
+        if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
+            return {};
+        return section == 0 ? QStringLiteral("Item") : QStringLiteral("Status");
+    }
+
+    void resetItems(const QList<OperationItem>& items) {
+        beginResetModel();
+        m_items = items;
+        m_rows.clear();
+        for (int i = 0; i < m_items.size(); ++i)
+            m_rows.insert(m_items.at(i).id, i);
+        endResetModel();
+    }
+
+    void updateItem(quint64 id, int status, const QString& detail, qint64 processedBytes) {
+        const int row = m_rows.value(id, -1);
+        if (row < 0 || row >= m_items.size())
+            return;
+        OperationItem& item = m_items[row];
+        item.status = static_cast<OperationItemStatus>(status);
+        item.detail = detail;
+        item.processedBytes = processedBytes;
+        emit dataChanged(index(row, 0), index(row, columnCount() - 1));
+    }
+
+    [[nodiscard]] OperationItem itemAt(int row) const {
+        return (row >= 0 && row < m_items.size()) ? m_items.at(row) : OperationItem{};
+    }
+    [[nodiscard]] int count() const {
+        return static_cast<int>(m_items.size());
+    }
+    void clear() {
+        beginResetModel();
+        m_items.clear();
+        m_rows.clear();
+        endResetModel();
+    }
+
+private:
+    QList<OperationItem> m_items;
+    QHash<quint64, int> m_rows;
+};
 
 ProgressDialog::ProgressDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(QStringLiteral("File Operation"));
-    setFixedWidth(400);
+    setFixedWidth(560);
     setModal(false);
 
     auto* layout = new QVBoxLayout(this);
@@ -36,8 +139,33 @@ ProgressDialog::ProgressDialog(QWidget* parent) : QDialog(parent) {
     m_currentFileLabel->hide();
     layout->addWidget(m_currentFileLabel);
 
+    m_itemModel = new OperationItemModel(this);
+    m_itemView = new QTableView(this);
+    m_itemView->setModel(m_itemModel);
+    m_itemView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_itemView->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_itemView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_itemView->setShowGrid(false);
+    m_itemView->setAlternatingRowColors(true);
+    m_itemView->verticalHeader()->setVisible(false);
+    m_itemView->verticalHeader()->setDefaultSectionSize(20);
+    m_itemView->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_itemView->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    m_itemView->setMaximumHeight(150);
+    m_itemView->hide();
+    layout->addWidget(m_itemView);
+
+    m_summaryLabel = new QLabel(this);
+    m_summaryLabel->setWordWrap(true);
+    m_summaryLabel->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
+    m_summaryLabel->hide();
+    layout->addWidget(m_summaryLabel);
+
     auto* bottomRow = new QHBoxLayout();
     m_detailLabel = new QLabel(this);
+    m_cancelItemBtn = new QPushButton(QStringLiteral("Cancel Item"), this);
+    m_cancelItemBtn->setFixedWidth(90);
+    m_cancelItemBtn->setEnabled(false);
     m_skipFileBtn = new QPushButton(QStringLiteral("Skip File"), this);
     m_skipFileBtn->setFixedWidth(80);
     m_skipBtn = new QPushButton(QStringLiteral("Skip Task"), this);
@@ -50,12 +178,34 @@ ProgressDialog::ProgressDialog(QWidget* parent) : QDialog(parent) {
 
     bottomRow->addWidget(m_detailLabel);
     bottomRow->addStretch();
+    bottomRow->addWidget(m_cancelItemBtn);
     bottomRow->addWidget(m_skipFileBtn);
     bottomRow->addWidget(m_skipBtn);
     bottomRow->addWidget(m_pauseBtn);
     bottomRow->addWidget(m_cancelBtn);
     layout->addLayout(bottomRow);
 
+    connect(m_cancelItemBtn, &QPushButton::clicked, this, [this]() {
+        const QModelIndex current = m_itemView->currentIndex();
+        if (!current.isValid())
+            return;
+        const OperationItem item = m_itemModel->itemAt(current.row());
+        if (item.id != 0)
+            emit cancelItemRequested(item.id);
+    });
+    connect(m_itemView->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
+        if (m_finished) {
+            m_cancelItemBtn->setEnabled(false);
+            return;
+        }
+        const QModelIndex current = m_itemView->currentIndex();
+        if (!current.isValid()) {
+            m_cancelItemBtn->setEnabled(false);
+            return;
+        }
+        const OperationItem item = m_itemModel->itemAt(current.row());
+        m_cancelItemBtn->setEnabled(item.status == OperationItemStatus::Pending);
+    });
     connect(m_skipFileBtn, &QPushButton::clicked, this, &ProgressDialog::skipCurrentFileRequested);
     connect(m_skipBtn, &QPushButton::clicked, this, &ProgressDialog::skipRequested);
     connect(m_pauseBtn, &QPushButton::clicked, this, [this]() {
@@ -64,7 +214,12 @@ ProgressDialog::ProgressDialog(QWidget* parent) : QDialog(parent) {
         else
             emit pauseRequested();
     });
-    connect(m_cancelBtn, &QPushButton::clicked, this, &ProgressDialog::cancelRequested);
+    connect(m_cancelBtn, &QPushButton::clicked, this, [this]() {
+        if (m_finished)
+            emit closeRequested();
+        else
+            emit cancelRequested();
+    });
 }
 
 void ProgressDialog::setOperation(OperationType type, int totalItems, qint64 totalBytes) {
@@ -108,9 +263,16 @@ void ProgressDialog::setOperation(OperationType type, int totalItems, qint64 tot
     m_detailLabel->setText(QStringLiteral("0 of %1").arg(totalItems));
     m_currentFileLabel->clear();
     m_currentFileLabel->hide();
+    m_itemModel->clear();
+    m_itemView->hide();
+    m_summaryLabel->clear();
+    m_summaryLabel->hide();
+    m_finished = false;
+    m_cancelBtn->setText(QStringLiteral("Stop"));
     const bool pausable = type == OperationType::Copy || type == OperationType::Move ||
                           type == OperationType::Duplicate || type == OperationType::Trash ||
-                          type == OperationType::Delete;
+                          type == OperationType::Delete || type == OperationType::Compress ||
+                          type == OperationType::Extract;
     const bool skippable = type == OperationType::Copy || type == OperationType::Move ||
                            type == OperationType::Duplicate;
     m_pauseBtn->setEnabled(pausable);
@@ -165,6 +327,40 @@ void ProgressDialog::updateProgress(const OperationProgress& progress) {
         m_currentFileLabel->setToolTip(progress.currentItem);
         m_currentFileLabel->show();
     }
+}
+
+void ProgressDialog::setOperationItems(const QList<OperationItem>& items) {
+    m_itemModel->resetItems(items);
+    m_summaryLabel->hide();
+    m_itemView->setVisible(items.size() > 1);
+    m_cancelItemBtn->setEnabled(false);
+    m_finished = false;
+    m_cancelBtn->setText(QStringLiteral("Stop"));
+}
+
+void ProgressDialog::updateOperationItem(quint64 id, int status, const QString& detail,
+                                         qint64 processedBytes) {
+    m_itemModel->updateItem(id, status, detail, processedBytes);
+    if (m_itemView->isVisible() && !m_itemView->currentIndex().isValid() &&
+        m_itemModel->count() > 0) {
+        m_itemView->setCurrentIndex(m_itemModel->index(0, 0));
+    }
+}
+
+void ProgressDialog::finish(const OperationResult& result) {
+    m_finished = true;
+    m_summaryLabel->setText(
+        QStringLiteral("Processed: %1   •   Failed: %2   •   Skipped: %3   •   Cancelled: %4")
+            .arg(result.processedCount)
+            .arg(result.errorCount)
+            .arg(result.skippedCount)
+            .arg(result.cancelledCount));
+    m_summaryLabel->setToolTip(result.errorMessage);
+    m_summaryLabel->show();
+    m_pauseBtn->setEnabled(false);
+    m_skipFileBtn->setEnabled(false);
+    m_cancelItemBtn->setEnabled(false);
+    m_cancelBtn->setText(QStringLiteral("Close"));
 }
 
 void ProgressDialog::setPaused(bool paused) {

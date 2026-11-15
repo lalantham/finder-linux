@@ -29,6 +29,8 @@ private slots:
     void testCopyFolderMerge();
     void testMoveFolderMerge();
     void testPauseAndResumeState();
+    void testOperationItemStatuses();
+    void testCancelPendingItem();
 };
 
 void TestOperations::testCreateFolderAndFile() {
@@ -495,6 +497,87 @@ void TestOperations::testPauseAndResumeState() {
     QVERIFY(engine.isPaused());
     engine.resume();
     QVERIFY(!engine.isPaused());
+}
+
+void TestOperations::testOperationItemStatuses() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+    const QString first = srcDir.filePath(QStringLiteral("one.txt"));
+    const QString second = srcDir.filePath(QStringLiteral("two.txt"));
+    for (const QString& path : {first, second}) {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("payload");
+        f.close();
+    }
+
+    FileOperationEngine engine;
+    QSignalSpy resetSpy(&engine, &FileOperationEngine::operationItemsReset);
+    QSignalSpy changeSpy(&engine, &FileOperationEngine::operationItemChanged);
+    QSignalSpy finishSpy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems({first, second}, dstDir.path(), ConflictResolution::Replace));
+    QVERIFY(finishSpy.wait(5000));
+
+    QCOMPARE(resetSpy.count(), 1);
+    const QList<OperationItem> items = resetSpy.at(0).at(0).value<QList<OperationItem>>();
+    QCOMPARE(items.size(), 2);
+    for (const OperationItem& item : items) {
+        bool sawDone = false;
+        for (const auto& args : changeSpy) {
+            if (args.at(0).toULongLong() == item.id &&
+                args.at(1).toInt() == static_cast<int>(OperationItemStatus::Done)) {
+                sawDone = true;
+                break;
+            }
+        }
+        QVERIFY(sawDone);
+    }
+}
+
+void TestOperations::testCancelPendingItem() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+    const QString first = srcDir.filePath(QStringLiteral("first.txt"));
+    const QString second = srcDir.filePath(QStringLiteral("second.txt"));
+    for (const QString& path : {first, second}) {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("payload");
+        f.close();
+    }
+    QFile existing(dstDir.filePath(QStringLiteral("first.txt")));
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    existing.write("old");
+    existing.close();
+
+    FileOperationEngine engine;
+    QSignalSpy resetSpy(&engine, &FileOperationEngine::operationItemsReset);
+    QSignalSpy finishSpy(&engine, &FileOperationEngine::operationFinished);
+    bool cancelledSecond = false;
+    connect(&engine, &FileOperationEngine::conflictEncountered, &engine,
+            [&](const OperationConflict&, ConflictResolution& resolution, bool& applyToAll) {
+                if (!cancelledSecond && resetSpy.count() > 0) {
+                    const auto items = resetSpy.at(0).at(0).value<QList<OperationItem>>();
+                    for (const OperationItem& item : items) {
+                        if (item.sourcePath.endsWith(QStringLiteral("second.txt"))) {
+                            engine.cancelItem(item.id);
+                            cancelledSecond = true;
+                            break;
+                        }
+                    }
+                }
+                resolution = ConflictResolution::Skip;
+                applyToAll = false;
+            });
+
+    QVERIFY(engine.copyItems({first, second}, dstDir.path(), ConflictResolution::Ask));
+    QVERIFY(finishSpy.wait(5000));
+    const OperationResult result = finishSpy.at(0).at(0).value<OperationResult>();
+    QVERIFY(cancelledSecond);
+    QVERIFY(!QFile::exists(dstDir.filePath(QStringLiteral("second.txt"))));
+    QCOMPARE(result.cancelledCount, 1);
 }
 
 QTEST_MAIN(TestOperations)

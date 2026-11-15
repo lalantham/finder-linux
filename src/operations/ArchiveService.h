@@ -26,7 +26,8 @@ public:
                          const std::function<void(const QString& currentFile, qint64 processedBytes,
                                                   qint64 totalBytes)>& progressCallback = nullptr,
                          std::atomic<bool>* cancelFlag = nullptr, QString* error = nullptr,
-                         int compressionLevel = -1, const QString& passphrase = QString());
+                         int compressionLevel = -1, const QString& passphrase = QString(),
+                         std::atomic<bool>* pauseFlag = nullptr);
 
     static bool extractAppImage(const QString& appImagePath, QString* outputDir = nullptr,
                                 QString* error = nullptr);
@@ -35,5 +36,7 @@ public:
                         const std::function<void(const QString& currentFile, qint64 processedBytes,
                                                  qint64 totalBytes)>& progressCallback = nullptr,
                         std::atomic<bool>* cancelFlag = nullptr, QString* error = nullptr,
-                        QString* warning = nullptr, const QString& passphrase = QString());
+                        QString* warning = nullptr, const QString& passphrase = QString(),
+                        std::atomic<bool>* pauseFlag = nullptr,
+                        const std::function<bool(const QString&)>& shouldSkip = nullptr);
 };

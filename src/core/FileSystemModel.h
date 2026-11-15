@@ -52,7 +52,8 @@ public:
         FileDateOpenedRole,
         FileCommentRole,
         FileMimeTypeRole,
-        FileDateAddedRole
+        FileDateAddedRole,
+        FileRelevanceRole
     };
 
     enum class SortField {
@@ -107,6 +108,14 @@ public:
 
     void setSearchResults(const QVector<FileItem>& items, bool applySorting = true);
     void appendSearchResults(const QVector<FileItem>& items);
+    void setSearchResultsFilter(const QString& text);
+    [[nodiscard]] QString searchResultsFilter() const noexcept {
+        return m_searchResultsFilter;
+    }
+    void setSortByRelevance(bool enabled);
+    [[nodiscard]] bool sortByRelevance() const noexcept {
+        return m_sortByRelevance;
+    }
     void clearSearchResults();
     [[nodiscard]] bool isSearchResultsView() const noexcept {
         return m_isSearchResultsView;
@@ -170,6 +179,7 @@ signals:
     void directoryLoading(const QString& path);
     void directoryLoaded(const QString& path, int itemCount);
     void sortChanged(int column, Qt::SortOrder order);
+    void rootDirectoryChanged(const QString& path);
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory,
                            Qt::DropAction action);
     void itemRenamed(const QString& oldPath, const QString& newPath);
@@ -185,6 +195,7 @@ private:
     static bool isLocalFileSystem(const QString& path);
     void sortInternal();
     void applyFilterInternal();
+    void rebuildSearchResults();
     static bool itemMatchesFilter(const FileItem& item, const QString& query, const QString& kind);
     void scheduleFolderSizeCalculations();
 
@@ -200,6 +211,9 @@ private:
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
 
     QVector<FileItem> m_items;
+    QVector<FileItem> m_searchResultItems;
+    QString m_searchResultsFilter;
+    bool m_sortByRelevance{false};
     QVector<FileItem> m_allFolderItems;
     QHash<QString, QPair<qint64, int>> m_folderSizeCache;
     QHash<QString, qint64> m_folderSizeCacheTime;

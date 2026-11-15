@@ -58,6 +58,7 @@ void SplitTabWidget::setupPage(TabPage* page) {
     connect(page, &TabPage::contextMenuRequested, this, &SplitTabWidget::contextMenuRequested);
     connect(page, &TabPage::fileDropRequested, this, &SplitTabWidget::fileDropRequested);
     connect(page, &TabPage::searchClearRequested, this, &SplitTabWidget::searchClearRequested);
+    connect(page, &TabPage::searchQueryEdited, this, &SplitTabWidget::searchQueryEdited);
     connect(page, &TabPage::saveSearchRequested, this, &SplitTabWidget::saveSearchRequested);
     connect(page, &TabPage::itemRenamed, this, &SplitTabWidget::itemRenamed);
 }
@@ -259,6 +260,7 @@ TabPage* TabManager::createTab(const QString& path) {
     connect(splitTab, &SplitTabWidget::fileDropRequested, this, &TabManager::fileDropRequested);
     connect(splitTab, &SplitTabWidget::searchClearRequested, this,
             &TabManager::searchClearRequested);
+    connect(splitTab, &SplitTabWidget::searchQueryEdited, this, &TabManager::searchQueryEdited);
     connect(splitTab, &SplitTabWidget::saveSearchRequested, this, &TabManager::saveSearchRequested);
     connect(splitTab, &SplitTabWidget::itemRenamed, this, &TabManager::itemRenamed);
 

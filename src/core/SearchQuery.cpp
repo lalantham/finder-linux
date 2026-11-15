@@ -149,6 +149,64 @@ QString stripQuotes(const QString& value) {
     return result;
 }
 
+bool isChipKey(const QString& key) {
+    static const QSet<QString> keys = {
+        QStringLiteral("name"),      QStringLiteral("content"), QStringLiteral("text"),
+        QStringLiteral("inside"),    QStringLiteral("kind"),    QStringLiteral("type"),
+        QStringLiteral("tag"),       QStringLiteral("tags"),    QStringLiteral("ext"),
+        QStringLiteral("extension"), QStringLiteral("size"),    QStringLiteral("modified"),
+        QStringLiteral("date"),      QStringLiteral("before"),  QStringLiteral("after")};
+    return keys.contains(key);
+}
+
+QString quoteValue(const QString& value) {
+    const bool needsQuotes = value.contains(QLatin1Char(' ')) ||
+                             value.contains(QLatin1Char('\t')) ||
+                             value.contains(QLatin1Char('"')) || value.contains(QLatin1Char('\\'));
+    if (!needsQuotes)
+        return value;
+    QString escaped = value;
+    escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    return QLatin1Char('"') + escaped + QLatin1Char('"');
+}
+
+QString canonicalToken(const QString& raw) {
+    QString token = raw;
+    bool excluded = false;
+    if (token.startsWith(QLatin1Char('-')) && token.size() > 1) {
+        excluded = true;
+        token = token.mid(1);
+    }
+    const qsizetype colon = token.indexOf(QLatin1Char(':'));
+    QString body;
+    if (colon > 0) {
+        QString value = token.mid(colon + 1);
+        if (value.size() >= 2 && value.startsWith(QLatin1Char('"')) &&
+            value.endsWith(QLatin1Char('"'))) {
+            value = value.mid(1, value.size() - 2);
+        }
+        body = token.left(colon).toLower() + QLatin1Char(':') + quoteValue(value);
+    } else {
+        body = quoteValue(token);
+    }
+    return (excluded ? QStringLiteral("-") : QString()) + body;
+}
+
+QString chipLabel(const QString& raw, bool excluded) {
+    QString token = raw;
+    if (token.startsWith(QLatin1Char('-')) && token.size() > 1)
+        token = token.mid(1);
+    const qsizetype colon = token.indexOf(QLatin1Char(':'));
+    QString label = token;
+    if (colon > 0) {
+        QString key = token.left(colon);
+        key[0] = key.at(0).toUpper();
+        label = key + QStringLiteral(": ") + token.mid(colon + 1);
+    }
+    return (excluded ? QStringLiteral("− ") : QString()) + label;
+}
+
 } // namespace
 
 namespace SearchQuery {
@@ -186,6 +244,60 @@ QStringList tokenize(const QString& query) {
         tokens.append(current);
     }
     return tokens;
+}
+
+QVector<Chip> chips(const QString& query) {
+    QVector<Chip> result;
+    for (const QString& raw : tokenize(query)) {
+        QString token = raw;
+        bool excluded = false;
+        if (token.startsWith(QLatin1Char('-')) && token.size() > 1) {
+            excluded = true;
+            token = token.mid(1);
+        }
+        const qsizetype colon = token.indexOf(QLatin1Char(':'));
+        const QString key = colon > 0 ? token.left(colon).toLower() : QString();
+        if (!isChipKey(key) && !excluded)
+            continue;
+
+        Chip chip;
+        chip.token = canonicalToken(raw);
+        chip.label = chipLabel(raw, excluded);
+        chip.excluded = excluded;
+        result.append(chip);
+    }
+    return result;
+}
+
+QString removeToken(const QString& query, const QString& rawToken) {
+    const QString wanted = canonicalToken(rawToken);
+    bool removed = false;
+    QStringList kept;
+    for (const QString& raw : tokenize(query)) {
+        if (!removed && canonicalToken(raw) == wanted) {
+            removed = true;
+            continue;
+        }
+        // Re-quote values that contain spaces so the remaining query still
+        // parses as the same tokens.
+        QString token = raw;
+        bool excluded = false;
+        if (token.startsWith(QLatin1Char('-')) && token.size() > 1) {
+            excluded = true;
+            token = token.mid(1);
+        }
+        const qsizetype colon = token.indexOf(QLatin1Char(':'));
+        QString rebuilt;
+        if (colon > 0) {
+            rebuilt = token.left(colon) + QLatin1Char(':') + quoteValue(token.mid(colon + 1));
+        } else {
+            rebuilt = quoteValue(token);
+        }
+        if (excluded)
+            rebuilt.prepend(QLatin1Char('-'));
+        kept.append(rebuilt);
+    }
+    return kept.join(QLatin1Char(' '));
 }
 
 QString kindFromToken(const QString& token) {

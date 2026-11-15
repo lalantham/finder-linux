@@ -3,6 +3,7 @@
 #include <QDate>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
 // Parsed representation of a structured search query.
 //
@@ -62,5 +63,17 @@ namespace SearchQuery {
 
 [[nodiscard]] QString kindFromToken(const QString& token);
 [[nodiscard]] QStringList tokenize(const QString& query);
+
+// A structured filter token suitable for a removable UI chip.
+struct Chip {
+    QString label;
+    QString token; // Canonical raw token, safe to pass to removeToken().
+    bool excluded{false};
+};
+
+[[nodiscard]] QVector<Chip> chips(const QString& query);
+// Remove the first token whose canonical form equals rawToken, preserving
+// surrounding free-text terms.
+[[nodiscard]] QString removeToken(const QString& query, const QString& rawToken);
 
 } // namespace SearchQuery

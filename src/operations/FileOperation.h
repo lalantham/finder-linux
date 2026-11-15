@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QDateTime>
+#include <QList>
+#include <QMetaType>
 #include <QString>
 #include <QStringList>
 
@@ -19,6 +21,30 @@ enum class OperationType {
 };
 
 enum class ConflictResolution { Ask, Merge, Replace, Skip, KeepBoth, Cancel };
+
+enum class OperationItemStatus {
+    Pending,
+    Copying,
+    Moving,
+    Compressing,
+    Extracting,
+    Trashing,
+    Deleting,
+    Done,
+    Failed,
+    Skipped,
+    Cancelled
+};
+
+struct OperationItem {
+    quint64 id{0};
+    QString sourcePath;
+    QString displayName;
+    qint64 totalBytes{0};
+    qint64 processedBytes{0};
+    OperationItemStatus status{OperationItemStatus::Pending};
+    QString detail;
+};
 
 struct OperationConflict {
     QString sourcePath;
@@ -46,6 +72,8 @@ struct OperationProgress {
     qint64 elapsedMs{0};
     qint64 remainingMs{-1};
     int percent{0};
+    int itemsCancelled{0};
+    qint64 bytesCancelled{0};
 };
 
 struct OperationResult {
@@ -56,7 +84,11 @@ struct OperationResult {
     int processedCount{0};
     int skippedCount{0};
     int errorCount{0};
+    int cancelledCount{0};
     QStringList createdPaths;
     QList<QPair<QString, QString>> movedPairs;   // (sourcePath, destinationPath)
     QList<QPair<QString, QString>> trashedPairs; // (sourcePath, trashFilePath)
 };
+
+Q_DECLARE_METATYPE(OperationItem)
+Q_DECLARE_METATYPE(QList<OperationItem>)

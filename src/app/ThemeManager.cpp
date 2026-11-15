@@ -1,30 +1,27 @@
 #include "ThemeManager.h"
 #include "StyleHelper.h"
 #include <QApplication>
-#include <QStyleHints>
-#include <QPalette>
 #include <QColor>
 #include <QDir>
 #include <QFile>
-#include <QStandardPaths>
-#include <QTextStream>
 #include <QMap>
+#include <QPalette>
+#include <QStandardPaths>
+#include <QStyleHints>
+#include <QTextStream>
 
-ThemeManager::ThemeManager()
-{
+ThemeManager::ThemeManager() {
     m_colors = detectColors(AppTheme::System);
 }
 
-ThemeManager& ThemeManager::instance()
-{
+ThemeManager& ThemeManager::instance() {
     static ThemeManager mgr;
     return mgr;
 }
 
-bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
-{
-    QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                         + QStringLiteral("/kdeglobals");
+bool ThemeManager::parseKdeGlobals(ThemeColors& outColors) {
+    QString configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) +
+                         QStringLiteral("/kdeglobals");
     if (!QFile::exists(configPath)) {
         return false;
     }
@@ -52,7 +49,8 @@ bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
 
     while (!in.atEnd()) {
         QString line = in.readLine().trimmed();
-        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QLatin1Char(';'))) {
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) ||
+            line.startsWith(QLatin1Char(';'))) {
             continue;
         }
         if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']'))) {
@@ -73,14 +71,18 @@ bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
         if (ini[QStringLiteral("General")].contains(QStringLiteral("AccentColor"))) {
             accent = parseRgb(ini[QStringLiteral("General")][QStringLiteral("AccentColor")]);
         }
-        if (!accent.isValid() && ini[QStringLiteral("General")].contains(QStringLiteral("LastUsedCustomAccentColor"))) {
-            accent = parseRgb(ini[QStringLiteral("General")][QStringLiteral("LastUsedCustomAccentColor")]);
+        if (!accent.isValid() &&
+            ini[QStringLiteral("General")].contains(QStringLiteral("LastUsedCustomAccentColor"))) {
+            accent = parseRgb(
+                ini[QStringLiteral("General")][QStringLiteral("LastUsedCustomAccentColor")]);
         }
     }
     if (!accent.isValid() && ini.contains(QStringLiteral("Colors:Selection"))) {
-        accent = parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("DecorationFocus")]);
+        accent =
+            parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("DecorationFocus")]);
         if (!accent.isValid()) {
-            accent = parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("BackgroundNormal")]);
+            accent = parseRgb(
+                ini[QStringLiteral("Colors:Selection")][QStringLiteral("BackgroundNormal")]);
         }
     }
 
@@ -88,14 +90,17 @@ bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
     QColor window, windowAlt, text, subText;
     if (ini.contains(QStringLiteral("Colors:Window"))) {
         window = parseRgb(ini[QStringLiteral("Colors:Window")][QStringLiteral("BackgroundNormal")]);
-        windowAlt = parseRgb(ini[QStringLiteral("Colors:Window")][QStringLiteral("BackgroundAlternate")]);
+        windowAlt =
+            parseRgb(ini[QStringLiteral("Colors:Window")][QStringLiteral("BackgroundAlternate")]);
         text = parseRgb(ini[QStringLiteral("Colors:Window")][QStringLiteral("ForegroundNormal")]);
-        subText = parseRgb(ini[QStringLiteral("Colors:Window")][QStringLiteral("ForegroundInactive")]);
+        subText =
+            parseRgb(ini[QStringLiteral("Colors:Window")][QStringLiteral("ForegroundInactive")]);
     }
 
     // Header background (toolbar/menubar)
     if (ini.contains(QStringLiteral("Colors:Header"))) {
-        QColor headerBg = parseRgb(ini[QStringLiteral("Colors:Header")][QStringLiteral("BackgroundNormal")]);
+        QColor headerBg =
+            parseRgb(ini[QStringLiteral("Colors:Header")][QStringLiteral("BackgroundNormal")]);
         if (headerBg.isValid()) {
             windowAlt = headerBg;
         }
@@ -105,21 +110,25 @@ bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
     QColor view, viewAlt;
     if (ini.contains(QStringLiteral("Colors:View"))) {
         view = parseRgb(ini[QStringLiteral("Colors:View")][QStringLiteral("BackgroundNormal")]);
-        viewAlt = parseRgb(ini[QStringLiteral("Colors:View")][QStringLiteral("BackgroundAlternate")]);
+        viewAlt =
+            parseRgb(ini[QStringLiteral("Colors:View")][QStringLiteral("BackgroundAlternate")]);
     }
 
     // 4. Button Colors
     QColor button, buttonText;
     if (ini.contains(QStringLiteral("Colors:Button"))) {
         button = parseRgb(ini[QStringLiteral("Colors:Button")][QStringLiteral("BackgroundNormal")]);
-        buttonText = parseRgb(ini[QStringLiteral("Colors:Button")][QStringLiteral("ForegroundNormal")]);
+        buttonText =
+            parseRgb(ini[QStringLiteral("Colors:Button")][QStringLiteral("ForegroundNormal")]);
     }
 
     // 5. Selection Colors
     QColor selection, selectionText;
     if (ini.contains(QStringLiteral("Colors:Selection"))) {
-        selection = parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("BackgroundNormal")]);
-        selectionText = parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("ForegroundNormal")]);
+        selection =
+            parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("BackgroundNormal")]);
+        selectionText =
+            parseRgb(ini[QStringLiteral("Colors:Selection")][QStringLiteral("ForegroundNormal")]);
     }
 
     if (!window.isValid()) {
@@ -127,11 +136,20 @@ bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
     }
 
     outColors.window = window;
-    outColors.windowAlt = windowAlt.isValid() ? windowAlt : (window.lightness() < 128 ? window.lighter(115) : window.darker(108));
+    outColors.windowAlt =
+        windowAlt.isValid() ? windowAlt
+                            : (window.lightness() < 128 ? window.lighter(115) : window.darker(108));
     outColors.view = view.isValid() ? view : window;
-    outColors.viewAlt = viewAlt.isValid() ? viewAlt : (outColors.view.lightness() < 128 ? outColors.view.lighter(115) : outColors.view.darker(105));
-    outColors.text = text.isValid() ? text : (window.lightness() < 128 ? QColor(0xfc, 0xfc, 0xfc) : QColor(0x31, 0x36, 0x3b));
-    outColors.subText = subText.isValid() ? subText : (window.lightness() < 128 ? QColor(0xa1, 0xa9, 0xb1) : QColor(0x7f, 0x8c, 0x8d));
+    outColors.viewAlt = viewAlt.isValid()
+                            ? viewAlt
+                            : (outColors.view.lightness() < 128 ? outColors.view.lighter(115)
+                                                                : outColors.view.darker(105));
+    outColors.text = text.isValid() ? text
+                                    : (window.lightness() < 128 ? QColor(0xfc, 0xfc, 0xfc)
+                                                                : QColor(0x31, 0x36, 0x3b));
+    outColors.subText = subText.isValid() ? subText
+                                          : (window.lightness() < 128 ? QColor(0xa1, 0xa9, 0xb1)
+                                                                      : QColor(0x7f, 0x8c, 0x8d));
     outColors.button = button.isValid() ? button : outColors.windowAlt;
     outColors.buttonText = buttonText.isValid() ? buttonText : outColors.text;
     outColors.accent = accent.isValid() ? accent : QColor(0xad, 0x70, 0x6f);
@@ -145,8 +163,7 @@ bool ThemeManager::parseKdeGlobals(ThemeColors& outColors)
     return true;
 }
 
-ThemeColors ThemeManager::detectColors(AppTheme theme)
-{
+ThemeColors ThemeManager::detectColors(AppTheme theme) {
     ThemeColors c;
     bool hasKde = parseKdeGlobals(c);
 
@@ -155,12 +172,16 @@ ThemeColors ThemeManager::detectColors(AppTheme theme)
         if (hasKde) {
             wantDark = c.isDark;
         } else {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
             auto* hints = QGuiApplication::styleHints();
             if (hints) {
                 wantDark = (hints->colorScheme() == Qt::ColorScheme::Dark);
             } else {
                 wantDark = (QGuiApplication::palette().color(QPalette::Window).lightness() < 128);
             }
+#else
+            wantDark = (QGuiApplication::palette().color(QPalette::Window).lightness() < 128);
+#endif
         }
     } else {
         wantDark = (theme == AppTheme::Dark);
@@ -173,29 +194,31 @@ ThemeColors ThemeManager::detectColors(AppTheme theme)
     // Standard Breeze Dark / Breeze Light palette
     c.isDark = wantDark;
     if (wantDark) {
-        c.window = QColor(32, 35, 38);      // #202326 (Breeze Dark Window)
-        c.windowAlt = QColor(41, 44, 48);   // #292c30 (Breeze Dark Header/Toolbar)
-        c.view = QColor(20, 22, 24);        // #141618 (Breeze Dark View)
-        c.viewAlt = QColor(29, 31, 34);     // #1d1f22
-        c.text = QColor(252, 252, 252);     // #fcfcfc
-        c.subText = QColor(161, 169, 177);  // #a1a9b1
-        c.button = QColor(41, 44, 48);      // #292c30
+        c.window = QColor(32, 35, 38);     // #202326 (Breeze Dark Window)
+        c.windowAlt = QColor(41, 44, 48);  // #292c30 (Breeze Dark Header/Toolbar)
+        c.view = QColor(20, 22, 24);       // #141618 (Breeze Dark View)
+        c.viewAlt = QColor(29, 31, 34);    // #1d1f22
+        c.text = QColor(252, 252, 252);    // #fcfcfc
+        c.subText = QColor(161, 169, 177); // #a1a9b1
+        c.button = QColor(41, 44, 48);     // #292c30
         c.buttonText = QColor(252, 252, 252);
-        c.border = QColor(49, 54, 59);      // #31363b
-        if (!c.accent.isValid()) c.accent = QColor(173, 112, 111); // #ad706f
+        c.border = QColor(49, 54, 59); // #31363b
+        if (!c.accent.isValid())
+            c.accent = QColor(173, 112, 111); // #ad706f
         c.selection = c.accent;
         c.selectionText = Qt::white;
     } else {
-        c.window = QColor(239, 240, 241);   // #eff0f1 (Breeze Light Window)
-        c.windowAlt = QColor(227, 229, 231);// #e3e5e7 (Breeze Light Toolbar)
-        c.view = QColor(255, 255, 255);     // #ffffff
-        c.viewAlt = QColor(247, 247, 247);  // #f7f7f7
-        c.text = QColor(49, 54, 59);        // #31363b
-        c.subText = QColor(127, 140, 141);  // #7f8c8d
+        c.window = QColor(239, 240, 241);    // #eff0f1 (Breeze Light Window)
+        c.windowAlt = QColor(227, 229, 231); // #e3e5e7 (Breeze Light Toolbar)
+        c.view = QColor(255, 255, 255);      // #ffffff
+        c.viewAlt = QColor(247, 247, 247);   // #f7f7f7
+        c.text = QColor(49, 54, 59);         // #31363b
+        c.subText = QColor(127, 140, 141);   // #7f8c8d
         c.button = QColor(247, 247, 247);
         c.buttonText = QColor(49, 54, 59);
-        c.border = QColor(211, 215, 217);   // #d3d7d9
-        if (!c.accent.isValid()) c.accent = QColor(173, 112, 111);
+        c.border = QColor(211, 215, 217); // #d3d7d9
+        if (!c.accent.isValid())
+            c.accent = QColor(173, 112, 111);
         c.selection = c.accent;
         c.selectionText = Qt::white;
     }
@@ -203,8 +226,7 @@ ThemeColors ThemeManager::detectColors(AppTheme theme)
     return c;
 }
 
-void ThemeManager::applyTheme(AppTheme theme)
-{
+void ThemeManager::applyTheme(AppTheme theme) {
     m_colors = detectColors(theme);
 
     if (qApp) {
@@ -221,14 +243,17 @@ void ThemeManager::applyTheme(AppTheme theme)
         pal.setColor(QPalette::BrightText, Qt::white);
         pal.setColor(QPalette::Link, m_colors.accent);
         pal.setColor(QPalette::Highlight, m_colors.accent);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
         pal.setColor(QPalette::Accent, m_colors.accent);
+#endif
         pal.setColor(QPalette::HighlightedText, m_colors.selectionText);
         pal.setColor(QPalette::Disabled, QPalette::Text, m_colors.subText);
         pal.setColor(QPalette::Disabled, QPalette::WindowText, m_colors.subText);
         pal.setColor(QPalette::Disabled, QPalette::ButtonText, m_colors.subText);
 
         qApp->setPalette(pal);
-        qApp->setStyleSheet(m_colors.isDark ? StyleHelper::darkThemeStyle(m_colors) : StyleHelper::lightThemeStyle(m_colors));
+        qApp->setStyleSheet(m_colors.isDark ? StyleHelper::darkThemeStyle(m_colors)
+                                            : StyleHelper::lightThemeStyle(m_colors));
     }
 
     emit themeChanged(m_colors.isDark);

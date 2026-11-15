@@ -21,6 +21,12 @@ public:
 
     void refresh();
     void setCalculatedFolderSize(qint64 size, int itemCount = -1);
+    void setRelevance(int relevance) noexcept {
+        m_relevance = relevance;
+    }
+    [[nodiscard]] int relevance() const noexcept {
+        return m_relevance;
+    }
 
     [[nodiscard]] const QString& path() const noexcept {
         return m_path;
@@ -127,6 +133,7 @@ private:
     QString m_baseName;
     QString m_suffix;
     qint64 m_size{0};
+    int m_relevance{0};
     qint64 m_diskUsage{0};
     quint64 m_inode{0};
     quint64 m_deviceId{0};

@@ -20,6 +20,10 @@
 #include <memory>
 #include <unistd.h>
 
+#ifndef FINDER_VERSION
+#define FINDER_VERSION "1.0.0"
+#endif
+
 static QString resolveInputPath(const QString& input) {
     if (input.isEmpty())
         return {};
@@ -166,7 +170,7 @@ int main(int argc, char* argv[]) {
     app.setApplicationDisplayName(QStringLiteral("File Manager"));
     app.setOrganizationName(QStringLiteral("FinderLinux"));
     app.setOrganizationDomain(QStringLiteral("finder.linux"));
-    app.setApplicationVersion(QStringLiteral("1.0.0"));
+    app.setApplicationVersion(QStringLiteral(FINDER_VERSION));
     app.setDesktopFileName(QStringLiteral("org.finderlinux.Finder"));
     app.setWindowIcon(QIcon::fromTheme(QStringLiteral("finder-linux"),
                                        QIcon(QStringLiteral(":/icons/finder-linux.svg"))));

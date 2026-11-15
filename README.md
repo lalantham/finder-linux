@@ -58,6 +58,11 @@ Designed as a native desktop application with genuine filesystem operations, res
   - `size:>10MB`, `size:1MB..10MB`
   - `modified:>2025-01-01`, `modified:2025-01-01..2025-12-31`
   - `name:report`, `content:"annual report"`, and `-draft` to exclude
+* **Live search updates**: recursive searches refresh when the current folder changes;
+  This PC searches stay manual to avoid whole-disk rescans. Toggle with **Live**.
+* **Search chips**: structured filters appear as removable chips above the results.
+* **Result controls**: sort by relevance, name, date, or size, and use **Search in results…**
+  to refine without rescanning. Search scope and sort mode are remembered.
 * **Smart Folders**: save any search from **Save Search...** or **File → New Smart Folder...**.
   Saved searches appear in the sidebar and can be opened, edited, renamed, or deleted.
 * Active filters are summarized below the search controls; `F5` re-runs the current search.
@@ -89,7 +94,7 @@ Designed as a native desktop application with genuine filesystem operations, res
 
 ### 3. File Operations & Data Integrity Engine
 * **Asynchronous Execution**: Copy, move, trash, duplicate, and delete operations execute on dedicated worker threads without blocking the GUI.
-* **Safe Chunked Streams**: Operations stream data in 64 KB buffers, allowing instant cancellation and real-time progress calculations (speed, transferred bytes, item counts).
+* **Safe Chunked Streams**: Operations stream data in 1 MB buffers, allowing instant cancellation and real-time progress calculations (speed, transferred bytes, item counts).
 * **Temporary File Strategy**: Data is written to hidden temporary files first and then atomically renamed into place upon completion to prevent corrupted partial files.
 * **Cross-Filesystem Moves**: When moving across distinct mount points, atomic renames fall back to verified recursive copying and source cleanup. Sources are never deleted if destination transfers fail.
 * **Conflict Resolution**: When a destination collision occurs, users are prompted with an interactive conflict dialog:
@@ -100,10 +105,12 @@ Designed as a native desktop application with genuine filesystem operations, res
   - *Cancel*
   - Separate *Apply to all folder conflicts* and *Apply to all file conflicts* options
 * **Operation Controls**:
-  - Pause / Resume long-running copy, move, duplicate, Trash, and delete operations
+  - Per-item progress table with **Cancel Item** for pending items
+  - Pause / Resume long-running copy, move, duplicate, Trash, delete, compress, and extract operations
   - Skip the current file without stopping the whole task
   - Live speed, elapsed progress, current file, and estimated time remaining
   - Queue-aware *Skip Task* and *Stop All* controls
+  - Completion summary with processed, failed, skipped, and cancelled counts
 * **Undo & Redo (`Ctrl+Z` / `Ctrl+Shift+Z`)**: Reversible operations (Folder creation, Renaming, Moving, and Trashing) are tracked on an bounded undo stack.
 
 ### 4. Freedesktop.org XDG Trash Specification
@@ -220,8 +227,36 @@ AppStream metadata, man page, and Bash/Zsh/Fish completions.
 - **Man page**: `data/finder-linux.1`
 - **Shell completions**: `data/completions/` for Bash, Zsh, and Fish.
 - **CI**: `.github/workflows/ci.yml` builds and tests on Arch Linux.
+- **Releases**: `.github/workflows/release.yml` builds Debian packages, AppImages, and tarballs on `v*` tags.
 - **Formatting**: `.clang-format` and `.clang-tidy` are provided for contributors.
 - **CMake presets**: `CMakePresets.json` provides `release` and `debug` presets.
+
+### Packaged Releases
+
+Tagged releases publish:
+
+- `finder-linux_<version>_amd64.deb` — Debian 12 / Ubuntu 23.04+ package
+- `finder-linux-<version>-x86_64.AppImage` — portable single-file build
+- `finder-linux-<version>-x86_64.tar.gz` — relocatable install tree
+- `SHA256SUMS` — checksums for all assets
+
+Build the same packages locally:
+
+```bash
+cmake -B build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr -DFINDER_VERSION=1.0.0
+cmake --build build-pkg
+cpack --config build-pkg/CPackConfig.cmake -G DEB -B dist
+BUILD_DIR=build-pkg bash packaging/make-appimage.sh 1.0.0
+BUILD_DIR=build-pkg bash packaging/make-tarball.sh 1.0.0
+```
+
+Releases are created automatically by pushing a version tag:
+
+```bash
+git tag v1.0.1
+git push origin v1.0.1
+```
 
 ---
 

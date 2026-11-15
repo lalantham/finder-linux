@@ -2,7 +2,10 @@
 #include "StyleHelper.h"
 #include "ThemeManager.h"
 #include <QIcon>
+#include <QLineEdit>
+#include <QMenu>
 #include <QSignalBlocker>
+#include <QToolButton>
 
 SearchScopeBar::SearchScopeBar(QWidget* parent) : QWidget(parent) {
     setFixedHeight(36);
@@ -67,6 +70,39 @@ void SearchScopeBar::setupUi() {
     connect(m_kindCombo, &QComboBox::currentIndexChanged, this,
             [this](int idx) { emit kindChanged(m_kindCombo->itemData(idx).toString()); });
     layout->addWidget(m_kindCombo);
+
+    m_chipBar = new QWidget(this);
+    auto* chipLayout = new QHBoxLayout(m_chipBar);
+    chipLayout->setContentsMargins(0, 0, 0, 0);
+    chipLayout->setSpacing(4);
+    m_chipBar->hide();
+    layout->addWidget(m_chipBar);
+
+    m_sortCombo = new QComboBox(this);
+    m_sortCombo->setFixedHeight(24);
+    m_sortCombo->setToolTip(QStringLiteral("Sort search results"));
+    m_sortCombo->addItem(QStringLiteral("Relevance"), QStringLiteral("relevance"));
+    m_sortCombo->addItem(QStringLiteral("Name"), QStringLiteral("name"));
+    m_sortCombo->addItem(QStringLiteral("Date"), QStringLiteral("date"));
+    m_sortCombo->addItem(QStringLiteral("Size"), QStringLiteral("size"));
+    connect(m_sortCombo, &QComboBox::currentIndexChanged, this,
+            [this](int idx) { emit sortModeChanged(m_sortCombo->itemData(idx).toString()); });
+    layout->addWidget(m_sortCombo);
+
+    m_refineEdit = new QLineEdit(this);
+    m_refineEdit->setPlaceholderText(QStringLiteral("Search in results…"));
+    m_refineEdit->setFixedHeight(24);
+    m_refineEdit->setMaximumWidth(150);
+    m_refineEdit->hide();
+    connect(m_refineEdit, &QLineEdit::textChanged, this, &SearchScopeBar::refineChanged);
+    layout->addWidget(m_refineEdit);
+
+    m_liveCb = new QCheckBox(QStringLiteral("Live"), this);
+    m_liveCb->setToolTip(QStringLiteral("Refresh results when this folder changes"));
+    m_liveCb->setChecked(true);
+    m_liveCb->setStyleSheet(QStringLiteral("font-size: 11px;"));
+    connect(m_liveCb, &QCheckBox::toggled, this, &SearchScopeBar::liveToggled);
+    layout->addWidget(m_liveCb);
 
     m_contentsCb = new QCheckBox(QStringLiteral("Contents"), this);
     m_contentsCb->setToolTip(
@@ -178,6 +214,7 @@ void SearchScopeBar::setFromFilter(const SearchFilter& filter) {
     m_kindCombo->blockSignals(false);
     setFilterSummary(SearchQuery::summary(filter));
     updateScopeButtons();
+    updateLiveVisibility();
 }
 
 void SearchScopeBar::reset() {
@@ -200,7 +237,10 @@ void SearchScopeBar::reset() {
     m_filterSummaryLabel->clear();
     m_filterSummaryLabel->hide();
     m_statusLabel->clear();
+    setChips({});
+    clearRefine();
     updateScopeButtons();
+    setLiveVisible(true);
 }
 
 QString SearchScopeBar::currentKind() const {
@@ -222,11 +262,108 @@ void SearchScopeBar::setContentSearch(bool enabled) {
     m_contentsCb->setChecked(enabled);
 }
 
+void SearchScopeBar::setChips(const QVector<SearchQuery::Chip>& chips) {
+    if (!m_chipBar)
+        return;
+    auto* chipLayout = qobject_cast<QHBoxLayout*>(m_chipBar->layout());
+    if (!chipLayout)
+        return;
+    while (QLayoutItem* item = chipLayout->takeAt(0)) {
+        if (QWidget* widget = item->widget())
+            widget->deleteLater();
+        delete item;
+    }
+    m_chipButtons.clear();
+
+    constexpr int MaxVisibleChips = 4;
+    const int visibleCount = qMin(MaxVisibleChips, static_cast<int>(chips.size()));
+    for (int i = 0; i < visibleCount; ++i) {
+        auto* button = new QToolButton(m_chipBar);
+        button->setText(chips.at(i).label + QStringLiteral("  ✕"));
+        button->setToolTip(chips.at(i).token);
+        button->setAutoRaise(true);
+        button->setFixedHeight(22);
+        const QString token = chips.at(i).token;
+        connect(button, &QToolButton::clicked, this, [this, token]() { emit chipRemoved(token); });
+        chipLayout->addWidget(button);
+        m_chipButtons.append(button);
+    }
+    if (chips.size() > MaxVisibleChips) {
+        auto* more = new QToolButton(m_chipBar);
+        more->setText(QStringLiteral("+%1").arg(chips.size() - MaxVisibleChips));
+        more->setAutoRaise(true);
+        more->setFixedHeight(22);
+        auto* menu = new QMenu(more);
+        for (int i = MaxVisibleChips; i < chips.size(); ++i) {
+            const QString token = chips.at(i).token;
+            QAction* action = menu->addAction(chips.at(i).label);
+            connect(action, &QAction::triggered, this,
+                    [this, token]() { emit chipRemoved(token); });
+        }
+        more->setMenu(menu);
+        more->setPopupMode(QToolButton::InstantPopup);
+        chipLayout->addWidget(more);
+        m_chipButtons.append(more);
+    }
+    m_chipBar->setVisible(!chips.isEmpty());
+    updateThemeStyles(m_isDark);
+}
+
+void SearchScopeBar::setRefineVisible(bool visible) {
+    if (m_refineEdit)
+        m_refineEdit->setVisible(visible);
+}
+
+void SearchScopeBar::clearRefine() {
+    if (!m_refineEdit)
+        return;
+    const QSignalBlocker blocker(m_refineEdit);
+    m_refineEdit->clear();
+}
+
+QString SearchScopeBar::refineText() const {
+    return m_refineEdit ? m_refineEdit->text().trimmed() : QString();
+}
+
+void SearchScopeBar::setLiveEnabled(bool enabled) {
+    if (!m_liveCb)
+        return;
+    const QSignalBlocker blocker(m_liveCb);
+    m_liveCb->setChecked(enabled);
+}
+
+void SearchScopeBar::setLiveVisible(bool visible) {
+    if (m_liveCb)
+        m_liveCb->setVisible(visible);
+}
+
+bool SearchScopeBar::isLiveEnabled() const {
+    return m_liveCb && m_liveCb->isChecked();
+}
+
+void SearchScopeBar::setSortMode(const QString& mode) {
+    if (!m_sortCombo)
+        return;
+    const QSignalBlocker blocker(m_sortCombo);
+    const int index = m_sortCombo->findData(mode);
+    m_sortCombo->setCurrentIndex(index >= 0 ? index : 0);
+}
+
+QString SearchScopeBar::sortMode() const {
+    return m_sortCombo ? m_sortCombo->currentData().toString() : QStringLiteral("relevance");
+}
+
+void SearchScopeBar::updateLiveVisibility() {
+    if (m_liveCb)
+        m_liveCb->setVisible(m_scope == SearchScope::ThisFolder);
+}
+
 void SearchScopeBar::onThisFolderClicked() {
     if (m_scope != SearchScope::ThisFolder) {
         m_scope = SearchScope::ThisFolder;
         updateScopeButtons();
         m_subfoldersCb->setVisible(true);
+        updateLiveVisibility();
         emit scopeChanged(m_scope);
     } else {
         m_thisFolderBtn->setChecked(true);
@@ -238,6 +375,7 @@ void SearchScopeBar::onThisPCClicked() {
         m_scope = SearchScope::ThisPC;
         updateScopeButtons();
         m_subfoldersCb->setVisible(false);
+        updateLiveVisibility();
         emit scopeChanged(m_scope);
     } else {
         m_thisPCBtn->setChecked(true);
@@ -299,6 +437,31 @@ void SearchScopeBar::updateThemeStyles(bool isDark) {
                        "selection-background-color: %4; selection-color: #ffffff; }")
             .arg(inactiveBg, textCol, borderCol, accent));
 
+    if (m_sortCombo) {
+        m_sortCombo->setStyleSheet(
+            QStringLiteral("QComboBox { background: %1; color: %2; border: 1px solid %3; "
+                           "border-radius: 4px; padding: 2px 6px; font-size: 11px; }"
+                           "QComboBox::drop-down { border: none; width: 14px; }"
+                           "QComboBox QAbstractItemView { background: %1; color: %2; "
+                           "selection-background-color: %4; selection-color: #ffffff; }")
+                .arg(inactiveBg, textCol, borderCol, accent));
+    }
+    if (m_refineEdit) {
+        m_refineEdit->setStyleSheet(
+            QStringLiteral("QLineEdit { background: %1; color: %2; border: 1px solid %3; "
+                           "border-radius: 4px; padding: 2px 6px; font-size: 11px; }")
+                .arg(inactiveBg, textCol, borderCol));
+    }
+    for (QToolButton* button : m_chipButtons) {
+        if (!button)
+            continue;
+        button->setStyleSheet(
+            QStringLiteral("QToolButton { background: %1; color: %2; border: 1px solid %3; "
+                           "border-radius: 10px; padding: 1px 7px; font-size: 10px; }"
+                           "QToolButton:hover { background: %4; }")
+                .arg(activeBg, textCol, borderCol, hoverBg));
+    }
+
     m_clearBtn->setStyleSheet(
         QStringLiteral("QPushButton { background: %1; color: %2; border: 1px solid %3; "
                        "border-radius: 4px; padding: 2px 10px; font-size: 11px; }"
@@ -313,6 +476,9 @@ void SearchScopeBar::updateThemeStyles(bool isDark) {
 
     if (m_contentsCb)
         m_contentsCb->setStyleSheet(
+            QStringLiteral("QCheckBox { color: %1; font-size: 11px; }").arg(textCol));
+    if (m_liveCb)
+        m_liveCb->setStyleSheet(
             QStringLiteral("QCheckBox { color: %1; font-size: 11px; }").arg(textCol));
     if (m_filterSummaryLabel)
         m_filterSummaryLabel->setStyleSheet(

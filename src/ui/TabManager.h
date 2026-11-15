@@ -45,6 +45,7 @@ signals:
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory,
                            Qt::DropAction action);
     void searchClearRequested();
+    void searchQueryEdited(const QString& query);
     void saveSearchRequested();
     void itemRenamed(const QString& oldPath, const QString& newPath);
     void syncEnabledChanged(bool enabled);
@@ -102,6 +103,7 @@ signals:
     void fileDropRequested(const QStringList& sources, const QString& targetDirectory,
                            Qt::DropAction action);
     void searchClearRequested();
+    void searchQueryEdited(const QString& query);
     void saveSearchRequested();
     void itemRenamed(const QString& oldPath, const QString& newPath);
 

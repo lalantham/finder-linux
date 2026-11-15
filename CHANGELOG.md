@@ -19,6 +19,21 @@ All notable changes to File Manager for Linux are documented here.
 - Added an **Index** search toggle that appears when a supported index is available.
 - Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
 
+### Release packaging
+- Added Debian package generation via CPack.
+- Added AppImage and relocatable tarball packaging scripts.
+- Added a tag-triggered GitHub Release workflow with SHA-256 checksums.
+- Added Qt 6.4 compatibility guards for system color-scheme detection.
+- Release builds target Debian 12 / Ubuntu 23.04+ (glibc 2.36 baseline).
+
+### Search polish
+- Added removable search token chips for kind, tag, extension, size, date, content, and exclusions.
+- Added live recursive search refresh (opt-out) without clobbering results on folder changes.
+- Added relevance/name/date/size result sorting and a "Search in results" refinement field.
+- Remembered search scope, subfolder recursion, live-update preference, and sort mode.
+- Preserved selection across live refreshes and result refinements.
+- Added regression tests for chip parsing, relevance sorting, refinement, and directory-change safety.
+
 ### Performance polish
 - Moved thumbnail disk-cache probing and PNG metadata parsing off the UI thread; huge PNGs are no longer read in full.
 - Coalesced thumbnail repaints, skipped hidden views, and cached scaled thumbnails.
@@ -103,6 +118,10 @@ All notable changes to File Manager for Linux are documented here.
 - Previews are asynchronous; the first conversion may take a few seconds and subsequent views use the cache.
 
 ### File operation controls
+- Added a per-item progress table and **Cancel Item** action for pending operations.
+- Added pause/resume support for compression and extraction.
+- Added a completion summary with processed, failed, skipped, and cancelled counts.
+- Added per-item status tracking for copy, move, duplicate, trash, delete, compress, and extract.
 - Added explicit folder **Merge** behavior for copy and move, with Replace/KeepBoth/Skip/Cancel.
 - Added separate **Apply to all folder conflicts** and **Apply to all file conflicts** handling.
 - Added pause/resume for copy, move, duplicate, Trash, and delete operations.

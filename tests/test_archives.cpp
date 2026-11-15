@@ -7,7 +7,9 @@
 #include <QTest>
 #include <archive.h>
 #include <archive_entry.h>
+#include <atomic>
 #include <sys/stat.h>
+#include <thread>
 
 class TestArchives : public QObject {
     Q_OBJECT
@@ -24,6 +26,7 @@ private slots:
     void testExtractDoesNotOverwriteExisting();
     void testExtractCorruptArchiveFails();
     void testCompressFailureKeepsExistingArchive();
+    void testExtractPauseAndResume();
 };
 
 void TestArchives::testIsArchive() {
@@ -351,6 +354,40 @@ void TestArchives::testCompressFailureKeepsExistingArchive() {
         QDir(temp.path())
             .entryList({QStringLiteral("existing.zip.part-*")}, QDir::Files | QDir::Hidden);
     QVERIFY(leftovers.isEmpty());
+}
+
+void TestArchives::testExtractPauseAndResume() {
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    const QString source = temp.filePath(QStringLiteral("paused.txt"));
+    QFile f(source);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(QByteArray(256 * 1024, 'x'));
+    f.close();
+
+    const QString archivePath = temp.filePath(QStringLiteral("paused.zip"));
+    QString error;
+    QVERIFY2(ArchiveService::compress({source}, archivePath, nullptr, nullptr, &error),
+             qPrintable(error));
+
+    const QString destination = temp.filePath(QStringLiteral("out"));
+    std::atomic<bool> pauseFlag{true};
+    std::atomic<bool> cancelFlag{false};
+    std::atomic<bool> done{false};
+    bool ok = false;
+    std::thread worker([&]() {
+        ok = ArchiveService::extract(archivePath, destination, nullptr, &cancelFlag, &error,
+                                     nullptr, QString(), &pauseFlag);
+        done.store(true);
+    });
+
+    QTest::qWait(250);
+    QVERIFY(!done.load());
+    pauseFlag.store(false);
+    worker.join();
+    QVERIFY(done.load());
+    QVERIFY2(ok, qPrintable(error));
+    QVERIFY(QFile::exists(destination + QStringLiteral("/paused.txt")));
 }
 
 QTEST_MAIN(TestArchives)

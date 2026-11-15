@@ -360,20 +360,43 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const {
     if (!nameMatches && !contentSearch)
         return false;
 
+    QString matchedContent;
     if (contentSearch) {
         if (fi.isDir()) {
             if (!nameMatches)
                 return false;
         } else {
-            const QString content = extractText(fi, m_mimeDb);
-            const bool contentMatches =
-                !content.isEmpty() && matchesAnyTerm(content, m_filter.contentTerms, cs);
+            matchedContent = extractText(fi, m_mimeDb);
+            const bool contentMatches = !matchedContent.isEmpty() &&
+                                        matchesAnyTerm(matchedContent, m_filter.contentTerms, cs);
             // A UI "Contents" search accepts a name/tag/comment match as well;
             // an explicit content: token with no name terms requires content.
             if (!contentMatches && (!nameMatches || m_filter.nameTerms.isEmpty()))
                 return false;
         }
     }
+
+    int relevance = 0;
+    const QString fileName = fi.fileName();
+    for (const QString& term : m_filter.nameTerms) {
+        if (fileName.compare(term, cs) == 0)
+            relevance += 100;
+        else if (fileName.startsWith(term, cs))
+            relevance += 60;
+        else if (fileName.contains(term, cs))
+            relevance += 30;
+    }
+    relevance += qMin(3, static_cast<int>(tags.size())) * 15;
+    if (!matchedContent.isEmpty()) {
+        int contentHits = 0;
+        for (const QString& term : m_filter.contentTerms) {
+            if (matchedContent.contains(term, cs))
+                ++contentHits;
+        }
+        relevance += qMin(3, contentHits) * 5;
+    }
+    relevance -= qMin(20, static_cast<int>(path.count(QLatin1Char('/'))) * 2);
+    m_lastRelevance = relevance;
 
     return true;
 }
@@ -411,7 +434,9 @@ void SearchWorker::searchDirectory(const QString& dirPath, const QString& rootPa
         }
 
         if (matchesFilter(fi)) {
-            batch.append(FileItem(fi));
+            FileItem item(fi);
+            item.setRelevance(m_lastRelevance);
+            batch.append(item);
             ++m_count;
             if (batch.size() >= BatchSize) {
                 emit itemsFound(batch);
@@ -443,7 +468,9 @@ void SearchWorker::run() {
                         continue;
                     const QFileInfo info(path);
                     if (matchesFilter(info)) {
-                        batch.append(FileItem(info));
+                        FileItem item(info);
+                        item.setRelevance(m_lastRelevance);
+                        batch.append(item);
                         ++m_count;
                         if (batch.size() >= 200) {
                             emit itemsFound(batch);

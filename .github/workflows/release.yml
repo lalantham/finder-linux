@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build release packages
+    runs-on: ubuntu-latest
+    container: debian:12
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git cmake ninja-build g++ \
+            qt6-base-dev qt6-base-dev-tools qt6-svg-dev qt6-multimedia-dev \
+            libarchive-dev libpoppler-qt6-dev pkg-config qt6-wayland \
+            dpkg-dev file patchelf desktop-file-utils appstream lintian
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="1.0.0"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DFINDER_VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Validate desktop entry
+        run: desktop-file-validate build/org.finderlinux.Finder.desktop
+
+      - name: Validate AppStream metadata
+        run: appstreamcli validate --no-net data/org.finderlinux.Finder.metainfo.xml
+
+      - name: Build Debian package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cpack --config build/CPackConfig.cmake -G DEB -B dist
+          dpkg-deb -I dist/*.deb
+          dpkg-deb -c dist/*.deb > /dev/null
+          lintian dist/*.deb || true
+
+      - name: Build AppImage
+        shell: bash
+        run: |
+          bash packaging/make-appimage.sh "${{ steps.version.outputs.version }}"
+          APPIMAGE_EXTRACT_AND_RUN=1 QT_QPA_PLATFORM=offscreen \
+            "dist/finder-linux-${{ steps.version.outputs.version }}-x86_64.AppImage" --version
+
+      - name: Build tarball
+        shell: bash
+        run: |
+          bash packaging/make-tarball.sh "${{ steps.version.outputs.version }}"
+          tar -tzf "dist/finder-linux-${{ steps.version.outputs.version }}-x86_64.tar.gz" > /dev/null
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.deb *.AppImage *.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: finder-linux-${{ steps.version.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          name: finder-linux-${{ steps.version.outputs.version }}
+          path: dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: File Manager ${{ steps.version.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

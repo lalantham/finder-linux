@@ -14,6 +14,19 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <chrono>
+#include <thread>
+
+namespace {
+
+void waitWhileArchivePaused(std::atomic<bool>* pauseFlag, std::atomic<bool>* cancelFlag) {
+    while (pauseFlag && pauseFlag->load(std::memory_order_relaxed) &&
+           !(cancelFlag && cancelFlag->load(std::memory_order_relaxed))) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    }
+}
+
+} // namespace
 
 bool ArchiveService::isArchive(const QString& filePath) {
     QString ext = QFileInfo(filePath).suffix().toLower();
@@ -120,7 +133,7 @@ bool ArchiveService::compress(
     const std::function<void(const QString& currentFile, qint64 processedBytes, qint64 totalBytes)>&
         progressCallback,
     std::atomic<bool>* cancelFlag, QString* error, int compressionLevel,
-    const QString& passphrase) {
+    const QString& passphrase, std::atomic<bool>* pauseFlag) {
     if (sources.isEmpty()) {
         if (error)
             *error = QStringLiteral("No files to compress.");
@@ -229,6 +242,7 @@ bool ArchiveService::compress(
     char buffer[65536];
 
     auto addEntry = [&](const QString& fullPath, const QString& relPath) -> bool {
+        waitWhileArchivePaused(pauseFlag, cancelFlag);
         if (cancelFlag && cancelFlag->load())
             return false;
 
@@ -282,6 +296,7 @@ bool ArchiveService::compress(
                     ok = false;
                 } else {
                     while (ok && !file.atEnd()) {
+                        waitWhileArchivePaused(pauseFlag, cancelFlag);
                         if (cancelFlag && cancelFlag->load()) {
                             ok = false;
                             break;
@@ -324,6 +339,7 @@ bool ArchiveService::compress(
 
     bool ok = true;
     for (const auto& src : sources) {
+        waitWhileArchivePaused(pauseFlag, cancelFlag);
         if (cancelFlag && cancelFlag->load()) {
             ok = false;
             break;
@@ -501,7 +517,8 @@ bool ArchiveService::extract(
     const QString& archivePath, const QString& destinationDir,
     const std::function<void(const QString& currentFile, qint64 processedBytes, qint64 totalBytes)>&
         progressCallback,
-    std::atomic<bool>* cancelFlag, QString* error, QString* warning, const QString& passphrase) {
+    std::atomic<bool>* cancelFlag, QString* error, QString* warning, const QString& passphrase,
+    std::atomic<bool>* pauseFlag, const std::function<bool(const QString&)>& shouldSkip) {
     if (!QFileInfo::exists(archivePath)) {
         if (error)
             *error = QStringLiteral("Archive file does not exist.");
@@ -544,6 +561,7 @@ bool ArchiveService::extract(
     };
 
     while (true) {
+        waitWhileArchivePaused(pauseFlag, cancelFlag);
         const int headerStatus = archive_read_next_header(r, &entry);
         if (headerStatus == ARCHIVE_EOF) {
             break;
@@ -564,6 +582,8 @@ bool ArchiveService::extract(
                rawEntryPath.startsWith(QLatin1Char('\\'))) {
             rawEntryPath.remove(0, 1);
         }
+        if (shouldSkip && shouldSkip(rawEntryPath))
+            continue;
 
         // Zip slip / path traversal prevention
         QString fullPath = QDir::cleanPath(QDir(cleanTarget).filePath(rawEntryPath));
@@ -613,6 +633,7 @@ bool ArchiveService::extract(
 
         bool entryFailed = false;
         while (true) {
+            waitWhileArchivePaused(pauseFlag, cancelFlag);
             if (cancelFlag && cancelFlag->load()) {
                 fail(QStringLiteral("Extraction cancelled."));
                 entryFailed = true;

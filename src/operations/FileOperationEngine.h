@@ -2,11 +2,14 @@
 
 #include "FileOperation.h"
 #include <QObject>
+#include <QHash>
+#include <QMutex>
 #include <QQueue>
 #include <QStringList>
 #include <QThread>
 #include <atomic>
 #include <functional>
+#include <memory>
 
 class FileOperationEngine : public QObject {
     Q_OBJECT
@@ -41,6 +44,7 @@ public:
     void resume();
     [[nodiscard]] bool isPaused() const;
     void skipCurrentFile();
+    void cancelItem(quint64 itemId);
     [[nodiscard]] bool isRunning() const;
     [[nodiscard]] int pendingJobCount() const;
     [[nodiscard]] int activeAndPendingJobCount() const;
@@ -52,9 +56,16 @@ signals:
                              ConflictResolution& chosenResolution, bool& applyToAll);
     void operationFinished(const OperationResult& result);
     void queueStatusChanged(int currentJobIndex, int totalJobsInBatch);
+    void operationItemsReset(const QList<OperationItem>& items);
+    void operationItemChanged(quint64 id, int status, const QString& detail, qint64 processedBytes);
 
 private:
-    enum class ItemOutcome { Done, Skipped, Failed };
+    enum class ItemOutcome { Done, Skipped, Failed, Cancelled };
+
+    QVector<quint64> beginItems(const QStringList& sources, OperationType type);
+    void setItemStatus(quint64 id, OperationItemStatus status, const QString& detail = {});
+    [[nodiscard]] bool isItemCancelled(quint64 id) const;
+    [[nodiscard]] bool activeItemCancelled() const;
 
     void executeCopyOrMove(OperationType type, const QStringList& sources, const QString& destDir,
                            ConflictResolution defaultRes);
@@ -110,4 +121,11 @@ private:
     QStringList m_itemWarnings;
     int m_skippedItems{0};
     bool m_failOnSkip{false};
+
+    mutable QMutex m_itemMutex;
+    QHash<quint64, std::shared_ptr<std::atomic<bool>>> m_itemCancelFlags;
+    QHash<quint64, OperationItem> m_itemInfo;
+    QVector<quint64> m_currentItemIds;
+    std::atomic<quint64> m_activeItemId{0};
+    quint64 m_nextItemId{1};
 };

@@ -1,5 +1,6 @@
 #include "FileSystemModel.h"
 #include "SearchEngine.h"
+#include "SearchQuery.h"
 #include <QFile>
 #include <QItemSelectionModel>
 #include <QPersistentModelIndex>
@@ -22,6 +23,11 @@ private slots:
     void testSortKeepsCurrentItem();
     void testFoldersStayOnTopWhenDescending();
     void testAsyncLoading();
+    void testChipExtraction();
+    void testChipRemovalRoundTrip();
+    void testRelevanceSorting();
+    void testSearchResultsRefineFilter();
+    void testDirectoryChangeDuringSearchKeepsResults();
 };
 
 void TestSearch::testSearchMatching() {
@@ -378,6 +384,106 @@ void TestSearch::testAsyncLoading() {
 
     QCOMPARE(loadingSpy.count(), 1);
     QCOMPARE(model.rowCount(), 3);
+}
+
+void TestSearch::testChipExtraction() {
+    const QString query =
+        QStringLiteral("report kind:image tag:Red,Work -draft content:\"annual report\"");
+    const QVector<SearchQuery::Chip> chips = SearchQuery::chips(query);
+    QCOMPARE(chips.size(), 4);
+    QCOMPARE(chips.at(0).token, QStringLiteral("kind:image"));
+    QCOMPARE(chips.at(1).token, QStringLiteral("tag:Red,Work"));
+    QCOMPARE(chips.at(2).token, QStringLiteral("-draft"));
+    QVERIFY(chips.at(2).excluded);
+    QCOMPARE(chips.at(3).token, QStringLiteral("content:\"annual report\""));
+}
+
+void TestSearch::testChipRemovalRoundTrip() {
+    const QString query = QStringLiteral("report kind:image content:\"annual report\" -draft");
+    const QString removed =
+        SearchQuery::removeToken(query, QStringLiteral("content:\"annual report\""));
+    QCOMPARE(removed, QStringLiteral("report kind:image -draft"));
+    QCOMPARE(SearchQuery::tokenize(removed),
+             QStringList({QStringLiteral("report"), QStringLiteral("kind:image"),
+                          QStringLiteral("-draft")}));
+    QCOMPARE(SearchQuery::removeToken(query, QStringLiteral("missing")), query);
+}
+
+void TestSearch::testRelevanceSorting() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QVector<FileItem> items;
+    for (const QString& name : {QStringLiteral("contains.txt"), QStringLiteral("exact.txt"),
+                                QStringLiteral("prefix-other.txt")}) {
+        QFile f(tempDir.filePath(name));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+        f.close();
+        FileItem item(QFileInfo(tempDir.filePath(name)));
+        item.setRelevance(name.startsWith(QStringLiteral("exact"))    ? 100
+                          : name.startsWith(QStringLiteral("prefix")) ? 60
+                                                                      : 30);
+        items.append(item);
+    }
+
+    FileSystemModel model;
+    model.setSearchResults(items);
+    model.setSortByRelevance(true);
+    model.sort(FileSystemModel::ColName, Qt::DescendingOrder);
+    QCOMPARE(model.index(0, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("exact.txt"));
+    QCOMPARE(model.index(1, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("prefix-other.txt"));
+}
+
+void TestSearch::testSearchResultsRefineFilter() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QVector<FileItem> items;
+    for (const QString& name : {QStringLiteral("apple.txt"), QStringLiteral("banana.txt")}) {
+        QFile f(tempDir.filePath(name));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+        f.close();
+        items.append(FileItem(QFileInfo(tempDir.filePath(name))));
+    }
+
+    FileSystemModel model;
+    model.setSearchResults(items);
+    QCOMPARE(model.rowCount(), 2);
+    model.setSearchResultsFilter(QStringLiteral("apple"));
+    QCOMPARE(model.rowCount(), 1);
+    QCOMPARE(model.index(0, 0).data(FileSystemModel::FileNameRole).toString(),
+             QStringLiteral("apple.txt"));
+
+    model.appendSearchResults(
+        {FileItem(QFileInfo(tempDir.filePath(QStringLiteral("cherry-pie.txt"))))});
+    QCOMPARE(model.rowCount(), 1); // non-matching append stays hidden
+
+    model.setSearchResultsFilter(QString());
+    QCOMPARE(model.rowCount(), 3);
+}
+
+void TestSearch::testDirectoryChangeDuringSearchKeepsResults() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    QFile f(tempDir.filePath(QStringLiteral("keep.txt")));
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("x");
+    f.close();
+
+    FileSystemModel model;
+    model.setRootPath(tempDir.path());
+    QVector<FileItem> results{FileItem(QFileInfo(
+        f.fileName().isEmpty() ? QString() : tempDir.filePath(QStringLiteral("keep.txt"))))};
+    model.setSearchResults(results);
+    QCOMPARE(model.rowCount(), 1);
+    QSignalSpy changeSpy(&model, &FileSystemModel::rootDirectoryChanged);
+
+    QVERIFY(QMetaObject::invokeMethod(&model, "onDirectoryChanged", Qt::DirectConnection,
+                                      Q_ARG(QString, tempDir.path())));
+    QCOMPARE(changeSpy.count(), 1);
+    QCOMPARE(model.rowCount(), 1);
 }
 
 QTEST_MAIN(TestSearch)
