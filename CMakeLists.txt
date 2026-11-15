@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-set(FINDER_VERSION "1.0.0" CACHE STRING "File Manager release version")
+set(FINDER_VERSION "1.0.1" CACHE STRING "File Manager release version")
 project(FinderLinux VERSION ${FINDER_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-${FINDER_VERSION:-1.0.0}}"
+VERSION="${1:-${FINDER_VERSION:-1.0.1}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 TOOLS_DIR="${TOOLS_DIR:-$ROOT/build/appimage-tools}"
@@ -38,6 +38,18 @@ DESTDIR="$APPDIR" cmake --install "$BUILD_DIR" --prefix /usr >/dev/null
 # AppImage; the in-app Linux integration handles activation separately.
 rm -rf "$APPDIR/usr/share/dbus-1/services"
 
+export QMAKE="${QMAKE:-$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake6)}"
+
+# linuxdeploy's Qt plugin does not always copy the Wayland client buffer
+# integration plugins. Without libqt-plugin-wayland-egl.so, KDE Wayland aborts
+# with "Failed to load client buffer integration: wayland-egl".
+QT_PLUGIN_DIR="$("$QMAKE" -query QT_INSTALL_PLUGINS 2>/dev/null || true)"
+if [[ -d "$QT_PLUGIN_DIR/wayland-graphics-integration-client" ]]; then
+    mkdir -p "$APPDIR/usr/plugins/wayland-graphics-integration-client"
+    cp -a "$QT_PLUGIN_DIR/wayland-graphics-integration-client/"*.so \
+        "$APPDIR/usr/plugins/wayland-graphics-integration-client/"
+fi
+
 DESKTOP_FILE="$APPDIR/usr/share/applications/org.finderlinux.Finder.desktop"
 ICON_FILE="$APPDIR/usr/share/icons/hicolor/512x512/apps/finder-linux.png"
 if [[ -f "$DESKTOP_FILE" ]]; then
@@ -47,7 +59,6 @@ fi
 export APPIMAGE_EXTRACT_AND_RUN=1
 export ARCH=x86_64
 export PATH="$TOOLS_DIR:$PATH"
-export QMAKE="${QMAKE:-$(command -v qmake6 || echo /usr/lib/qt6/bin/qmake6)}"
 export EXTRA_QT_MODULES="${EXTRA_QT_MODULES:-svg multimedia}"
 export EXTRA_PLATFORM_PLUGINS="${EXTRA_PLATFORM_PLUGINS:-libqwayland-generic.so;libqwayland-egl.so;libqoffscreen.so}"
 

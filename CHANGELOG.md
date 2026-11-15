@@ -19,6 +19,11 @@ All notable changes to File Manager for Linux are documented here.
 - Added an **Index** search toggle that appears when a supported index is available.
 - Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a full-scan fallback on failure.
 
+### AppImage Wayland fix
+- Bundled Qt's `wayland-graphics-integration-client` plugins in the AppImage.
+- Fixes `Failed to load client buffer integration: "wayland-egl"` on KDE Wayland.
+- AppImages now select Qt's FFmpeg media backend, avoiding missing host GStreamer elements.
+
 ### Release packaging
 - Added Debian package generation via CPack.
 - Added AppImage and relocatable tarball packaging scripts.

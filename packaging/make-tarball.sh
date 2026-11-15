@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-${FINDER_VERSION:-1.0.0}}"
+VERSION="${1:-${FINDER_VERSION:-1.0.1}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 STAGE_ROOT="${TARBALL_STAGE:-$ROOT/build/tarball}"

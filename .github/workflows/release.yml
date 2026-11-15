@@ -41,7 +41,7 @@ jobs:
           if [ "${{ github.event_name }}" = "push" ]; then
             version="${GITHUB_REF_NAME#v}"
           else
-            version="1.0.0"
+            version="1.0.1"
           fi
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid release version: $version" >&2
@@ -83,6 +83,12 @@ jobs:
           bash packaging/make-appimage.sh "${{ steps.version.outputs.version }}"
           APPIMAGE_EXTRACT_AND_RUN=1 QT_QPA_PLATFORM=offscreen \
             "dist/finder-linux-${{ steps.version.outputs.version }}-x86_64.AppImage" --version
+          tmpdir="$(mktemp -d)"
+          (cd "$tmpdir" && APPIMAGE_EXTRACT_AND_RUN=1 \
+            "$GITHUB_WORKSPACE/dist/finder-linux-${{ steps.version.outputs.version }}-x86_64.AppImage" \
+            --appimage-extract >/dev/null)
+          test -f "$tmpdir/squashfs-root/usr/plugins/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so"
+          rm -rf "$tmpdir"
 
       - name: Build tarball
         shell: bash

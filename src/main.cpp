@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 #ifndef FINDER_VERSION
-#define FINDER_VERSION "1.0.0"
+#define FINDER_VERSION "1.0.1"
 #endif
 
 static QString resolveInputPath(const QString& input) {
@@ -161,6 +161,11 @@ int main(int argc, char* argv[]) {
     // opens a video. Developers can still set QT_FFMPEG_DEBUG themselves.
     if (!qEnvironmentVariableIsSet("QT_FFMPEG_DEBUG")) {
         qputenv("QT_FFMPEG_DEBUG", QByteArrayLiteral("0"));
+    }
+    // AppImages bundle Qt but not the host's GStreamer plugin set. Prefer the
+    // bundled FFmpeg backend there; native installs keep the system default.
+    if (qEnvironmentVariableIsSet("APPIMAGE") && !qEnvironmentVariableIsSet("QT_MEDIA_BACKEND")) {
+        qputenv("QT_MEDIA_BACKEND", QByteArrayLiteral("ffmpeg"));
     }
 
     QApplication app(argc, argv);
