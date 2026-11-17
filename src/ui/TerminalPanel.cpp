@@ -316,13 +316,17 @@ void TerminalPanel::executeExternalCommand(const QString& command) {
     }
 
     m_process->setWorkingDirectory(m_currentDirectory);
-    // Run the command through `setsid` so the shell becomes a session and group
-    // leader. Without this `/bin/sh -c` may leave each child in a *different*
-    // process group, so signalling the shell's group would miss the very
-    // processes the user wants to interrupt (verified: `sleep` landed in its own
-    // group). With setsid, kill(-pid) reaches the shell and everything it spawns.
-    m_process->start(QStringLiteral("setsid"), {QStringLiteral("-w"), QStringLiteral("/bin/sh"),
-                                                QStringLiteral("-c"), command});
+    // Put the command into its own process group so Ctrl+C can signal the shell
+    // *and* everything it spawned. Done with setpgid() rather than the `setsid`
+    // binary because setsid only forks when it is already a process-group
+    // leader, so processId() would sometimes point at a wrapper instead of the
+    // session leader (this differed between developer machines and CI). In the
+    // child it is deterministic: the shell becomes the group leader, so
+    // kill(-pid) always addresses the right group.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+    m_process->setChildProcessModifier([]() { ::setpgid(0, 0); });
+#endif
+    m_process->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), command});
 }
 
 void TerminalPanel::onProcessReadyReadStandardOutput() {

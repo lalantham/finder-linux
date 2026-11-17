@@ -1273,21 +1273,28 @@ void TestSelection::testTerminalCtrlCInterruptsProcessGroup() {
     QTRY_COMPARE_WITH_TIMEOUT(process->state(), QProcess::NotRunning, 15000);
     QVERIFY2(output->toPlainText().contains(QStringLiteral("^C")), "no interrupt feedback shown");
 
-    // The forked child must be gone too. Checking liveness directly avoids
-    // having to wait for an orphan to finish and print its marker.
+    // The forked child must be gone too. Check /proc state rather than kill -0:
+    // a killed child is only guaranteed to be reaped by its parent, and under a
+    // container's non-reaping PID 1 it lingers as a zombie ('Z') for which
+    // kill -0 still reports success. A zombie is dead, so that counts as gone.
     QTest::qWait(700);
     for (qint64 childPid : childPids) {
-        QProcess alive;
-        alive.start(
-            QStringLiteral("/bin/sh"),
-            {QStringLiteral("-c"),
-             QStringLiteral("kill -0 %1 2>/dev/null && echo alive || echo gone").arg(childPid)});
-        alive.waitForFinished(2000);
-        const QString state = QString::fromUtf8(alive.readAllStandardOutput()).trimmed();
-        QVERIFY2(state == QStringLiteral("gone"),
-                 qPrintable(QStringLiteral("child process %1 survived Ctrl+C; the process "
-                                           "group was not signalled")
-                                .arg(childPid)));
+        QProcess state;
+        state.start(QStringLiteral("/bin/sh"),
+                    {QStringLiteral("-c"),
+                     QStringLiteral("if [ -r /proc/%1/stat ]; then "
+                                    "awk '{print $3}' /proc/%1/stat; else echo gone; fi")
+                         .arg(childPid)});
+        state.waitForFinished(2000);
+        const QString procState = QString::fromUtf8(state.readAllStandardOutput()).trimmed();
+        // 'Z' (zombie) and 'X' (dead) mean the process has terminated; only a
+        // live state such as R/S/D/T means it survived the interrupt.
+        QVERIFY2(procState.isEmpty() || procState == QStringLiteral("gone") ||
+                     procState == QStringLiteral("Z") || procState == QStringLiteral("X"),
+                 qPrintable(QStringLiteral("child process %1 survived Ctrl+C (state '%2'); the "
+                                           "process group was not signalled")
+                                .arg(childPid)
+                                .arg(procState)));
     }
 }
 
