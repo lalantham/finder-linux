@@ -1,3 +1,4 @@
+#include "FileKindClassifier.h"
 #include "FileSystemModel.h"
 #include "SearchEngine.h"
 #include "SearchQuery.h"
@@ -23,6 +24,8 @@ private slots:
     void testThisPCRoots();
     void testModelInstantFilter();
     void testModelFilterByKind();
+    void testSharedKindClassifier();
+    void testKindFilterParityBetweenModelAndSearch();
     void testSortKeepsCurrentItem();
     void testFoldersStayOnTopWhenDescending();
     void testAsyncLoading();
@@ -295,6 +298,117 @@ void TestSearch::testModelFilterByKind() {
     QCOMPARE(model.rowCount(), 1);
     QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(),
              QStringLiteral("document.pdf"));
+}
+
+void TestSearch::testSharedKindClassifier() {
+    using FileKind::Category;
+
+    // Singular and plural spellings are both accepted, case-insensitively.
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("image")), Category::Image);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("Images")), Category::Image);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("FOLDER")), Category::Folder);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("documents")), Category::Document);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("videos")), Category::Video);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("audio")), Category::Audio);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("archive")), Category::Archive);
+    QCOMPARE(FileKind::fromFilterName(QStringLiteral("spreadsheet")), Category::None);
+    QCOMPARE(FileKind::fromFilterName(QString()), Category::None);
+
+    // Extensions match with or without a leading dot and in any case.
+    QVERIFY(FileKind::matchesExtension(QStringLiteral("png"), Category::Image));
+    QVERIFY(FileKind::matchesExtension(QStringLiteral(".PNG"), Category::Image));
+    QVERIFY(FileKind::matchesExtension(QStringLiteral("Jpeg"), Category::Image));
+    QVERIFY(!FileKind::matchesExtension(QStringLiteral("mp4"), Category::Image));
+    QVERIFY(FileKind::matchesExtension(QStringLiteral("pdf"), Category::Document));
+    QVERIFY(FileKind::matchesExtension(QStringLiteral("7z"), Category::Archive));
+
+    // Folders and unknown kinds carry no extensions.
+    QVERIFY(FileKind::extensionsFor(Category::Folder).isEmpty());
+    QVERIFY(FileKind::extensionsFor(Category::None).isEmpty());
+    QVERIFY(!FileKind::matchesExtension(QStringLiteral("png"), Category::Folder));
+}
+
+void TestSearch::testKindFilterParityBetweenModelAndSearch() {
+    // The model's instant filter and the search engine must agree on what each
+    // kind contains. They used to keep separate copies of these tables, which
+    // could drift; this pins the shared behaviour through both code paths.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    struct Fixture {
+        const char* name;
+        const char* kind;
+    };
+    const Fixture fixtures[] = {
+        {"photo.png", "image"},    {"song.mp3", "audio"},     {"movie.mkv", "video"},
+        {"notes.pdf", "document"}, {"bundle.zip", "archive"}, {"photo.PNG", "image"},
+    };
+    QStringList names;
+    for (const Fixture& fixture : fixtures) {
+        const QString path = dir.filePath(QString::fromLatin1(fixture.name));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("x");
+        file.close();
+        names << QString::fromLatin1(fixture.name);
+    }
+    QVERIFY(QDir(dir.path()).mkdir(QStringLiteral("subfolder")));
+
+    for (const Fixture& fixture : fixtures) {
+        const QString expected = QString::fromLatin1(fixture.name);
+
+        // Path 1: the model's in-memory filter.
+        FileSystemModel model;
+        model.setRootPath(dir.path());
+        model.setFilterQuery(QString(), QString::fromLatin1(fixture.kind));
+        QStringList modelMatches;
+        for (int row = 0; row < model.rowCount(); ++row) {
+            modelMatches
+                << model.data(model.index(row, 0), FileSystemModel::FileNameRole).toString();
+        }
+
+        // Path 2: the recursive search engine with the same kind filter.
+        SearchFilter filter;
+        filter.searchPath = dir.path();
+        filter.searchPaths = QStringList{dir.path()};
+        filter.kindFilter = QString::fromLatin1(fixture.kind);
+        filter.recursive = false;
+
+        SearchEngine engine;
+        QSignalSpy batchSpy(&engine, &SearchEngine::itemsFound);
+        QSignalSpy doneSpy(&engine, &SearchEngine::searchFinished);
+        engine.startSearch(filter);
+        QVERIFY(doneSpy.wait(20000));
+        QStringList searchMatches;
+        for (const QList<QVariant>& emission : batchSpy) {
+            const auto items = emission.at(0).value<QVector<FileItem>>();
+            for (const FileItem& item : items) {
+                searchMatches << item.fileName();
+            }
+        }
+
+        QVERIFY2(modelMatches.contains(expected),
+                 qPrintable(QStringLiteral("model missed %1 for kind %2")
+                                .arg(expected, QString::fromLatin1(fixture.kind))));
+        QVERIFY2(searchMatches.contains(expected),
+                 qPrintable(QStringLiteral("search missed %1 for kind %2")
+                                .arg(expected, QString::fromLatin1(fixture.kind))));
+        // Neither path may include a folder when filtering for a file kind.
+        QVERIFY2(!modelMatches.contains(QStringLiteral("subfolder")),
+                 "model included a folder for a file kind");
+        QVERIFY2(!searchMatches.contains(QStringLiteral("subfolder")),
+                 "search included a folder for a file kind");
+    }
+
+    // The folder kind is the inverse: only directories match, in both paths.
+    {
+        FileSystemModel model;
+        model.setRootPath(dir.path());
+        model.setFilterQuery(QString(), QStringLiteral("folders"));
+        QCOMPARE(model.rowCount(), 1);
+        QCOMPARE(model.data(model.index(0, 0), FileSystemModel::FileNameRole).toString(),
+                 QStringLiteral("subfolder"));
+    }
 }
 
 void TestSearch::testSortKeepsCurrentItem() {

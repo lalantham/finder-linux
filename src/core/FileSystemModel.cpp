@@ -1,5 +1,6 @@
 #include "FileSystemModel.h"
 #include "AppSettings.h"
+#include "FileKindClassifier.h"
 #include "FileMetadataManager.h"
 #include "FileOperationEngine.h"
 #include "TagManager.h"
@@ -445,61 +446,38 @@ bool FileSystemModel::itemMatchesFilter(const FileItem& item, const QString& que
     }
 
     if (!kind.isEmpty()) {
-        QString k = kind.toLower();
-        QString ext = item.suffix().toLower();
-        if (k == QStringLiteral("folders") || k == QStringLiteral("folder")) {
-            if (!item.isDir())
-                return false;
-        } else if (item.isDir()) {
+        const FileKind::Category category = FileKind::fromFilterName(kind);
+        // Folders are decided by type alone; every other kind applies to files.
+        if (category == FileKind::Category::Folder) {
+            return item.isDir();
+        }
+        if (item.isDir()) {
             return false;
-        } else if (k == QStringLiteral("images") || k == QStringLiteral("image")) {
-            static const QSet<QString> imgExts = {QStringLiteral("png"),  QStringLiteral("jpg"),
-                                                  QStringLiteral("jpeg"), QStringLiteral("gif"),
-                                                  QStringLiteral("svg"),  QStringLiteral("webp"),
-                                                  QStringLiteral("bmp"),  QStringLiteral("ico"),
-                                                  QStringLiteral("tiff"), QStringLiteral("tif")};
-            if (!imgExts.contains(ext) &&
-                !item.kind().contains(QStringLiteral("image"), Qt::CaseInsensitive)) {
-                return false;
+        }
+        if (category == FileKind::Category::None) {
+            return true; // unrecognised kind name: do not filter anything out
+        }
+        if (!FileKind::matchesExtension(item.suffix(), category)) {
+            // The extension table is the fast path; fall back to the MIME-derived
+            // display kind so unusual but correctly typed files still match.
+            const QString displayKind = item.kind();
+            switch (category) {
+            case FileKind::Category::Image:
+                return displayKind.contains(QStringLiteral("image"), Qt::CaseInsensitive);
+            case FileKind::Category::Document:
+                return displayKind.contains(QStringLiteral("document"), Qt::CaseInsensitive) ||
+                       displayKind.contains(QStringLiteral("text"), Qt::CaseInsensitive);
+            case FileKind::Category::Video:
+                return displayKind.contains(QStringLiteral("video"), Qt::CaseInsensitive);
+            case FileKind::Category::Audio:
+                return displayKind.contains(QStringLiteral("audio"), Qt::CaseInsensitive);
+            case FileKind::Category::Archive:
+                return displayKind.contains(QStringLiteral("archive"), Qt::CaseInsensitive);
+            case FileKind::Category::Folder:
+            case FileKind::Category::None:
+                break;
             }
-        } else if (k == QStringLiteral("documents") || k == QStringLiteral("document")) {
-            static const QSet<QString> docExts = {
-                QStringLiteral("pdf"), QStringLiteral("doc"),  QStringLiteral("docx"),
-                QStringLiteral("txt"), QStringLiteral("md"),   QStringLiteral("rtf"),
-                QStringLiteral("odt"), QStringLiteral("xls"),  QStringLiteral("xlsx"),
-                QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")};
-            if (!docExts.contains(ext) &&
-                !item.kind().contains(QStringLiteral("document"), Qt::CaseInsensitive) &&
-                !item.kind().contains(QStringLiteral("text"), Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (k == QStringLiteral("videos") || k == QStringLiteral("video")) {
-            static const QSet<QString> vidExts = {QStringLiteral("mp4"),  QStringLiteral("mkv"),
-                                                  QStringLiteral("avi"),  QStringLiteral("mov"),
-                                                  QStringLiteral("webm"), QStringLiteral("wmv"),
-                                                  QStringLiteral("flv"),  QStringLiteral("m4v")};
-            if (!vidExts.contains(ext) &&
-                !item.kind().contains(QStringLiteral("video"), Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (k == QStringLiteral("audio")) {
-            static const QSet<QString> audExts = {QStringLiteral("mp3"), QStringLiteral("flac"),
-                                                  QStringLiteral("wav"), QStringLiteral("ogg"),
-                                                  QStringLiteral("m4a"), QStringLiteral("aac"),
-                                                  QStringLiteral("wma"), QStringLiteral("opus")};
-            if (!audExts.contains(ext) &&
-                !item.kind().contains(QStringLiteral("audio"), Qt::CaseInsensitive)) {
-                return false;
-            }
-        } else if (k == QStringLiteral("archives") || k == QStringLiteral("archive")) {
-            static const QSet<QString> arcExts = {QStringLiteral("zip"), QStringLiteral("tar"),
-                                                  QStringLiteral("gz"),  QStringLiteral("bz2"),
-                                                  QStringLiteral("xz"),  QStringLiteral("7z"),
-                                                  QStringLiteral("rar"), QStringLiteral("tgz")};
-            if (!arcExts.contains(ext) &&
-                !item.kind().contains(QStringLiteral("archive"), Qt::CaseInsensitive)) {
-                return false;
-            }
+            return false;
         }
     }
 

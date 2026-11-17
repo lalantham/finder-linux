@@ -1,4 +1,5 @@
 #include "SearchEngine.h"
+#include "FileKindClassifier.h"
 #include "TagManager.h"
 #include <QDateTime>
 #include <QDir>
@@ -226,68 +227,57 @@ bool SearchWorker::matchesFilter(const QFileInfo& fi) const {
     }
 
     if (!m_filter.kindFilter.isEmpty()) {
-        const QString k = m_filter.kindFilter.toLower();
-        const QString ext = fi.suffix().toLower();
-        if (k == QStringLiteral("folders") || k == QStringLiteral("folder")) {
-            if (!fi.isDir())
+        const FileKind::Category category = FileKind::fromFilterName(m_filter.kindFilter);
+        // Folders are decided by type alone; every other kind applies to files.
+        if (category == FileKind::Category::Folder) {
+            if (!fi.isDir()) {
                 return false;
+            }
         } else if (fi.isDir()) {
             return false;
-        } else if (k == QStringLiteral("images") || k == QStringLiteral("image")) {
-            static const QSet<QString> imgExts = {QStringLiteral("png"),  QStringLiteral("jpg"),
-                                                  QStringLiteral("jpeg"), QStringLiteral("gif"),
-                                                  QStringLiteral("svg"),  QStringLiteral("webp"),
-                                                  QStringLiteral("bmp"),  QStringLiteral("ico"),
-                                                  QStringLiteral("tiff"), QStringLiteral("tif")};
-            if (!imgExts.contains(ext)) {
-                const QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
-                if (!mime.name().startsWith(QStringLiteral("image/")))
-                    return false;
-            }
-        } else if (k == QStringLiteral("documents") || k == QStringLiteral("document")) {
-            static const QSet<QString> docExts = {
-                QStringLiteral("pdf"), QStringLiteral("doc"),  QStringLiteral("docx"),
-                QStringLiteral("txt"), QStringLiteral("md"),   QStringLiteral("rtf"),
-                QStringLiteral("odt"), QStringLiteral("xls"),  QStringLiteral("xlsx"),
-                QStringLiteral("ppt"), QStringLiteral("pptx"), QStringLiteral("csv")};
-            if (!docExts.contains(ext)) {
-                const QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
-                if (!mime.name().startsWith(QStringLiteral("text/")) &&
-                    mime.name() != QStringLiteral("application/pdf"))
-                    return false;
-            }
-        } else if (k == QStringLiteral("videos") || k == QStringLiteral("video")) {
-            static const QSet<QString> vidExts = {QStringLiteral("mp4"),  QStringLiteral("mkv"),
-                                                  QStringLiteral("avi"),  QStringLiteral("mov"),
-                                                  QStringLiteral("webm"), QStringLiteral("wmv"),
-                                                  QStringLiteral("flv"),  QStringLiteral("m4v")};
-            if (!vidExts.contains(ext)) {
-                const QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
-                if (!mime.name().startsWith(QStringLiteral("video/")))
-                    return false;
-            }
-        } else if (k == QStringLiteral("audio")) {
-            static const QSet<QString> audExts = {QStringLiteral("mp3"), QStringLiteral("flac"),
-                                                  QStringLiteral("wav"), QStringLiteral("ogg"),
-                                                  QStringLiteral("m4a"), QStringLiteral("aac"),
-                                                  QStringLiteral("wma"), QStringLiteral("opus")};
-            if (!audExts.contains(ext)) {
-                const QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
-                if (!mime.name().startsWith(QStringLiteral("audio/")))
-                    return false;
-            }
-        } else if (k == QStringLiteral("archives") || k == QStringLiteral("archive")) {
-            static const QSet<QString> arcExts = {QStringLiteral("zip"), QStringLiteral("tar"),
-                                                  QStringLiteral("gz"),  QStringLiteral("bz2"),
-                                                  QStringLiteral("xz"),  QStringLiteral("7z"),
-                                                  QStringLiteral("rar"), QStringLiteral("tgz")};
-            if (!arcExts.contains(ext))
-                return false;
-        } else {
+        } else if (category == FileKind::Category::None) {
+            // Unrecognised kind name: match it against the MIME type and comment,
+            // which is what a free-form kind: token means.
             const QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
-            if (!mime.name().contains(k, Qt::CaseInsensitive) &&
-                !mime.comment().contains(k, Qt::CaseInsensitive))
+            if (!mime.name().contains(m_filter.kindFilter, Qt::CaseInsensitive) &&
+                !mime.comment().contains(m_filter.kindFilter, Qt::CaseInsensitive)) {
                 return false;
+            }
+        } else if (!FileKind::matchesExtension(fi.suffix(), category)) {
+            // The extension table is the fast path; fall back to the MIME family
+            // so correctly typed files with an unexpected suffix still match.
+            const QMimeType mime = m_mimeDb.mimeTypeForFile(fi);
+            const QString mimeName = mime.name();
+            switch (category) {
+            case FileKind::Category::Image:
+                if (!mimeName.startsWith(QStringLiteral("image/"))) {
+                    return false;
+                }
+                break;
+            case FileKind::Category::Document:
+                if (!mimeName.startsWith(QStringLiteral("text/")) &&
+                    mimeName != QStringLiteral("application/pdf")) {
+                    return false;
+                }
+                break;
+            case FileKind::Category::Video:
+                if (!mimeName.startsWith(QStringLiteral("video/"))) {
+                    return false;
+                }
+                break;
+            case FileKind::Category::Audio:
+                if (!mimeName.startsWith(QStringLiteral("audio/"))) {
+                    return false;
+                }
+                break;
+            case FileKind::Category::Archive:
+                // Archives have no reliable MIME family prefix; rely on the
+                // extension table alone.
+                return false;
+            case FileKind::Category::Folder:
+            case FileKind::Category::None:
+                break;
+            }
         }
     }
 
