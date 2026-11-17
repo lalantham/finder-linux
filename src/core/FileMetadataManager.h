@@ -26,12 +26,19 @@ public:
     void forgetPaths(const QStringList& paths);
     void save();
 
+    // Drops entries whose files no longer exist, then trims the oldest entries
+    // if the store still exceeds `maxEntries` (0 = no cap). Returns how many
+    // entries were removed. Safe to call periodically; it only touches memory
+    // plus one stat() per entry.
+    int pruneMissingEntries(int maxEntries = 0);
+
 private:
     FileMetadataManager();
     ~FileMetadataManager() override;
 
     void load();
     void scheduleSave();
+    static QJsonObject buildSortedObject(const QHash<QString, qint64>& source);
 
     QString m_storagePath;
     QHash<QString, qint64> m_added;

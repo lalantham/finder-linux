@@ -7,6 +7,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QTimer>
+#include <algorithm>
 
 namespace {
 QString s_storagePathOverride;
@@ -74,14 +75,13 @@ void FileMetadataManager::save() {
     if (!QDir().mkpath(QFileInfo(m_storagePath).absolutePath()))
         return;
 
-    QJsonObject added;
-    for (auto it = m_added.cbegin(); it != m_added.cend(); ++it) {
-        added.insert(it.key(), static_cast<double>(it.value()));
-    }
-    QJsonObject opened;
-    for (auto it = m_opened.cbegin(); it != m_opened.cend(); ++it) {
-        opened.insert(it.key(), static_cast<double>(it.value()));
-    }
+    // QJsonObject keeps its keys sorted, so inserting in hash order makes every
+    // insert an O(n) memmove: with a large store that alone costs hundreds of
+    // milliseconds. Building the object from sorted keys turns the whole save
+    // into a linear pass.
+    QJsonObject added = buildSortedObject(m_added);
+    QJsonObject opened = buildSortedObject(m_opened);
+
     QJsonObject root;
     root.insert(QStringLiteral("added"), added);
     root.insert(QStringLiteral("opened"), opened);
@@ -91,6 +91,53 @@ void FileMetadataManager::save() {
         return;
     file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
     file.commit();
+}
+
+QJsonObject FileMetadataManager::buildSortedObject(const QHash<QString, qint64>& source) {
+    QStringList keys = source.keys();
+    keys.sort();
+    QJsonObject object;
+    for (const QString& key : keys) {
+        object.insert(key, static_cast<double>(source.value(key)));
+    }
+    return object;
+}
+
+int FileMetadataManager::pruneMissingEntries(int maxEntries) {
+    // Stat every path and drop the ones that no longer exist. This is the only
+    // way the store can shrink: browsing folders registers items forever
+    // otherwise, and the file grows without bound.
+    const QStringList addedPaths = m_added.keys();
+    int removed = 0;
+    for (const QString& path : addedPaths) {
+        if (!QFileInfo::exists(path) && !QFileInfo(path).isSymLink()) {
+            m_added.remove(path);
+            m_opened.remove(path);
+            ++removed;
+        }
+    }
+
+    // An explicit cap as a backstop: keep the most recently added entries.
+    if (maxEntries > 0 && m_added.size() > maxEntries) {
+        QVector<QPair<qint64, QString>> byAge;
+        byAge.reserve(m_added.size());
+        for (auto it = m_added.cbegin(); it != m_added.cend(); ++it) {
+            byAge.append({it.value(), it.key()});
+        }
+        std::sort(byAge.begin(), byAge.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        const int excess = static_cast<int>(m_added.size()) - maxEntries;
+        for (int i = 0; i < excess; ++i) {
+            m_added.remove(byAge.at(i).second);
+            m_opened.remove(byAge.at(i).second);
+            ++removed;
+        }
+    }
+
+    if (removed > 0) {
+        scheduleSave();
+    }
+    return removed;
 }
 
 void FileMetadataManager::scheduleSave() {
