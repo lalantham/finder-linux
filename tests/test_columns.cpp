@@ -5,6 +5,7 @@
 #include "FileSystemModel.h"
 #include "MediaMetadata.h"
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
 #include <QTemporaryDir>
@@ -23,7 +24,10 @@ private slots:
     void testSmartFolderPersistence();
     void testRecentLocationsPersistence();
     void testDiskImageDetection();
+    void testDiskImageMountIsAsync();
     void testDateAddedMetadata();
+    void testMetadataStorePruning();
+    void testMetadataSaveIsFast();
     void testMediaMetadata();
     void testCommentXattr();
 
@@ -284,6 +288,39 @@ void TestColumns::testDiskImageDetection() {
     QVERIFY(!DiskImageManager::isDiskImage(QStringLiteral("image.txt")));
 }
 
+void TestColumns::testDiskImageMountIsAsync() {
+    // Mounting must never block the caller: a double-click on an ISO used to
+    // freeze the window until udisksctl returned.
+    //
+    // The key observable is *ordering*: an async implementation returns before
+    // the callback runs, while a blocking implementation has already invoked it
+    // by the time the call returns. That distinction holds regardless of how
+    // fast the underlying work happens to fail.
+    bool callReturned = false;
+    bool calledDuringCall = false;
+    bool called = false;
+
+    DiskImageManager::mountImageAsync(QStringLiteral("/nonexistent/missing-image.iso"),
+                                      [&](bool, const QString&, const QString&) {
+                                          calledDuringCall = calledDuringCall || !callReturned;
+                                          called = true;
+                                      });
+    callReturned = true;
+
+    QVERIFY2(!calledDuringCall, "mountImageAsync ran its callback synchronously");
+    QVERIFY(!called);
+
+    // The callback is still delivered later, on the event loop.
+    QTRY_VERIFY_WITH_TIMEOUT(called, 10000);
+
+    // An empty path is rejected without any work.
+    bool emptyRejected = false;
+    DiskImageManager::mountImageAsync(
+        QString(),
+        [&emptyRejected](bool ok, const QString&, const QString&) { emptyRejected = !ok; });
+    QVERIFY(emptyRejected);
+}
+
 void TestColumns::testDateAddedMetadata() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -312,6 +349,95 @@ void TestColumns::testDateAddedMetadata() {
     FileMetadataManager::setStoragePathForTesting(metadataPath);
     QVERIFY(FileMetadataManager::instance().dateAdded(filePath).isValid());
     QVERIFY(FileMetadataManager::instance().lastOpened(filePath).isValid());
+}
+
+void TestColumns::testMetadataStorePruning() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString metadataPath = dir.filePath(QStringLiteral("metadata.json"));
+    FileMetadataManager::setStoragePathForTesting(metadataPath);
+    auto& manager = FileMetadataManager::instance();
+
+    // Two real files and two paths that never existed. Browsing is what feeds
+    // this store, so stale entries are the normal case, not an edge case.
+    QStringList real;
+    for (int i = 0; i < 2; ++i) {
+        const QString path = dir.filePath(QStringLiteral("present%1.txt").arg(i));
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("x");
+        f.close();
+        real << path;
+    }
+    const QStringList stale{dir.filePath(QStringLiteral("removed-1.txt")),
+                            dir.filePath(QStringLiteral("removed-2.txt"))};
+
+    manager.registerPaths(real);
+    manager.registerPaths(stale);
+    manager.save();
+
+    const int removed = manager.pruneMissingEntries();
+    QCOMPARE(removed, 2);
+    for (const QString& path : stale) {
+        QVERIFY(!manager.dateAdded(path).isValid());
+    }
+    for (const QString& path : real) {
+        QVERIFY(manager.dateAdded(path).isValid());
+    }
+
+    // The trimmed store must survive a round-trip through disk.
+    manager.save();
+    FileMetadataManager::setStoragePathForTesting(metadataPath);
+    for (const QString& path : stale) {
+        QVERIFY(!FileMetadataManager::instance().dateAdded(path).isValid());
+    }
+    for (const QString& path : real) {
+        QVERIFY(FileMetadataManager::instance().dateAdded(path).isValid());
+    }
+
+    // Pruning a clean store removes nothing.
+    QCOMPARE(FileMetadataManager::instance().pruneMissingEntries(), 0);
+
+    // The explicit cap keeps the newest entries when the store is oversized.
+    // All entries are registered in the same millisecond here, so just assert
+    // that the cap is honoured rather than which specific rows survive.
+    const int capped = FileMetadataManager::instance().pruneMissingEntries(1);
+    QVERIFY(capped >= 1);
+}
+
+void TestColumns::testMetadataSaveIsFast() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString metadataPath = dir.filePath(QStringLiteral("metadata.json"));
+    FileMetadataManager::setStoragePathForTesting(metadataPath);
+    auto& manager = FileMetadataManager::instance();
+
+    // A store of this size used to take hundreds of milliseconds per save
+    // because QJsonObject keeps keys sorted and the entries were inserted in
+    // hash order, making every insert an O(n) memmove. Guard against that
+    // quadratic regression: at 20k entries the old code needs ~150 ms while the
+    // sorted build needs a couple of milliseconds.
+    QStringList paths;
+    paths.reserve(20000);
+    for (int i = 0; i < 20000; ++i) {
+        paths << dir.filePath(QStringLiteral("entry-%1.dat").arg(i));
+    }
+    manager.registerPaths(paths);
+
+    QElapsedTimer timer;
+    timer.start();
+    manager.save();
+    const qint64 elapsed = timer.elapsed();
+
+    QVERIFY2(elapsed < 60,
+             qPrintable(QStringLiteral("saving 20000 entries took %1 ms; the store save looks "
+                                       "quadratic again")
+                            .arg(elapsed)));
+
+    // The data must still round-trip exactly.
+    FileMetadataManager::setStoragePathForTesting(metadataPath);
+    QVERIFY(FileMetadataManager::instance().dateAdded(paths.first()).isValid());
+    QVERIFY(FileMetadataManager::instance().dateAdded(paths.last()).isValid());
 }
 
 void TestColumns::testMediaMetadata() {

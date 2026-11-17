@@ -1169,19 +1169,26 @@ bool DesktopAppsManager::launchFile(const QString& filePath) {
     }
 
     if (DiskImageManager::isDiskImage(filePath)) {
-        QString mountPath;
-        QString error;
-        if (DiskImageManager::mountImage(filePath, &mountPath, nullptr, &error)) {
-            recordRecent(filePath);
-            DesktopNotifier::notify(
-                QStringLiteral("Disk Image Mounted"),
-                QStringLiteral("%1 is available at %2").arg(fi.fileName(), mountPath));
-            return true;
-        }
-        QMessageBox::warning(
-            nullptr, QStringLiteral("Cannot Mount Disk Image"),
-            error.isEmpty() ? QStringLiteral("The disk image could not be mounted.") : error);
-        return false;
+        // Loop setup and mounting can take tens of seconds (polkit prompts
+        // included); never block the GUI thread that called us from a
+        // double-click or the context menu.
+        const QString fileName = fi.fileName();
+        DiskImageManager::mountImageAsync(
+            filePath,
+            [filePath, fileName](bool ok, const QString& mountPath, const QString& error) {
+                if (!ok) {
+                    QMessageBox::warning(
+                        QApplication::activeWindow(), QStringLiteral("Cannot Mount Disk Image"),
+                        error.isEmpty() ? QStringLiteral("The disk image could not be mounted.")
+                                        : error);
+                    return;
+                }
+                recordRecent(filePath);
+                DesktopNotifier::notify(
+                    QStringLiteral("Disk Image Mounted"),
+                    QStringLiteral("%1 is available at %2").arg(fileName, mountPath));
+            });
+        return true;
     }
 
     // Desktop entries are applications, not documents.

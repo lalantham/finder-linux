@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -10,6 +11,7 @@
 #include <QPushButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 
 TrashDialog::TrashDialog(QWidget* parent)
@@ -179,11 +181,28 @@ void TrashDialog::emptyAll()
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes) return;
 
-    QString error;
-    if (!XdgTrash::emptyTrash(&error)) {
-        QMessageBox::warning(this, QStringLiteral("Empty Trash"), error);
-    }
+    // Erasing a large Trash tree blocks for a long time; keep the dialog alive.
+    if (m_emptyBtn)
+        m_emptyBtn->setEnabled(false);
 
-    reload();
-    emit trashChanged();
+    auto* watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher]() {
+        const QString error = watcher->result();
+        watcher->deleteLater();
+        if (m_emptyBtn)
+            m_emptyBtn->setEnabled(!m_items.isEmpty());
+
+        if (!error.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("Empty Trash"), error);
+        }
+
+        reload();
+        emit trashChanged();
+    });
+
+    watcher->setFuture(QtConcurrent::run([]() {
+        QString error;
+        XdgTrash::emptyTrash(&error);
+        return error;
+    }));
 }

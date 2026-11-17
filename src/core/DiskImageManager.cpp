@@ -2,15 +2,20 @@
 #include "VolumeManager.h"
 #include <QDir>
 #include <QFileInfo>
+#include <QFutureWatcher>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QtConcurrent/QtConcurrentRun>
 #include <functional>
+#include <memory>
 
 namespace {
 
@@ -219,4 +224,62 @@ bool DiskImageManager::createIso(const QString& sourceDirectory, const QString& 
         return false;
     }
     return true;
+}
+
+void DiskImageManager::mountImageAsync(
+    const QString& imagePath, std::function<void(bool, const QString&, const QString&)> finished) {
+    if (imagePath.isEmpty()) {
+        if (finished)
+            finished(false, QString(), QStringLiteral("No disk image was selected."));
+        return;
+    }
+
+    // A double-click while a slow mount is still running must not create a
+    // second loop device for the same file.
+    static QMutex mutex;
+    static QHash<QString, std::shared_ptr<
+                              QVector<std::function<void(bool, const QString&, const QString&)>>>>
+        inFlight;
+    using Callback = std::function<void(bool, const QString&, const QString&)>;
+
+    const QString key = QFileInfo(imagePath).absoluteFilePath();
+    std::shared_ptr<QVector<Callback>> waiters;
+    {
+        QMutexLocker locker(&mutex);
+        const auto existing = inFlight.constFind(key);
+        if (existing != inFlight.cend()) {
+            if (finished)
+                existing.value()->append(std::move(finished));
+            return;
+        }
+        waiters = std::make_shared<QVector<Callback>>();
+        if (finished)
+            waiters->append(std::move(finished));
+        inFlight.insert(key, waiters);
+    }
+
+    auto* watcher = new QFutureWatcher<QPair<QString, QString>>();
+    QObject::connect(watcher, &QFutureWatcher<QPair<QString, QString>>::finished, watcher,
+                     [watcher, key, waiters]() {
+                         const QPair<QString, QString> result = watcher->result();
+                         watcher->deleteLater();
+
+                         QVector<Callback> callbacks = *waiters;
+                         {
+                             QMutexLocker locker(&mutex);
+                             inFlight.remove(key);
+                         }
+                         const bool ok = !result.first.isEmpty();
+                         for (const auto& callback : callbacks) {
+                             if (callback)
+                                 callback(ok, result.first, result.second);
+                         }
+                     });
+
+    watcher->setFuture(QtConcurrent::run([key]() {
+        QString mountPath;
+        QString error;
+        const bool ok = mountImage(key, &mountPath, nullptr, &error);
+        return qMakePair(ok ? mountPath : QString(), error);
+    }));
 }
