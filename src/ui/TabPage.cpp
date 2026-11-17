@@ -234,7 +234,7 @@ TabPage::TabPage(const QString& initialPath, QWidget* parent) : QWidget(parent) 
     m_columnView->installEventFilter(this);
     m_galleryView->installEventFilter(this);
 
-    setViewMode(AppSettings::instance().viewMode());
+    applyViewMode(AppSettings::instance().viewMode());
     setPreviewPaneVisible(AppSettings::instance().showPreviewPane());
     navigateTo(initialPath, false);
     applyViewOptions();
@@ -307,22 +307,17 @@ void TabPage::navigateTo(const QString& path, bool recordHistory) {
         emit historyChanged();
     }
 
-    // If returning from tag or search view to column view, restore previous column view
-    if (m_currentPath.startsWith(QStringLiteral("tag://")) &&
-        m_preSearchViewMode == ViewMode::Column && m_viewMode != ViewMode::Column) {
-        setViewMode(ViewMode::Column);
-    }
-
     m_currentPath = cleanPath;
     AppSettings::instance().addRecentFolder(cleanPath);
     if (m_previewPane)
         m_previewPane->clear();
 
-    if (AppSettings::instance().rememberFolderViewModes()) {
-        auto savedMode = AppSettings::instance().folderViewMode(m_currentPath);
-        if (savedMode.has_value() && savedMode.value() != m_viewMode) {
-            setViewMode(savedMode.value());
-        }
+    // Resolve this folder's own override, otherwise the global default. Never
+    // keep the mode of the folder we just left, and never persist here:
+    // navigation must not write settings.
+    const ViewMode targetMode = AppSettings::instance().viewModeForPath(m_currentPath);
+    if (targetMode != m_viewMode) {
+        applyViewMode(targetMode);
     }
 
     if (m_viewMode == ViewMode::Column && m_columnView) {
@@ -354,7 +349,7 @@ void TabPage::showTaggedFiles(const QString& tag, bool recordHistory) {
     // Temporarily switch to List View (or Icon View) and save previous view mode.
     if (m_viewMode == ViewMode::Column) {
         m_preSearchViewMode = m_viewMode;
-        setViewMode(ViewMode::List);
+        applyViewMode(ViewMode::List);
     }
 
     m_model->setTaggedFiles(tag);
@@ -473,6 +468,24 @@ void TabPage::revealFile(const QString& filePath) {
 }
 
 void TabPage::setViewMode(ViewMode mode) {
+    applyViewMode(mode);
+
+    // Every existing caller (toolbar pills, View > as ..., Ctrl+1..4) lands
+    // here, so the preference decides whether that means "this folder" or "all
+    // folders". Virtual views and remote URIs can only ever affect the tab.
+    auto& settings = AppSettings::instance();
+    if (!canRememberViewMode()) {
+        return;
+    }
+    if (settings.directViewModeScope() == ViewModeScope::CurrentFolder) {
+        settings.setFolderViewMode(m_currentPath, mode);
+    } else {
+        settings.setViewMode(mode);
+        settings.save();
+    }
+}
+
+void TabPage::applyViewMode(ViewMode mode) {
     m_viewMode = mode;
     m_viewStack->setCurrentIndex(static_cast<int>(mode));
     if (m_currentPath.startsWith(QStringLiteral("recent://"))) {
@@ -482,10 +495,8 @@ void TabPage::setViewMode(ViewMode mode) {
         updateStatus();
         return;
     }
-    if (AppSettings::instance().rememberFolderViewModes() && !m_currentPath.isEmpty() &&
-        !m_currentPath.startsWith(QStringLiteral("tag://"))) {
-        AppSettings::instance().setFolderViewMode(m_currentPath, mode);
-    }
+    // No persistence here: navigation and internal bookkeeping must never write
+    // settings. Callers recording a real user choice call setViewMode().
     if (mode == ViewMode::Column && m_columnView) {
         m_columnView->navigateToPath(m_currentPath);
         updateStatus();
@@ -495,6 +506,33 @@ void TabPage::setViewMode(ViewMode mode) {
     applyViewOptions();
     applyPreviewPaneVisibility();
     updatePreviewPane();
+}
+
+void TabPage::refreshViewModeFromSettings() {
+    const ViewMode target = AppSettings::instance().viewModeForPath(m_currentPath);
+    if (target != m_viewMode) {
+        applyViewMode(target);
+    }
+}
+
+void TabPage::rememberViewModeForFolder(ViewMode mode) {
+    applyViewMode(mode);
+    AppSettings::instance().setFolderViewMode(m_currentPath, mode);
+}
+
+void TabPage::clearFolderViewModeOverride() {
+    AppSettings::instance().clearFolderViewMode(m_currentPath);
+    // Show the inherited default immediately instead of waiting for navigation.
+    refreshViewModeFromSettings();
+}
+
+bool TabPage::hasFolderViewModeOverride() const {
+    return AppSettings::instance().hasFolderViewModeOverride(m_currentPath);
+}
+
+bool TabPage::canRememberViewMode() const {
+    return AppSettings::instance().folderViewModesEnabled() &&
+           AppSettings::isViewModeOverridablePath(m_currentPath);
 }
 
 void TabPage::setShowHidden(bool show) {
@@ -612,7 +650,7 @@ void TabPage::showSmartFolder(const SmartFolder& folder, bool recordHistory) {
     // Smart folders are flat result lists; use List View like other searches.
     if (m_viewMode == ViewMode::Column) {
         m_preSearchViewMode = m_viewMode;
-        setViewMode(ViewMode::List);
+        applyViewMode(ViewMode::List);
     } else {
         m_preSearchViewMode = m_viewMode;
     }
@@ -660,7 +698,7 @@ void TabPage::showRecentFiles(bool recordHistory) {
 
     if (m_viewMode == ViewMode::Column) {
         m_preSearchViewMode = m_viewMode;
-        setViewMode(ViewMode::List);
+        applyViewMode(ViewMode::List);
     } else {
         m_preSearchViewMode = m_viewMode;
     }
@@ -720,7 +758,7 @@ void TabPage::setFilterQuery(const QString& query) {
         m_model->refresh();
         m_searchScopeBar->hide();
         if (m_viewMode != m_preSearchViewMode && m_preSearchViewMode == ViewMode::Column) {
-            setViewMode(m_preSearchViewMode);
+            refreshViewModeFromSettings();
         }
         updateStatus();
         return;
@@ -863,7 +901,7 @@ void TabPage::runSearch() {
     m_pendingSearchResults.clear();
 
     if (m_viewMode == ViewMode::Column) {
-        setViewMode(ViewMode::List);
+        applyViewMode(ViewMode::List);
     }
 
     m_model->clearSearchResults();

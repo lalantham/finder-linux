@@ -190,8 +190,8 @@ void TestFavorites::testSpringLoadedSettings() {
 
 void TestFavorites::testPerFolderViewMode() {
     auto& settings = AppSettings::instance();
-    settings.setRememberFolderViewModes(false);
-    QVERIFY(!settings.rememberFolderViewModes());
+    settings.setFolderViewModesEnabled(false);
+    QVERIFY(!settings.folderViewModesEnabled());
 
     QString testDir1 = QStringLiteral("/tmp/test_dir1");
     QString testDir2 = QStringLiteral("/tmp/test_dir2");
@@ -200,9 +200,10 @@ void TestFavorites::testPerFolderViewMode() {
     settings.setFolderViewMode(testDir1, ViewMode::List);
     QVERIFY(!settings.folderViewMode(testDir1).has_value());
 
-    // When enabled, retrieves stored modes accurately
-    settings.setRememberFolderViewModes(true);
-    QVERIFY(settings.rememberFolderViewModes());
+    // When enabled, retrieves stored modes accurately. Note the entry stored while
+    // disabled is still there (nothing is destroyed), so this re-asserts the mode.
+    settings.setFolderViewModesEnabled(true);
+    QVERIFY(settings.folderViewModesEnabled());
 
     settings.setFolderViewMode(testDir1, ViewMode::List);
     settings.setFolderViewMode(testDir2, ViewMode::Gallery);
@@ -219,7 +220,8 @@ void TestFavorites::testPerFolderViewMode() {
     QVERIFY(!settings.folderViewMode(QStringLiteral("/tmp/other")).has_value());
 
     // Clean up
-    settings.setRememberFolderViewModes(false);
+    settings.setFolderViewModesEnabled(false);
+    settings.clearAllFolderViewModes();
 }
 
 void TestFavorites::testDebouncedSaveFlushes() {

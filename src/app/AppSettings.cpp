@@ -69,6 +69,25 @@ SearchFilter filterFromMap(const QVariantMap& map) {
     return filter;
 }
 
+// Overrides are stored as {mode, sequence}; builds before this feature stored a
+// bare int. Both encodings must stay readable.
+struct FolderViewModeRecord {
+    int mode{-1};
+    qint64 stamp{0};
+};
+
+FolderViewModeRecord parseFolderViewModeRecord(const QVariant& value) {
+    const auto type = value.typeId();
+    if (type == QMetaType::QVariantList || type == QMetaType::QStringList) {
+        const QVariantList parts = value.toList();
+        if (parts.isEmpty()) {
+            return {};
+        }
+        return {parts.at(0).toInt(), parts.size() > 1 ? parts.at(1).toLongLong() : 0};
+    }
+    return {value.toInt(), 0};
+}
+
 } // namespace
 
 static std::unique_ptr<QSettings> createQSettings() {
@@ -139,10 +158,30 @@ void AppSettings::load() {
     m_springLoadDelayMs = s.value(QStringLiteral("springLoadDelayMs"), 750).toInt();
     m_restoreTabsOnStartup = s.value(QStringLiteral("restoreTabsOnStartup"), true).toBool();
     m_savedTabs = s.value(QStringLiteral("savedTabs")).toStringList();
-    m_rememberFolderViewModes = s.value(QStringLiteral("rememberFolderViewModes"), false).toBool();
+    const int settingsVersion = s.value(QStringLiteral("settingsVersion"), 1).toInt();
+    m_folderViewModesEnabled = s.value(QStringLiteral("folderViewModesEnabled"), true).toBool();
     m_folderViewModes = s.value(QStringLiteral("folderViewModes")).toMap();
+    if (settingsVersion < 2) {
+        // Builds before 2 only read the map when "rememberFolderViewModes" was
+        // on, and that defaulted to off. The feature is now on by default, so a
+        // stale "false" must not silently disable it. Existing entries are kept:
+        // they were only ever written by explicit user choices.
+        m_folderViewModesEnabled = true;
+    }
+    m_directViewModeScope =
+        (s.value(QStringLiteral("directViewModeScope")).toString() == QStringLiteral("global"))
+            ? ViewModeScope::AllFolders
+            : ViewModeScope::CurrentFolder;
+
+    m_folderViewModeSequence = 1;
+    for (auto it = m_folderViewModes.cbegin(); it != m_folderViewModes.cend(); ++it) {
+        m_folderViewModeSequence =
+            qMax<quint64>(m_folderViewModeSequence,
+                          static_cast<quint64>(parseFolderViewModeRecord(it.value()).stamp) + 1);
+    }
     m_columnViewWidths = s.value(QStringLiteral("columnViewWidths")).toMap();
     m_trashAutoPurgeDays = s.value(QStringLiteral("trashAutoPurgeDays"), 0).toInt();
+    m_durableFileCopies = s.value(QStringLiteral("durableFileCopies"), false).toBool();
     m_searchScope = s.value(QStringLiteral("searchScope"), QStringLiteral("folder")).toString();
     if (m_searchScope != QStringLiteral("thispc"))
         m_searchScope = QStringLiteral("folder");
@@ -206,31 +245,100 @@ void AppSettings::save() {
     s.setValue(QStringLiteral("springLoadDelayMs"), m_springLoadDelayMs);
     s.setValue(QStringLiteral("restoreTabsOnStartup"), m_restoreTabsOnStartup);
     s.setValue(QStringLiteral("savedTabs"), m_savedTabs);
-    s.setValue(QStringLiteral("rememberFolderViewModes"), m_rememberFolderViewModes);
     s.setValue(QStringLiteral("folderViewModes"), m_folderViewModes);
+    s.setValue(QStringLiteral("folderViewModesEnabled"), m_folderViewModesEnabled);
+    s.setValue(QStringLiteral("directViewModeScope"),
+               m_directViewModeScope == ViewModeScope::AllFolders ? QStringLiteral("global")
+                                                                  : QStringLiteral("folder"));
+    s.setValue(QStringLiteral("settingsVersion"), 2);
+    s.remove(QStringLiteral("rememberFolderViewModes"));
     s.setValue(QStringLiteral("columnViewWidths"), m_columnViewWidths);
     s.setValue(QStringLiteral("trashAutoPurgeDays"), m_trashAutoPurgeDays);
+    s.setValue(QStringLiteral("durableFileCopies"), m_durableFileCopies);
     s.setValue(QStringLiteral("searchScope"), m_searchScope);
     s.setValue(QStringLiteral("searchSubfolders"), m_searchSubfolders);
     s.setValue(QStringLiteral("searchLiveUpdates"), m_searchLiveUpdates);
     s.setValue(QStringLiteral("searchSortMode"), m_searchSortMode);
 }
 
+bool AppSettings::isViewModeOverridablePath(const QString& path) {
+    return !path.isEmpty() && path.startsWith(QLatin1Char('/')) &&
+           !path.contains(QStringLiteral("://"));
+}
+
 std::optional<ViewMode> AppSettings::folderViewMode(const QString& path) const {
-    if (!m_rememberFolderViewModes || path.isEmpty())
+    if (!m_folderViewModesEnabled || !isViewModeOverridablePath(path)) {
         return std::nullopt;
-    auto it = m_folderViewModes.find(path);
-    if (it != m_folderViewModes.end()) {
-        return static_cast<ViewMode>(it.value().toInt());
     }
-    return std::nullopt;
+    const auto it = m_folderViewModes.constFind(QDir::cleanPath(path));
+    if (it == m_folderViewModes.constEnd()) {
+        return std::nullopt;
+    }
+    const int raw = parseFolderViewModeRecord(it.value()).mode;
+    if (raw < static_cast<int>(ViewMode::Icon) || raw > static_cast<int>(ViewMode::Gallery)) {
+        return std::nullopt;
+    }
+    return static_cast<ViewMode>(raw);
+}
+
+ViewMode AppSettings::viewModeForPath(const QString& path) const {
+    if (const auto override = folderViewMode(path)) {
+        return override.value();
+    }
+    return m_viewMode;
 }
 
 void AppSettings::setFolderViewMode(const QString& path, ViewMode mode) {
-    if (path.isEmpty() || path.startsWith(QStringLiteral("tag://")))
+    if (!isViewModeOverridablePath(path)) {
         return;
-    m_folderViewModes.insert(path, static_cast<int>(mode));
+    }
+    QVariantList record;
+    record << static_cast<int>(mode) << static_cast<qint64>(m_folderViewModeSequence++);
+    m_folderViewModes.insert(QDir::cleanPath(path), record);
     scheduleSave();
+}
+
+void AppSettings::clearFolderViewMode(const QString& path) {
+    if (m_folderViewModes.remove(QDir::cleanPath(path)) > 0) {
+        scheduleSave();
+    }
+}
+
+void AppSettings::clearAllFolderViewModes() {
+    if (m_folderViewModes.isEmpty()) {
+        return;
+    }
+    m_folderViewModes.clear();
+    scheduleSave();
+}
+
+int AppSettings::pruneFolderViewModes(int maxEntries) {
+    int removed = 0;
+    // Records for virtual views can only come from a hand-edited ini file.
+    for (const QString& path : m_folderViewModes.keys()) {
+        if (!isViewModeOverridablePath(path)) {
+            m_folderViewModes.remove(path);
+            ++removed;
+        }
+    }
+    if (maxEntries > 0 && m_folderViewModes.size() > maxEntries) {
+        QVector<QPair<qint64, QString>> byAge;
+        byAge.reserve(m_folderViewModes.size());
+        for (auto it = m_folderViewModes.cbegin(); it != m_folderViewModes.cend(); ++it) {
+            byAge.append({parseFolderViewModeRecord(it.value()).stamp, it.key()});
+        }
+        std::sort(byAge.begin(), byAge.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+        const qsizetype excess = byAge.size() - maxEntries;
+        for (qsizetype i = 0; i < excess; ++i) {
+            m_folderViewModes.remove(byAge.at(i).second);
+            ++removed;
+        }
+    }
+    if (removed > 0) {
+        scheduleSave();
+    }
+    return removed;
 }
 
 QStringList AppSettings::defaultListColumns() {

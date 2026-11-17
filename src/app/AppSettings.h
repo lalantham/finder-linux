@@ -28,6 +28,9 @@ struct FolderViewOptions {
     bool operator==(const FolderViewOptions&) const = default;
 };
 
+// What a direct view-mode change (Ctrl+1..4, View > as ..., toolbar pills) edits.
+enum class ViewModeScope { CurrentFolder = 0, AllFolders = 1 };
+
 class AppSettings {
 public:
     static AppSettings& instance();
@@ -45,14 +48,48 @@ public:
         m_viewMode = mode;
     }
 
+    // Per-folder view modes are enabled by default; the switch only exists so a
+    // user who dislikes them can turn the whole feature off.
+    [[nodiscard]] bool folderViewModesEnabled() const noexcept {
+        return m_folderViewModesEnabled;
+    }
+    void setFolderViewModesEnabled(bool enable) {
+        m_folderViewModesEnabled = enable;
+        scheduleSave();
+    }
+    // Deprecated aliases kept for source compatibility with older call sites.
     [[nodiscard]] bool rememberFolderViewModes() const noexcept {
-        return m_rememberFolderViewModes;
+        return folderViewModesEnabled();
     }
     void setRememberFolderViewModes(bool enable) {
-        m_rememberFolderViewModes = enable;
+        setFolderViewModesEnabled(enable);
     }
+
+    [[nodiscard]] ViewModeScope directViewModeScope() const noexcept {
+        return m_directViewModeScope;
+    }
+    void setDirectViewModeScope(ViewModeScope scope) {
+        m_directViewModeScope = scope;
+        scheduleSave();
+    }
+
     [[nodiscard]] std::optional<ViewMode> folderViewMode(const QString& path) const;
+    // Override for this exact folder, otherwise the global default. This is the
+    // only correct way to pick a mode while navigating: never inherit the mode
+    // of the folder the user came from.
+    [[nodiscard]] ViewMode viewModeForPath(const QString& path) const;
+    [[nodiscard]] bool hasFolderViewModeOverride(const QString& path) const {
+        return folderViewMode(path).has_value();
+    }
     void setFolderViewMode(const QString& path, ViewMode mode);
+    void clearFolderViewMode(const QString& path);
+    void clearAllFolderViewModes();
+    // Drops the least recently used overrides above `maxEntries` and returns how
+    // many were removed. Cheap: no filesystem access.
+    int pruneFolderViewModes(int maxEntries = 1000);
+    // True for local, absolute folder paths. Virtual views (tag://, smart://,
+    // recent://, apps://) and remote URIs can never hold an override.
+    static bool isViewModeOverridablePath(const QString& path);
 
     [[nodiscard]] int columnViewWidth(const QString& path) const;
     void setColumnViewWidth(const QString& path, int width);
@@ -93,6 +130,20 @@ public:
     }
     void setTrashAutoPurgeDays(int days) {
         m_trashAutoPurgeDays = qMax(0, days);
+    }
+
+    // When enabled, every copied file and its parent directory is fsync()ed
+    // before the temporary file is renamed into place. This guarantees the
+    // copy survives a power loss, but costs roughly one disk flush per file
+    // (measurably ~120x slower for many small files). Off by default: the
+    // temp-then-rename strategy already protects existing data from
+    // corruption, so the worst case is losing the copy, never the original.
+    [[nodiscard]] bool durableFileCopies() const noexcept {
+        return m_durableFileCopies;
+    }
+    void setDurableFileCopies(bool enabled) {
+        m_durableFileCopies = enabled;
+        scheduleSave();
     }
 
     [[nodiscard]] bool showHiddenFiles() const noexcept {
@@ -355,10 +406,13 @@ private:
     int m_springLoadDelayMs{750};
     bool m_restoreTabsOnStartup{true};
     QStringList m_savedTabs;
-    bool m_rememberFolderViewModes{false};
+    bool m_folderViewModesEnabled{true};
+    ViewModeScope m_directViewModeScope{ViewModeScope::CurrentFolder};
     QVariantMap m_folderViewModes;
+    quint64 m_folderViewModeSequence{1};
     QVariantMap m_columnViewWidths;
     int m_trashAutoPurgeDays{0};
+    bool m_durableFileCopies{false};
     QString m_searchScope{QStringLiteral("folder")};
     bool m_searchSubfolders{false};
     bool m_searchLiveUpdates{true};

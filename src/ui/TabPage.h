@@ -48,7 +48,13 @@ public:
         return !m_forwardHistory.isEmpty();
     }
 
-    void setViewMode(ViewMode mode);
+    void setViewMode(ViewMode mode);    // user intent; persists per preference
+    void applyViewMode(ViewMode mode);  // pure UI switch, never persists
+    void refreshViewModeFromSettings(); // re-resolve for the current folder
+    void rememberViewModeForFolder(ViewMode mode);
+    void clearFolderViewModeOverride();
+    [[nodiscard]] bool hasFolderViewModeOverride() const;
+    [[nodiscard]] bool canRememberViewMode() const;
     [[nodiscard]] ViewMode viewMode() const noexcept {
         return m_viewMode;
     }
