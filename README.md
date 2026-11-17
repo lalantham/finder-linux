@@ -304,8 +304,8 @@ cannot satisfy.
 Releases are created automatically by pushing a version tag:
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.3
+git push origin v1.1.3
 ```
 
 ---

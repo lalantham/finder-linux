@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # CMakeLists.txt takes effect even when build/ is reused (install.sh does).
 # Passing -DFINDER_VERSION=... on the command line still overrides it.
 if(NOT DEFINED FINDER_VERSION)
-    set(FINDER_VERSION "1.1.2")
+    set(FINDER_VERSION "1.1.3")
 endif()
 project(FinderLinux VERSION ${FINDER_VERSION} LANGUAGES CXX)
 

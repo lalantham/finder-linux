@@ -4,6 +4,27 @@ All notable changes to File Manager for Linux are documented here.
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-11-17
+
+### Fedora and distribution packaging
+- Added a **native RPM package** for Fedora and the RHEL family, built on a Fedora container so
+  its library sonames match the target. Install with
+  `sudo dnf install ./finder-linux-<version>-1.x86_64.rpm`.
+- **The Debian package now recommends the helper tools** that unlock features: `udisks2` for
+  mounting and ejecting media, `libglib2.0-bin` for Trash and remote mounts, `xdg-utils`, `acl`
+  for the permissions editor, and `poppler-utils` for searching inside PDFs. Previously the package
+  declared no external tool dependencies at all, so a fresh install silently lacked those features
+  with nothing to indicate why. They are Recommends rather than Depends, so a minimal system still
+  installs and runs.
+- CI now builds and tests on **Debian 12, Ubuntu 24.04, Fedora 41 and Arch Linux**, and asserts
+  that each package installs and that its payload does not contain the shared
+  `org.freedesktop.FileManager1` D-Bus name.
+
+### Documentation
+- README documents per-distribution install commands, what each optional helper tool enables, and
+  a supported-platform table. Released binaries target glibc 2.34, covering Debian 12,
+  Ubuntu 22.04+ and Fedora 35+.
+
 ## [1.1.2] - 2026-11-17
 
 ### Package install fix
