@@ -305,7 +305,10 @@ enable_testing()
 add_subdirectory(tests)
 
 # Release packaging -----------------------------------------------------------
-set(CPACK_GENERATOR "DEB")
+# DEB for Debian/Ubuntu, RPM for Fedora/RHEL. CPack only emits the generators
+# whose tooling exists on the build host, so configure both and let the release
+# job ask for the one it wants with `cpack -G`.
+set(CPACK_GENERATOR "DEB;RPM")
 set(CPACK_PACKAGE_NAME "finder-linux")
 set(CPACK_PACKAGE_VENDOR "Finder Linux contributors")
 set(CPACK_PACKAGE_CONTACT "Finder Linux contributors <lalantham@users.noreply.github.com>")
@@ -323,4 +326,27 @@ set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/lalantham/finder-linux")
 set(CPACK_DEBIAN_PACKAGE_DESCRIPTION
     "A KDE-friendly, brand-neutral file manager with tabs, split view, search, Quick Look previews, metadata-aware operations, and desktop integration.")
+
+# External helper tools. The package works without them, but each one unlocks a
+# feature, and a user who installs the .deb has no way to discover that. Declare
+# them as Recommends (installed by default by apt) rather than Depends, so a
+# minimal system can still install and run the app.
+#
+# Declared explicitly rather than relying on shlibdeps alone because these are
+# executables, not shared libraries: shlibdeps cannot see them. CPack writes the
+# value verbatim into the control file, so it must be comma-separated - a CMake
+# list would be joined with semicolons, which dpkg rejects.
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS
+    "udisks2, libglib2.0-bin, xdg-utils, acl, poppler-utils, libarchive-tools")
+
+# RPM equivalents use the Fedora/RHEL package names for the same tools.
+set(CPACK_RPM_PACKAGE_LICENSE "GPL-3.0-or-later")
+set(CPACK_RPM_PACKAGE_GROUP "Applications/File")
+set(CPACK_RPM_PACKAGE_REQUIRES "")
+set(CPACK_RPM_PACKAGE_SUGGESTS
+    "udisks2 glib2 xdg-utils acl poppler-utils libarchive")
+set(CPACK_RPM_FILE_NAME "RPM-DEFAULT")
+set(CPACK_RPM_PACKAGE_DESCRIPTION
+    "A KDE-friendly, brand-neutral file manager with tabs, split view, search, Quick Look previews, metadata-aware operations, and desktop integration.")
+
 include(CPack)

@@ -6,17 +6,58 @@ on:
 
 jobs:
   build:
-    name: Build and test
+    # Build and test on the distributions we ship packages for, so packaging and
+    # Qt-version differences surface here rather than in a release. Qt 6.4 (Debian
+    # 12) and Qt 6.6+ (Ubuntu 24.04, Fedora, Arch) behave differently enough that
+    # a single-distro CI previously let two packaging bugs through.
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    container: archlinux:base-devel
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 12 (Qt 6.4)
+            image: debian:12
+            kind: apt
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04
+            kind: apt
+          - name: Fedora 41
+            image: fedora:41
+            kind: dnf
+          - name: Arch Linux
+            image: archlinux:base-devel
+            kind: pacman
     env:
       QT_QPA_PLATFORM: offscreen
+      DEBIAN_FRONTEND: noninteractive
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (Debian / Ubuntu)
+        if: matrix.kind == 'apt'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git cmake ninja-build g++ pkg-config \
+            qt6-base-dev qt6-base-dev-tools qt6-svg-dev qt6-multimedia-dev \
+            libarchive-dev libpoppler-qt6-dev \
+            desktop-file-utils appstream
+
+      - name: Install dependencies (Fedora)
+        if: matrix.kind == 'dnf'
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            ca-certificates git cmake ninja-build gcc-c++ pkgconf-pkg-config \
+            qt6-qtbase-devel qt6-qtsvg-devel qt6-qtmultimedia-devel \
+            libarchive-devel poppler-qt6-devel \
+            desktop-file-utils libappstream-glib
+
+      - name: Install dependencies (Arch)
+        if: matrix.kind == 'pacman'
         run: |
           pacman -Syu --noconfirm --needed archlinux-keyring
           pacman -S --noconfirm --needed \
@@ -35,7 +76,40 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Validate desktop entry
+        if: matrix.kind != 'dnf'
         run: desktop-file-validate build/org.finderlinux.Finder.desktop
 
       - name: Validate AppStream metadata
+        if: matrix.kind != 'dnf'
         run: appstreamcli validate --no-net data/org.finderlinux.Finder.metainfo.xml
+
+      - name: Package (Debian / Ubuntu)
+        if: matrix.kind == 'apt'
+        run: |
+          cmake -B build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build-pkg
+          cpack --config build-pkg/CPackConfig.cmake -G DEB -B dist
+          dpkg-deb -f dist/*.deb Depends | tr ',' '\n' | sed 's/^ *//'
+
+      - name: Package (Fedora)
+        if: matrix.kind == 'dnf'
+        run: |
+          dnf install -y rpm-build
+          cmake -B build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build-pkg
+          cpack --config build-pkg/CPackConfig.cmake -G RPM -B dist
+          rpm -qpR dist/*.rpm | sort | head -30
+
+      - name: Verify package contents
+        if: matrix.kind == 'apt'
+        run: |
+          # A shared D-Bus name must never be installed system-wide: nautilus,
+          # dolphin and elementary-files all own this path, and shipping it makes
+          # the package uninstallable next to them.
+          if dpkg-deb -c dist/*.deb | grep -q "dbus-1/services/org.freedesktop.FileManager1.service"; then
+            echo "ERROR: package ships the shared FileManager1 service name"
+            exit 1
+          fi
+          echo "OK: no conflicting D-Bus service file"

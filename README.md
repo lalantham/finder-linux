@@ -236,9 +236,53 @@ AppStream metadata, man page, and Bash/Zsh/Fish completions.
 Tagged releases publish:
 
 - `finder-linux_<version>_amd64.deb` — Debian 12 / Ubuntu 23.04+ package
+- `finder-linux-<version>-1.x86_64.rpm` — Fedora 41+ / RHEL-family package
 - `finder-linux-<version>-x86_64.AppImage` — portable single-file build
 - `finder-linux-<version>-x86_64.tar.gz` — relocatable install tree
 - `SHA256SUMS` — checksums for all assets
+
+#### Installing per distribution
+
+**Debian / Ubuntu**
+```bash
+sudo apt install ./finder-linux_<version>_amd64.deb
+```
+`apt` is used rather than `dpkg -i` so the Qt and libarchive dependencies are
+resolved. The package *Recommends* the optional helper tools (`udisks2` for
+mounting and ejecting media, `libglib2.0-bin` for Trash and remote mounts,
+`xdg-utils`, `acl`, `poppler-utils`) rather than requiring them, so it still
+installs on a minimal system but pulls in full functionality where available.
+
+**Fedora / RHEL**
+```bash
+sudo dnf install ./finder-linux-<version>-1.x86_64.rpm
+```
+
+**Arch and anything else** — use the AppImage or build from source:
+```bash
+chmod +x finder-linux-<version>-x86_64.AppImage
+./finder-linux-<version>-x86_64.AppImage
+```
+
+The AppImage bundles Qt, but it reads the *host* icon theme, so it looks native.
+`Help → About File Manager` reports the exact build, which is the quickest way to
+confirm you are running a current version.
+
+#### Supported platforms
+
+CI builds and runs the test suite on Debian 12, Ubuntu 24.04, Fedora 41 and
+Arch Linux, so a distribution-specific regression is caught before release
+rather than reported afterwards.
+
+| Distribution | Minimum | Notes |
+| :--- | :--- | :--- |
+| Debian | 12 (bookworm) | Qt 6.4, glibc 2.36 |
+| Ubuntu | 22.04 | built against Debian 12's glibc 2.34 floor |
+| Fedora | 41 | native RPM |
+| Arch | rolling | build from source |
+
+The released binaries target glibc 2.34, so Debian 12, Ubuntu 22.04+ and
+Fedora 35+ are all supported.
 
 Build the same packages locally:
 
@@ -246,10 +290,16 @@ Build the same packages locally:
 cmake -B build-pkg -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX=/usr -DFINDER_VERSION=1.0.0
 cmake --build build-pkg
-cpack --config build-pkg/CPackConfig.cmake -G DEB -B dist
+cpack --config build-pkg/CPackConfig.cmake -G DEB -B dist   # needs dpkg-dev
+cpack --config build-pkg/CPackConfig.cmake -G RPM -B dist   # needs rpm-build
 BUILD_DIR=build-pkg bash packaging/make-appimage.sh 1.0.0
 BUILD_DIR=build-pkg bash packaging/make-tarball.sh 1.0.0
 ```
+
+Each CPack generator needs its own toolchain: `dpkg-dev` for DEB and
+`rpm-build` for RPM. The release workflow therefore builds the RPM on a Fedora
+container — an RPM produced against Debian's Qt would carry sonames Fedora
+cannot satisfy.
 
 Releases are created automatically by pushing a version tag:
 

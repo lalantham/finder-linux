@@ -76,6 +76,16 @@ jobs:
           dpkg-deb -I dist/*.deb
           dpkg-deb -c dist/*.deb > /dev/null
           lintian dist/*.deb || true
+          # recommend-only tools must be declared; a package that installs and
+          # then silently lacks Trash/media/ACL support is worse than one that
+          # pulls them in.
+          dpkg-deb -f dist/*.deb Recommends | grep -q udisks2
+          # the shared FileManager1 D-Bus name must never be shipped, or the
+          # package cannot coexist with nautilus/dolphin/elementary-files.
+          if dpkg-deb -c dist/*.deb | grep -q "dbus-1/services/org.freedesktop.FileManager1.service"; then
+            echo "ERROR: package ships the shared FileManager1 service name" >&2
+            exit 1
+          fi
 
       - name: Build AppImage
         shell: bash
@@ -100,6 +110,8 @@ jobs:
         shell: bash
         run: |
           cd dist
+          # .rpm is built by the separate Fedora job and added at publish time,
+          # so the checksum file is generated there over the final file set.
           sha256sum *.deb *.AppImage *.tar.gz > SHA256SUMS
           sha256sum -c SHA256SUMS
 
@@ -110,9 +122,81 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # RPM must be produced on a Fedora-family host: rpmbuild and the dependency
+  # solver are not available in the Debian packaging image, and an RPM built
+  # against Debian's Qt would carry Debian sonames Fedora cannot satisfy.
+  rpm:
+    name: Build RPM package
+    runs-on: ubuntu-latest
+    container: fedora:41
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            ca-certificates git cmake ninja-build gcc-c++ pkgconf-pkg-config \
+            rpm-build qt6-qtbase-devel qt6-qtsvg-devel qt6-qtmultimedia-devel \
+            libarchive-devel poppler-qt6-devel
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="dev"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DFINDER_VERSION="${{ steps.version.outputs.version }}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build RPM
+        shell: bash
+        run: |
+          mkdir -p dist
+          cpack --config build/CPackConfig.cmake -G RPM -B dist
+          rpm -qip dist/*.rpm
+          rpm -qpR dist/*.rpm | sort
+          # the same shared-name rule applies to RPM payloads
+          if rpm -qpl dist/*.rpm | grep -qx "/usr/share/dbus-1/services/org.freedesktop.FileManager1.service"; then
+            echo "ERROR: RPM ships the shared FileManager1 service name" >&2
+            exit 1
+          fi
+
+      - name: Verify the RPM installs and runs
+        shell: bash
+        run: |
+          rpm -i --nodeps dist/*.rpm
+          installed="$(rpm -q finder-linux)"
+          echo "installed: $installed"
+          QT_QPA_PLATFORM=offscreen /usr/bin/finder-linux --version
+
+      - name: Upload RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: finder-linux-${{ steps.version.outputs.version }}-rpm
+          path: dist/*.rpm
+          if-no-files-found: error
+
   release:
     name: Publish GitHub release
-    needs: build
+    needs: [build, rpm]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -129,6 +213,22 @@ jobs:
         with:
           name: finder-linux-${{ steps.version.outputs.version }}
           path: dist
+
+      - name: Download RPM
+        uses: actions/download-artifact@v4
+        with:
+          name: finder-linux-${{ steps.version.outputs.version }}-rpm
+          path: dist
+
+      - name: Regenerate checksums over all assets
+        shell: bash
+        run: |
+          cd dist
+          # The build job could not see the RPM, so recompute over the final set.
+          rm -f SHA256SUMS
+          sha256sum *.deb *.rpm *.AppImage *.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
