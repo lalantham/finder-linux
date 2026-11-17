@@ -1,8 +1,11 @@
 #include "FileOperationEngine.h"
+#include "AppSettings.h"
 #include "ArchiveService.h"
+#include "FileItem.h"
 #include "XdgTrash.h"
 #include <QDateTime>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -15,7 +18,11 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <functional>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -47,6 +54,45 @@ QString uniqueSiblingPath(const QString& directory, const QString& prefix) {
            QString::number(QRandomGenerator::global()->generate());
 }
 
+// Bytes writable on the filesystem holding `directory`. Returns -1 when the
+// answer is unknown (the check is then skipped rather than blocking the copy).
+qint64 availableBytesIn(const QString& directory) {
+    const QByteArray dirBytes = QFile::encodeName(directory);
+    struct statvfs info{};
+    if (::statvfs(dirBytes.constData(), &info) != 0) {
+        return -1;
+    }
+    return static_cast<qint64>(info.f_bavail) * static_cast<qint64>(info.f_frsize);
+}
+
+// Bytes a source really occupies on disk. Holes cost nothing to reproduce,
+// so this is what a copy actually consumes, unlike the logical file size.
+qint64 allocatedBytesOf(const QString& path) {
+    struct stat st{};
+    if (::lstat(QFile::encodeName(path).constData(), &st) != 0) {
+        return 0;
+    }
+    if (S_ISREG(st.st_mode)) {
+        return static_cast<qint64>(st.st_blocks) * 512;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        // Directory entries and inodes are small but numerous; walk the tree.
+        qint64 total = 0;
+        QDirIterator it(path, QDir::Files | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            struct stat entry{};
+            if (::lstat(QFile::encodeName(it.filePath()).constData(), &entry) == 0 &&
+                S_ISREG(entry.st_mode)) {
+                total += static_cast<qint64>(entry.st_blocks) * 512;
+            }
+        }
+        return total;
+    }
+    return 0;
+}
+
 // POSIX rename, unlike QFile::rename, atomically replaces an existing file.
 bool posixRename(const QString& from, const QString& to) {
     const QByteArray fromBytes = QFile::encodeName(from);
@@ -63,16 +109,77 @@ void syncDirectory(const QString& directory) {
     ::close(fd);
 }
 
+// Reflink clone. Almost free and preserves sparseness, but only works when the
+// source and destination live on the same filesystem that supports it.
+bool tryCloneFile(int srcFd, int dstFd) {
+#ifdef FICLONE
+    if (::ioctl(dstFd, FICLONE, srcFd) == 0) {
+        return true;
+    }
+    // EXDEV/EOPNOTSUPP/EINVAL all just mean "use another strategy".
+    return false;
+#else
+    Q_UNUSED(srcFd)
+    Q_UNUSED(dstFd)
+    return false;
+#endif
+}
+
+// In-kernel copy. Unlike a userspace loop this keeps holes as holes (a sparse
+// file stays sparse) and moves no data through user memory.
+// Returns the number of bytes copied, or -1 when unsupported (e.g. EXDEV).
+// `progress` is invoked with the running total and must return false to abort.
+qint64 tryKernelCopy(int srcFd, int dstFd, const std::function<bool(qint64)>& progress) {
+#if defined(__linux__)
+    off_t offsetIn = 0;
+    off_t offsetOut = 0;
+    qint64 total = 0;
+    while (true) {
+        const ssize_t written = ::copy_file_range(srcFd, &offsetIn, dstFd, &offsetOut, 1 << 20, 0);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            // Before any byte moved, an unsupported-operations error lets the
+            // caller fall back cleanly. After that we cannot rewind cheaply.
+            return total > 0 ? -2 : -1;
+        }
+        if (written == 0) {
+            break; // end of source
+        }
+        total += written;
+        if (!progress(total)) {
+            return -2; // aborted by caller
+        }
+    }
+    return total;
+#else
+    Q_UNUSED(srcFd)
+    Q_UNUSED(dstFd)
+    Q_UNUSED(progress)
+    return -1;
+#endif
+}
+
 // Moves a fully written temporary item into place. The previous destination is
 // never removed before the replacement is ready, and it is restored if the
 // final rename fails.
 bool installTemporary(const QString& tempPath, const QString& finalPath, QString* error) {
+    // Directory fsync only matters for crash durability; renaming is atomic
+    // either way, so existing data can never be corrupted by skipping it.
+    const bool durable = AppSettings::instance().durableFileCopies();
+    const auto syncParent = [durable](const QString& path) {
+        if (durable) {
+            syncDirectory(path);
+        }
+    };
+
     QFileInfo dstInfo(finalPath);
     const bool dstExists = dstInfo.exists() || dstInfo.isSymLink();
 
     if (!dstExists) {
         if (posixRename(tempPath, finalPath)) {
-            syncDirectory(dstInfo.absolutePath());
+            syncParent(dstInfo.absolutePath());
             return true;
         }
         if (error)
@@ -96,12 +203,12 @@ bool installTemporary(const QString& tempPath, const QString& finalPath, QString
             return false;
         }
         QDir(backupPath).removeRecursively();
-        syncDirectory(dstInfo.absolutePath());
+        syncParent(dstInfo.absolutePath());
         return true;
     }
 
     if (posixRename(tempPath, finalPath)) {
-        syncDirectory(dstInfo.absolutePath());
+        syncParent(dstInfo.absolutePath());
         return true;
     }
     if (error)
@@ -711,6 +818,34 @@ void FileOperationEngine::executeCopyOrMove(OperationType type, const QStringLis
     m_currentProgress.bytesCancelled = 0;
     resetProgressTiming();
 
+    // Free-space preflight for genuine data copies. A same-device move is just
+    // a rename and reflinks consume almost nothing, so those are exempt.
+    // Fail early with a clear message instead of dying part-way through with
+    // ENOSPC, which leaves the user with a half-copied tree.
+    //
+    // The estimate uses *allocated* blocks rather than the logical total: the
+    // copy paths preserve holes, so a 64 GB sparse file needs kilobytes, and
+    // charging it the full logical size would reject a copy that fits easily.
+    if (type == OperationType::Copy && !sameDeviceMove) {
+        qint64 neededBytes = 0;
+        for (const QString& src : sources) {
+            neededBytes += allocatedBytesOf(src);
+        }
+        const qint64 available = availableBytesIn(destDir);
+        if (neededBytes > 0 && available >= 0 && available < neededBytes) {
+            OperationResult result;
+            result.type = type;
+            result.success = false;
+            result.errorMessage =
+                QStringLiteral("Not enough free space in \"%1\": %2 needed, %3 available.")
+                    .arg(destDir, FileItem::formatSize(neededBytes),
+                         FileItem::formatSize(available));
+            applyCollectedIssues(result);
+            emit operationFinished(result);
+            return;
+        }
+    }
+
     const QVector<quint64> itemIds = beginItems(sources, type);
     ConflictResolution appliedResolution = defaultRes;
     bool applyToAll = (defaultRes != ConflictResolution::Ask);
@@ -896,6 +1031,10 @@ FileOperationEngine::ItemOutcome FileOperationEngine::copySingleFile(const QStri
         uniqueSiblingPath(dstInfo.absolutePath(), QStringLiteral(".finder_tmp_"));
     QString installError;
 
+    // Bytes already accounted for by previous items, so per-item progress adds
+    // up instead of overwriting the running total.
+    const qint64 m_bytesBeforeItem = m_currentProgress.bytesProcessed;
+
     if (S_ISLNK(st.st_mode)) {
         const QByteArray target = QFile::encodeName(srcFi.symLinkTarget());
         const QByteArray tempBytes = QFile::encodeName(tempPath);
@@ -946,85 +1085,249 @@ FileOperationEngine::ItemOutcome FileOperationEngine::copySingleFile(const QStri
         return ItemOutcome::Skipped;
     }
 
-    QFile srcFile(src);
-    if (!srcFile.open(QIODevice::ReadOnly)) {
-        recordError(src, srcFile.errorString());
-        return ItemOutcome::Failed;
-    }
-
     // Write to a uniquely named temporary file in the destination directory.
-    QFile dstFile(tempPath);
-    if (!dstFile.open(QIODevice::WriteOnly)) {
-        recordError(finalDst, dstFile.errorString());
+    // Raw descriptors are used so the kernel-side copy paths can operate on them.
+    const QByteArray srcBytesForCopy = QFile::encodeName(src);
+    const QByteArray tempBytes = QFile::encodeName(tempPath);
+    const int srcFd = ::open(srcBytesForCopy.constData(), O_RDONLY | O_CLOEXEC);
+    if (srcFd < 0) {
+        recordError(src, QString::fromLocal8Bit(std::strerror(errno)));
         return ItemOutcome::Failed;
     }
-
-    constexpr qint64 ChunkSize = 1024 * 1024; // 1 MB
-    QByteArray buffer(ChunkSize, Qt::Uninitialized);
-
-    while (!srcFile.atEnd()) {
-        waitIfPaused();
-        if (m_cancelled.load(std::memory_order_relaxed)) {
-            dstFile.close();
-            QFile::remove(tempPath);
-            return ItemOutcome::Failed;
-        }
-        if (activeItemCancelled()) {
-            dstFile.close();
-            QFile::remove(tempPath);
-            return ItemOutcome::Cancelled;
-        }
-        if (m_skipCurrentFile.exchange(false)) {
-            dstFile.close();
-            QFile::remove(tempPath);
-            recordWarning(src, QStringLiteral("skipped by user"));
-            m_skippedItems++;
-            return ItemOutcome::Skipped;
-        }
-
-        qint64 bytesRead = srcFile.read(buffer.data(), ChunkSize);
-        if (bytesRead > 0) {
-            qint64 bytesWritten = dstFile.write(buffer.data(), bytesRead);
-            if (bytesWritten != bytesRead) {
-                const QString reason = dstFile.errorString();
-                dstFile.close();
-                QFile::remove(tempPath);
-                recordError(finalDst, reason);
-                return ItemOutcome::Failed;
-            }
-            m_currentProgress.bytesProcessed += bytesRead;
-
-            m_currentProgress.percent = m_currentProgress.totalBytes > 0
-                                            ? static_cast<int>(((m_currentProgress.bytesProcessed +
-                                                                 m_currentProgress.bytesCancelled) *
-                                                                100) /
-                                                               m_currentProgress.totalBytes)
-                                            : 100;
-            m_currentProgress.currentItem = finalDst;
-            const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            if (now - m_lastProgressEmitMs >= 100) {
-                updateProgressTiming();
-                emit progress(m_currentProgress);
-                m_lastProgressEmitMs = now;
-            }
-        }
-    }
-
-    dstFile.flush();
-    if (dstFile.error() != QFileDevice::NoError) {
-        const QString reason = dstFile.errorString();
-        dstFile.close();
-        QFile::remove(tempPath);
+    const int dstFd = ::open(tempBytes.constData(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC,
+                             static_cast<mode_t>(st.st_mode & 07777));
+    if (dstFd < 0) {
+        const QString reason = QString::fromLocal8Bit(std::strerror(errno));
+        ::close(srcFd);
         recordError(finalDst, reason);
         return ItemOutcome::Failed;
     }
-    // Durability barrier before the rename, so a power loss cannot leave a
-    // zero-length file where the original used to be.
-    if (dstFile.handle() >= 0) {
-        ::fsync(dstFile.handle());
+
+    const auto closeCopyFds = [srcFd, dstFd]() {
+        ::close(srcFd);
+        ::close(dstFd);
+    };
+
+    // Aborts the copy, removes the temporary file and records the reason.
+    const auto abortCopy = [&](ItemOutcome outcome, const QString& reason) {
+        closeCopyFds();
+        QFile::remove(tempPath);
+        if (outcome == ItemOutcome::Cancelled) {
+            return ItemOutcome::Cancelled;
+        }
+        if (outcome == ItemOutcome::Skipped) {
+            recordWarning(src, reason);
+            m_skippedItems++;
+            return ItemOutcome::Skipped;
+        }
+        recordError(finalDst, reason);
+        return ItemOutcome::Failed;
+    };
+
+    // Publishes progress for `copiedBytes` bytes of this item. Returns false
+    // when the user cancelled or skipped, so each copy strategy can bail out.
+    // Progress is accumulated across items: assigning here would reset the
+    // counter for every file and the bar would never reach 100% on a batch.
+    const auto reportCopyProgress = [&](qint64 copiedBytes) {
+        waitIfPaused();
+        if (m_cancelled.load(std::memory_order_relaxed) || activeItemCancelled()) {
+            return false;
+        }
+        if (m_skipCurrentFile.exchange(false)) {
+            return false;
+        }
+        m_currentProgress.bytesProcessed = m_bytesBeforeItem + copiedBytes;
+        m_currentProgress.percent = m_currentProgress.totalBytes > 0
+                                        ? static_cast<int>(((m_currentProgress.bytesProcessed +
+                                                             m_currentProgress.bytesCancelled) *
+                                                            100) /
+                                                           m_currentProgress.totalBytes)
+                                        : 100;
+        m_currentProgress.currentItem = finalDst;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_lastProgressEmitMs >= 100) {
+            updateProgressTiming();
+            emit progress(m_currentProgress);
+            m_lastProgressEmitMs = now;
+        }
+        return true;
+    };
+
+    // Strategy 1: reflink clone. Instant and sparse-preserving; only works on
+    // the same filesystem. Strategy 2: in-kernel copy, also sparse-preserving
+    // on filesystems that implement it properly. Both avoid moving the data
+    // through this process.
+    //
+    // A sparse source skips strategy 2: some filesystems (notably tmpfs)
+    // implement copy_file_range by writing holes out as real zeros, so a large
+    // sparse file would churn through gigabytes before we could detect it and
+    // redo the copy. The extent walk below handles holes correctly and cheaply.
+    const bool sourceIsSparse =
+        static_cast<qint64>(st.st_blocks) * 512 < static_cast<qint64>(st.st_size);
+    bool copiedByKernel = false;
+    if (tryCloneFile(srcFd, dstFd)) {
+        if (!reportCopyProgress(static_cast<qint64>(st.st_size))) {
+            const bool cancelled =
+                m_cancelled.load(std::memory_order_relaxed) || activeItemCancelled();
+            return abortCopy(cancelled ? ItemOutcome::Cancelled : ItemOutcome::Skipped,
+                             cancelled ? QString() : QStringLiteral("skipped by user"));
+        }
+        copiedByKernel = true;
+    } else if (!sourceIsSparse) {
+        const qint64 kernelResult =
+            tryKernelCopy(srcFd, dstFd, [&](qint64 total) { return reportCopyProgress(total); });
+        if (kernelResult == -2) {
+            const bool cancelled =
+                m_cancelled.load(std::memory_order_relaxed) || activeItemCancelled();
+            return abortCopy(cancelled ? ItemOutcome::Cancelled : ItemOutcome::Skipped,
+                             cancelled ? QString() : QStringLiteral("skipped by user"));
+        }
+        copiedByKernel = kernelResult >= 0;
+
+        // Belt and braces for filesystems that report a file as dense but still
+        // materialize holes while copying it.
+        if (copiedByKernel) {
+            struct stat srcExtents{};
+            struct stat dstExtents{};
+            if (::fstat(srcFd, &srcExtents) == 0 && ::fstat(dstFd, &dstExtents) == 0) {
+                const bool sourceSparse = srcExtents.st_blocks * 512 < srcExtents.st_size;
+                const bool destinationFull = dstExtents.st_blocks * 512 >= dstExtents.st_size;
+                if (sourceSparse && destinationFull && srcExtents.st_size > 0) {
+                    copiedByKernel = false;
+                    if (::ftruncate(dstFd, 0) != 0) {
+                        return abortCopy(ItemOutcome::Failed,
+                                         QString::fromLocal8Bit(std::strerror(errno)));
+                    }
+                }
+            }
+        }
     }
-    dstFile.close();
-    srcFile.close();
+
+    if (!copiedByKernel) {
+        // Strategy 3: portable userspace copy. Rewind whatever a partially
+        // successful kernel attempt may have written before giving up on it.
+        if (::lseek(srcFd, 0, SEEK_SET) < 0 || ::ftruncate(dstFd, 0) != 0 ||
+            ::lseek(dstFd, 0, SEEK_SET) < 0) {
+            return abortCopy(ItemOutcome::Failed, QString::fromLocal8Bit(std::strerror(errno)));
+        }
+
+        // Walk the source in data regions only, so holes stay holes instead of
+        // being materialized with zeros. Falls back to a plain sequential copy
+        // when the filesystem cannot report extents (SEEK_DATA returns ENXIO or
+        // EINVAL). copy_file_range already does this for us, but this path runs
+        // when the kernel refuses the copy (for example across mounts).
+        constexpr qint64 ChunkSize = 1024 * 1024; // 1 MB
+        QByteArray buffer(ChunkSize, Qt::Uninitialized);
+        qint64 copiedBytes = 0;
+        off_t position = 0;
+        const bool extentsReliable = lseek(srcFd, 0, SEEK_DATA) >= 0 || errno == ENXIO;
+        if (::lseek(srcFd, 0, SEEK_SET) < 0) {
+            return abortCopy(ItemOutcome::Failed, QString::fromLocal8Bit(std::strerror(errno)));
+        }
+
+        while (position < static_cast<off_t>(st.st_size)) {
+            if (m_cancelled.load(std::memory_order_relaxed) || activeItemCancelled() ||
+                m_skipCurrentFile.exchange(false)) {
+                const bool cancelled =
+                    m_cancelled.load(std::memory_order_relaxed) || activeItemCancelled();
+                return abortCopy(cancelled ? ItemOutcome::Cancelled : ItemOutcome::Skipped,
+                                 cancelled ? QString() : QStringLiteral("skipped by user"));
+            }
+            waitIfPaused();
+
+            const off_t fileSize = static_cast<off_t>(st.st_size);
+            off_t regionEnd = fileSize;
+
+            if (extentsReliable) {
+                // Jump over any leading hole at the current position.
+                const off_t dataStart = ::lseek(srcFd, position, SEEK_DATA);
+                if (dataStart < 0) {
+                    // ENXIO: everything from here on is a hole.
+                    copiedBytes += static_cast<qint64>(fileSize - position);
+                    position = fileSize;
+                    break;
+                }
+                if (dataStart > position) {
+                    copiedBytes += static_cast<qint64>(dataStart - position);
+                    position = dataStart;
+                    if (position >= fileSize) {
+                        break;
+                    }
+                }
+
+                // Bound the read by the end of this data region. read() walks
+                // straight through holes and returns zeros, so without this the
+                // hole would be materialized on disk.
+                const off_t holeStart = ::lseek(srcFd, position, SEEK_HOLE);
+                if (holeStart > position) {
+                    regionEnd = qMin(holeStart, fileSize);
+                }
+            }
+
+            // SEEK_DATA/SEEK_HOLE moved the descriptor; reposition before reading.
+            if (::lseek(srcFd, position, SEEK_SET) < 0) {
+                return abortCopy(ItemOutcome::Failed, QString::fromLocal8Bit(std::strerror(errno)));
+            }
+            // Keep the destination offset aligned with the source so a hole
+            // leaves a real gap rather than shifting later data earlier.
+            if (::lseek(dstFd, position, SEEK_SET) < 0) {
+                return abortCopy(ItemOutcome::Failed, QString::fromLocal8Bit(std::strerror(errno)));
+            }
+
+            const qint64 regionBytes = static_cast<qint64>(regionEnd - position);
+            const size_t toRead = static_cast<size_t>(qMin<qint64>(regionBytes, ChunkSize));
+            if (toRead == 0) {
+                break;
+            }
+
+            const ssize_t bytesRead = ::read(srcFd, buffer.data(), toRead);
+            if (bytesRead < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return abortCopy(ItemOutcome::Failed, QString::fromLocal8Bit(std::strerror(errno)));
+            }
+            if (bytesRead == 0) {
+                break; // end of source
+            }
+
+            qint64 written = 0;
+            while (written < bytesRead) {
+                const ssize_t chunk = ::write(dstFd, buffer.constData() + written,
+                                              static_cast<size_t>(bytesRead - written));
+                if (chunk < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    return abortCopy(ItemOutcome::Failed,
+                                     QString::fromLocal8Bit(std::strerror(errno)));
+                }
+                written += chunk;
+            }
+
+            position += bytesRead;
+            copiedBytes += bytesRead;
+            if (!reportCopyProgress(copiedBytes)) {
+                const bool cancelled =
+                    m_cancelled.load(std::memory_order_relaxed) || activeItemCancelled();
+                return abortCopy(cancelled ? ItemOutcome::Cancelled : ItemOutcome::Skipped,
+                                 cancelled ? QString() : QStringLiteral("skipped by user"));
+            }
+        }
+
+        // Materialize the logical length even when the file ends in a hole.
+        if (::ftruncate(dstFd, static_cast<off_t>(st.st_size)) != 0) {
+            return abortCopy(ItemOutcome::Failed, QString::fromLocal8Bit(std::strerror(errno)));
+        }
+    }
+
+    // Durability barrier before the rename, only when the user opted in. The
+    // rename itself is atomic regardless, so skipping this cannot corrupt or
+    // partially overwrite existing data: the worst case is losing the copy.
+    if (AppSettings::instance().durableFileCopies()) {
+        ::fsync(dstFd);
+    }
+    closeCopyFds();
 
     // Verify temp destination size matches source
     if (QFileInfo(tempPath).size() != static_cast<qint64>(st.st_size)) {

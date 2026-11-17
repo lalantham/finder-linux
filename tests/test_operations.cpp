@@ -4,6 +4,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <algorithm>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/xattr.h>
@@ -31,6 +32,11 @@ private slots:
     void testPauseAndResumeState();
     void testOperationItemStatuses();
     void testCancelPendingItem();
+    void testCopyPreservesSparseFiles();
+    void testCopyHandlesLargeFile();
+    void testCopyFreeSpacePreflight();
+    void testMultiFileProgressIsCumulative();
+    void testSparseFileNotBlockedBySpacePreflight();
 };
 
 void TestOperations::testCreateFolderAndFile() {
@@ -578,6 +584,195 @@ void TestOperations::testCancelPendingItem() {
     QVERIFY(cancelledSecond);
     QVERIFY(!QFile::exists(dstDir.filePath(QStringLiteral("second.txt"))));
     QCOMPARE(result.cancelledCount, 1);
+}
+
+void TestOperations::testCopyPreservesSparseFiles() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+
+    // 64 MiB logical file with only 8 KiB of real data: a hole in the middle.
+    const QString src = srcDir.filePath(QStringLiteral("sparse.bin"));
+    constexpr off_t logicalSize = 64LL * 1024 * 1024;
+    {
+        const QByteArray head(4096, 'A');
+        const QByteArray tail(4096, 'B');
+        QFile f(src);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        QVERIFY(f.write(head) == head.size());
+        QVERIFY(f.seek(logicalSize - tail.size()));
+        QVERIFY(f.write(tail) == tail.size());
+        f.close();
+    }
+
+    struct stat srcStat{};
+    QCOMPARE(::stat(QFile::encodeName(src).constData(), &srcStat), 0);
+    QVERIFY2(srcStat.st_size == logicalSize, "test fixture should be sparse");
+    const qint64 srcAllocated = static_cast<qint64>(srcStat.st_blocks) * 512;
+    QVERIFY2(srcAllocated < 1024 * 1024, "test fixture should have a hole, not full allocation");
+
+    FileOperationEngine engine;
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems({src}, dstDir.path(), ConflictResolution::Replace));
+    const OperationResult res = waitForOperation(engine, spy);
+    QVERIFY2(res.success, qPrintable(res.errorMessage));
+
+    const QString dst = dstDir.filePath(QStringLiteral("sparse.bin"));
+    struct stat dstStat{};
+    QCOMPARE(::stat(QFile::encodeName(dst).constData(), &dstStat), 0);
+
+    // Logical size must match exactly...
+    QCOMPARE(static_cast<qint64>(dstStat.st_size), static_cast<qint64>(logicalSize));
+
+    // ...and the hole must still be a hole. A buffered read/write loop would
+    // materialize the full 64 MiB here, wasting disk and I/O.
+    const qint64 dstAllocated = static_cast<qint64>(dstStat.st_blocks) * 512;
+    QVERIFY2(dstAllocated < 8 * 1024 * 1024,
+             qPrintable(QStringLiteral("copy materialized sparse file: %1 bytes allocated "
+                                       "for a %2 byte hole")
+                            .arg(dstAllocated)
+                            .arg(static_cast<qint64>(logicalSize))));
+
+    // The data at both ends must survive.
+    QFile out(dst);
+    QVERIFY(out.open(QIODevice::ReadOnly));
+    QCOMPARE(out.read(4096), QByteArray(4096, 'A'));
+    QVERIFY(out.seek(logicalSize - 4096));
+    QCOMPARE(out.read(4096), QByteArray(4096, 'B'));
+    out.close();
+
+    // The hole itself must read back as zeros.
+    QVERIFY(out.open(QIODevice::ReadOnly));
+    QVERIFY(out.seek(1024 * 1024));
+    const QByteArray middle = out.read(4096);
+    QCOMPARE(middle.size(), 4096);
+    QVERIFY(std::all_of(middle.cbegin(), middle.cend(), [](char c) { return c == '\0'; }));
+}
+
+void TestOperations::testCopyHandlesLargeFile() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+
+    // Larger than one 1 MB chunk so the loop iterates several times.
+    const QString src = srcDir.filePath(QStringLiteral("large.bin"));
+    QByteArray content;
+    content.reserve(6 * 1024 * 1024);
+    for (int i = 0; i < 6 * 1024 * 1024; ++i) {
+        content.append(static_cast<char>(i % 251));
+    }
+    writeFile(src, content);
+
+    FileOperationEngine engine;
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems({src}, dstDir.path(), ConflictResolution::Replace));
+    const OperationResult res = waitForOperation(engine, spy);
+    QVERIFY2(res.success, qPrintable(res.errorMessage));
+
+    const QString dst = dstDir.filePath(QStringLiteral("large.bin"));
+    QCOMPARE(readFile(dst), content);
+
+    // Progress must still be reported for kernel-side copies, otherwise the
+    // speed and ETA in the progress dialog would stay at zero.
+    QVERIFY(res.processedCount >= 1);
+}
+
+void TestOperations::testCopyFreeSpacePreflight() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+
+    const QString src = srcDir.filePath(QStringLiteral("data.bin"));
+    writeFile(src, QByteArray(1024, 'x'));
+
+    // The preflight must not reject a copy that fits comfortably.
+    FileOperationEngine engine;
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems({src}, dstDir.path(), ConflictResolution::Replace));
+    const OperationResult res = waitForOperation(engine, spy);
+    QVERIFY2(res.success, qPrintable(res.errorMessage));
+    QVERIFY(QFile::exists(dstDir.filePath(QStringLiteral("data.bin"))));
+
+    // And a same-filesystem move must never be blocked by a free-space check,
+    // since it is only a rename that consumes no space.
+    FileOperationEngine moveEngine;
+    QSignalSpy moveSpy(&moveEngine, &FileOperationEngine::operationFinished);
+    const QString moved = dstDir.filePath(QStringLiteral("data.bin"));
+    QVERIFY(moveEngine.moveItems({moved}, srcDir.path(), ConflictResolution::Replace));
+    const OperationResult moveRes = waitForOperation(moveEngine, moveSpy);
+    QVERIFY2(moveRes.success, qPrintable(moveRes.errorMessage));
+    QVERIFY(QFile::exists(srcDir.filePath(QStringLiteral("data.bin"))));
+}
+
+void TestOperations::testMultiFileProgressIsCumulative() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+
+    // Two files so an item-by-item progress reset would be visible.
+    QStringList sources;
+    for (const QString& name : {QStringLiteral("one.bin"), QStringLiteral("two.bin")}) {
+        const QString path = srcDir.filePath(name);
+        writeFile(path, QByteArray(300 * 1024, 'x'));
+        sources << path;
+    }
+
+    FileOperationEngine engine;
+    QStringList reported;
+    qint64 highestProcessed = 0;
+    qint64 declaredTotal = 0;
+    connect(&engine, &FileOperationEngine::progress, this, [&](const OperationProgress& progress) {
+        highestProcessed = qMax(highestProcessed, progress.bytesProcessed);
+        declaredTotal = progress.totalBytes;
+        reported << QString::number(progress.bytesProcessed);
+    });
+
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems(sources, dstDir.path(), ConflictResolution::Replace));
+    const OperationResult res = waitForOperation(engine, spy);
+    QVERIFY2(res.success, qPrintable(res.errorMessage));
+
+    QCOMPARE(declaredTotal, static_cast<qint64>(600 * 1024));
+    // Progress must accumulate across items; overwriting it per item would
+    // leave the bar stuck at the size of the largest single file.
+    QVERIFY2(highestProcessed >= declaredTotal,
+             qPrintable(QStringLiteral("progress stalled at %1 of %2 bytes")
+                            .arg(highestProcessed)
+                            .arg(declaredTotal)));
+}
+
+void TestOperations::testSparseFileNotBlockedBySpacePreflight() {
+    QTemporaryDir srcDir;
+    QTemporaryDir dstDir;
+    QVERIFY(srcDir.isValid() && dstDir.isValid());
+
+    // A sparse file whose logical size is far larger than the free space of any
+    // realistic test filesystem, but which occupies next to nothing. The
+    // preflight must measure allocated bytes, not the logical length, or this
+    // copy would be rejected even though it needs no room.
+    const QString src = srcDir.filePath(QStringLiteral("huge-sparse.img"));
+    constexpr off_t logicalSize = 1024LL * 1024 * 1024 * 1024; // 1 TiB logical
+    {
+        QFile f(src);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        QVERIFY(f.write(QByteArray(4096, 'H')) == 4096);
+        QVERIFY(f.seek(logicalSize - 4096));
+        QVERIFY(f.write(QByteArray(4096, 'T')) == 4096);
+        f.close();
+    }
+
+    struct stat st{};
+    QCOMPARE(::stat(QFile::encodeName(src).constData(), &st), 0);
+    QVERIFY2(st.st_blocks * 512 < 1024 * 1024, "fixture should be almost entirely holes");
+
+    FileOperationEngine engine;
+    QSignalSpy spy(&engine, &FileOperationEngine::operationFinished);
+    QVERIFY(engine.copyItems({src}, dstDir.path(), ConflictResolution::Replace));
+    const OperationResult res = waitForOperation(engine, spy);
+
+    QVERIFY2(res.success, qPrintable(res.errorMessage));
+    QVERIFY(!res.errorMessage.contains(QStringLiteral("Not enough free space")));
+    QVERIFY(QFile::exists(dstDir.filePath(QStringLiteral("huge-sparse.img"))));
 }
 
 QTEST_MAIN(TestOperations)
