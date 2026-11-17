@@ -47,17 +47,46 @@ static QString resolveInputPath(const QString& input) {
 static bool iconThemeAvailable(const QString& theme) {
     if (theme.trimmed().isEmpty())
         return false;
-    QStringList roots = QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
-    roots.append(QStringLiteral("/usr/share"));
-    roots.append(QStringLiteral("/usr/local/share"));
-    roots.removeDuplicates();
-    for (const QString& root : roots) {
-        if (QFileInfo(root + QStringLiteral("/icons/") + theme + QStringLiteral("/index.theme"))
-                .isFile()) {
+    for (const QString& root : QIcon::themeSearchPaths()) {
+        if (root.startsWith(QLatin1Char(':'))) {
+            continue; // Qt's built-in resources cannot hold a host theme
+        }
+        if (QFileInfo(root + QLatin1Char('/') + theme + QStringLiteral("/index.theme")).isFile()) {
             return true;
         }
     }
     return false;
+}
+
+// Qt only seeds themeSearchPaths() from the platform theme. When that theme
+// cannot load - an AppImage on a host whose platform-theme plugin is not
+// bundled, or a bare offscreen/session-less run - the list collapses to
+// ":/icons" and every QIcon::fromTheme() lookup falls back to the generic
+// built-in pixmaps. That is why the AppImage looked like a different icon set
+// from the same binary installed system-wide. Add the standard host icon
+// directories explicitly so both builds use the user's theme.
+static void ensureHostIconThemePaths() {
+    QStringList paths = QIcon::themeSearchPaths();
+    const QString home = QDir::homePath();
+    const QStringList hostRoots = {
+        home + QStringLiteral("/.local/share/icons"),
+        home + QStringLiteral("/.icons"),
+        QStringLiteral("/usr/local/share/icons"),
+        QStringLiteral("/usr/share/icons"),
+        home + QStringLiteral("/.local/share/flatpak/exports/share/icons"),
+        QStringLiteral("/var/lib/flatpak/exports/share/icons"),
+        QStringLiteral("/var/lib/snapd/desktop/icons"),
+    };
+    bool changed = false;
+    for (const QString& root : hostRoots) {
+        if (QFileInfo(root).isDir() && !paths.contains(root)) {
+            paths.append(root);
+            changed = true;
+        }
+    }
+    if (changed) {
+        QIcon::setThemeSearchPaths(paths);
+    }
 }
 
 static QString configuredHostIconTheme() {
@@ -77,18 +106,36 @@ static QString configuredHostIconTheme() {
     if (iconThemeAvailable(theme))
         return theme;
 
+    // Xfce/GNOME also record it through xsettings.
+    QSettings gtk4(home + QStringLiteral("/.config/gtk-4.0/settings.ini"), QSettings::IniFormat);
+    theme = gtk4.value(QStringLiteral("Settings/gtk-icon-theme-name")).toString();
+    if (iconThemeAvailable(theme))
+        return theme;
+
     // Sensible Plasma defaults if no explicit setting is readable.
     for (const QString& candidate : {QStringLiteral("breeze-dark"), QStringLiteral("breeze"),
                                      QStringLiteral("Adwaita"), QStringLiteral("Papirus")}) {
-        if (iconThemeAvailable(candidate))
+        if (iconThemeAvailable(candidate)) {
             return candidate;
+        }
     }
     return {};
 }
 
-static void applyAppImageIconTheme() {
-    if (!qEnvironmentVariableIsSet("APPIMAGE"))
+static void applyHostIconTheme() {
+    // Must run before any widget is created, otherwise icons already rendered
+    // keep their fallback pixmaps.
+    const QString existing = QIcon::themeName();
+    ensureHostIconThemePaths();
+
+    if (!existing.isEmpty() && iconThemeAvailable(existing)) {
+        // The platform theme already picked a usable host theme; keep it.
+        if (QIcon::fallbackThemeName().isEmpty()) {
+            QIcon::setFallbackThemeName(QStringLiteral("breeze"));
+        }
         return;
+    }
+
     const QString theme = configuredHostIconTheme();
     if (!theme.isEmpty()) {
         QIcon::setThemeName(theme);
@@ -242,7 +289,7 @@ int main(int argc, char* argv[]) {
     // Expose the build stamp so the UI can show exactly which build is running.
     qputenv("FINDER_BUILD_STAMP", QByteArrayLiteral(FINDER_BUILD_STAMP));
     app.setDesktopFileName(QStringLiteral("org.finderlinux.Finder"));
-    applyAppImageIconTheme();
+    applyHostIconTheme();
     app.setWindowIcon(QIcon::fromTheme(QStringLiteral("finder-linux"),
                                        QIcon(QStringLiteral(":/icons/finder-linux.svg"))));
 

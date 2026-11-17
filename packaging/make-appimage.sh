@@ -50,6 +50,19 @@ if [[ -d "$QT_PLUGIN_DIR/wayland-graphics-integration-client" ]]; then
         "$APPDIR/usr/plugins/wayland-graphics-integration-client/"
 fi
 
+# linuxdeploy's Qt plugin does not copy iconengines. Most Linux icon themes
+# (Breeze, Tela, Papirus, Adwaita) ship SVG icons, and without libqsvgicon.so Qt
+# cannot render a single one, so every icon falls back to a generic built-in
+# pixmap. That made the AppImage look like it used a different, poorer icon set
+# than the same binary installed system-wide.
+for engine_dir in iconengines; do
+    if [[ -d "$QT_PLUGIN_DIR/$engine_dir" ]]; then
+        mkdir -p "$APPDIR/usr/plugins/$engine_dir"
+        cp -a "$QT_PLUGIN_DIR/$engine_dir/"*.so "$APPDIR/usr/plugins/$engine_dir/"
+        echo "Bundled $engine_dir plugins: $(ls "$APPDIR/usr/plugins/$engine_dir" | tr '\n' ' ')"
+    fi
+done
+
 DESKTOP_FILE="$APPDIR/usr/share/applications/org.finderlinux.Finder.desktop"
 ICON_FILE="$APPDIR/usr/share/icons/hicolor/512x512/apps/finder-linux.png"
 if [[ -f "$DESKTOP_FILE" ]]; then
