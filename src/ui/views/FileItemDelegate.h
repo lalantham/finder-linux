@@ -23,9 +23,12 @@ public:
     enum class LabelPosition { Bottom, Right };
 
     void setIconSize(int size) {
-        if (m_iconSize != size) {
-            QPixmapCache::clear();
-        }
+        // No global QPixmapCache::clear() here. Every entry this delegate
+        // inserts is keyed by the scaled size and device pixel ratio, so tiles
+        // at the previous icon size can never be returned for the new size.
+        // Clearing would instead evict every toolbar, sidebar and menu pixmap
+        // in the process and force them all to be re-rendered; the stale
+        // thumbnail entries are simply left for QPixmapCache's LRU to reclaim.
         m_iconSize = size;
     }
     [[nodiscard]] int iconSize() const noexcept {

@@ -51,6 +51,9 @@ private:
     void stopMediaPlayback();
     void stopSlideshow();
     void displayPdfPage();
+    void applyPdfPageCount(int count);
+    void applyPdfPage(const QPixmap& pixmap, int page);
+    void updatePdfPageControls();
     void applyImageTransform();
     void fitImageToView();
     void resetPdfState();
@@ -79,6 +82,13 @@ private:
     QString m_pdfPath;
     int m_pdfPage{0};
     int m_pdfPageCount{0};
+    // Identifies the newest page request so a slow render for a page the user
+    // has already navigated away from cannot overwrite the current one.
+    quint64 m_pdfRequestId{0};
+    bool m_pdfPagePending{false};
+    // Shared with render callbacks so they become no-ops if this dialog is
+    // destroyed while a page is still being rendered.
+    std::shared_ptr<bool> m_alive{std::make_shared<bool>(true)};
     QTextEdit* m_textViewer{nullptr};
     QScrollArea* m_imageScrollArea{nullptr};
     QWidget* m_fallbackWidget{nullptr};

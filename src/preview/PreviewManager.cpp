@@ -604,43 +604,57 @@ QPixmap PreviewManager::iconThumbnail(const QString& path, int iconSize) {
     }
 
     const int bucket = bucketForSize(iconSize);
+    // Failures are recorded against the file's mtime so that an edited or
+    // regenerated file is retried instead of staying blank for the session.
+    const qint64 modified = QFileInfo(path).lastModified().toMSecsSinceEpoch();
     const QString cacheKey = QStringLiteral("%1#thumb%2").arg(path).arg(bucket);
+    const QString failureKey = QStringLiteral("%1@%2").arg(cacheKey).arg(modified);
 
     if (QPixmap* cached = m_thumbnailCache.object(cacheKey)) {
         return *cached;
     }
 
-    // Repaints for pending/failed items must not touch the disk again.
-    if (m_pending.contains(cacheKey) || m_failed.contains(cacheKey)) {
+    // Repaints for pending items, and for a file that already failed at this
+    // mtime, must not touch the disk again.
+    if (m_pending.contains(cacheKey) || m_failed.contains(failureKey)) {
         return {};
     }
     m_pending.insert(cacheKey);
 
-    (void)QtConcurrent::run(&thumbnailPool(), [this, path, bucket, cacheKey]() {
-        // Disk probing and generation both run away from the UI thread.
-        QImage image = loadImageFromDiskCache(path, bucket);
-        if (image.isNull()) {
-            image = generateThumbnailImage(path, bucket);
-            if (!image.isNull()) {
-                saveToDiskCache(path, bucket, image);
-            }
-        }
-
-        QMetaObject::invokeMethod(
-            this,
-            [this, path, cacheKey, image]() {
-                m_pending.remove(cacheKey);
-                if (image.isNull()) {
-                    m_failed.insert(cacheKey);
-                    return;
+    (void)QtConcurrent::run(
+        &thumbnailPool(), [this, path, bucket, cacheKey, failureKey, modified]() {
+            // Disk probing and generation both run away from the UI thread.
+            QImage image = loadImageFromDiskCache(path, bucket);
+            if (image.isNull()) {
+                image = generateThumbnailImage(path, bucket);
+                if (!image.isNull()) {
+                    saveToDiskCache(path, bucket, image);
                 }
-                QPixmap pixmap = QPixmap::fromImage(image);
-                m_thumbnailCache.insert(cacheKey, new QPixmap(pixmap),
-                                        pixmap.width() * pixmap.height() * 4);
-                emit thumbnailReady(path);
-            },
-            Qt::QueuedConnection);
-    });
+            }
+
+            QMetaObject::invokeMethod(
+                this,
+                [this, path, cacheKey, failureKey, modified, image]() {
+                    m_pending.remove(cacheKey);
+                    if (image.isNull()) {
+                        // Bound the failure set: a folder of thousands of
+                        // unthumbnailable files must not accumulate forever.
+                        constexpr int MaxFailedEntries = 4000;
+                        if (m_failed.size() >= MaxFailedEntries) {
+                            m_failed.clear();
+                        }
+                        m_failed.insert(failureKey, modified);
+                        return;
+                    }
+                    // A later success clears any earlier failure for this file.
+                    m_failed.remove(failureKey);
+                    QPixmap pixmap = QPixmap::fromImage(image);
+                    m_thumbnailCache.insert(cacheKey, new QPixmap(pixmap),
+                                            pixmap.width() * pixmap.height() * 4);
+                    emit thumbnailReady(path);
+                },
+                Qt::QueuedConnection);
+        });
 
     return {};
 }
@@ -664,7 +678,8 @@ QString PreviewManager::getTextPreview(const QString& path, int maxBytes) {
 
 QPixmap PreviewManager::getPdfPreview(const QString& path, const QSize& targetSize, int page) {
 #ifdef HAVE_POPPLER
-    std::unique_ptr<Poppler::Document> doc(Poppler::Document::load(path));
+    QMutexLocker locker(&m_pdfMutex);
+    std::shared_ptr<Poppler::Document> doc = pdfDocument(path);
     if (!doc || doc->isLocked() || doc->numPages() == 0) {
         return {};
     }
@@ -698,11 +713,165 @@ QPixmap PreviewManager::getPdfPreview(const QString& path, const QSize& targetSi
 #endif
 }
 
+#ifdef HAVE_POPPLER
+std::shared_ptr<Poppler::Document> PreviewManager::pdfDocument(const QString& path) const {
+    // Caller holds m_pdfMutex.
+    const QString clean = QDir::cleanPath(path);
+    if (m_cachedPdfDocument && m_cachedPdfPath == clean) {
+        return m_cachedPdfDocument;
+    }
+
+    std::shared_ptr<Poppler::Document> doc(Poppler::Document::load(clean));
+    if (!doc || doc->isLocked()) {
+        // Do not cache a failure: the file may be still being written.
+        m_cachedPdfDocument.reset();
+        m_cachedPdfPath.clear();
+        return {};
+    }
+    m_cachedPdfPath = clean;
+    m_cachedPdfDocument = doc;
+    return doc;
+}
+#endif
+
+namespace {
+
+QThreadPool& pdfPool() {
+    // Rendering a scanned page is CPU- and memory-heavy, so keep it to a single
+    // worker: two concurrent 36-megapixel renders would spike memory usage.
+    static QThreadPool pool;
+    static const bool initialized = []() {
+        pool.setMaxThreadCount(1);
+        pool.setExpiryTimeout(30000);
+        return true;
+    }();
+    Q_UNUSED(initialized);
+    return pool;
+}
+
+} // namespace
+
+void PreviewManager::requestPdfPage(const QString& path, const QSize& targetSize, int page,
+                                    std::function<void(const QPixmap&)> finished) {
+    if (path.isEmpty()) {
+        if (finished)
+            finished(QPixmap());
+        return;
+    }
+
+    // Claims this request for the current document; a newer request for another
+    // document makes any queued result stale.
+    const quint64 generation = ++m_pdfGeneration;
+
+    (void)QtConcurrent::run(&pdfPool(), [this, path, targetSize, page, finished, generation]() {
+        QPixmap rendered;
+        {
+            QMutexLocker locker(&m_pdfMutex);
+            std::shared_ptr<Poppler::Document> doc = pdfDocument(path);
+            if (doc && !doc->isLocked() && page >= 0 && page < doc->numPages()) {
+                std::unique_ptr<Poppler::Page> documentPage(doc->page(page));
+                if (documentPage) {
+                    const QSizeF pageSize = documentPage->pageSizeF();
+                    const qreal widthDpi = pageSize.width() > 0.0
+                                               ? 72.0 * targetSize.width() / pageSize.width()
+                                               : 150.0;
+                    const qreal heightDpi = pageSize.height() > 0.0
+                                                ? 72.0 * targetSize.height() / pageSize.height()
+                                                : 150.0;
+                    const qreal dpi = qBound<qreal>(24.0, qMin(widthDpi, heightDpi), 300.0);
+                    const QImage image = documentPage->renderToImage(dpi, dpi);
+                    if (!image.isNull()) {
+                        rendered = QPixmap::fromImage(image.scaled(targetSize, Qt::KeepAspectRatio,
+                                                                   Qt::SmoothTransformation));
+                    }
+                }
+            }
+        }
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, finished, rendered, generation]() {
+                if (generation != m_pdfGeneration) {
+                    return; // a newer request superseded this one
+                }
+                if (finished)
+                    finished(rendered);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void PreviewManager::requestPdfPageCount(const QString& path, std::function<void(int)> finished) {
+    if (path.isEmpty()) {
+        if (finished)
+            finished(0);
+        return;
+    }
+
+    (void)QtConcurrent::run(&pdfPool(), [this, path, finished]() {
+        int pages = 0;
+        {
+            QMutexLocker locker(&m_pdfMutex);
+            std::shared_ptr<Poppler::Document> doc = pdfDocument(path);
+            if (doc && !doc->isLocked()) {
+                pages = doc->numPages();
+            }
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [finished, pages]() {
+                if (finished)
+                    finished(pages);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+void PreviewManager::requestPdfFind(const QString& path, const QString& text,
+                                    std::function<void(int)> finished) {
+    if (path.isEmpty() || text.trimmed().isEmpty()) {
+        if (finished)
+            finished(-1);
+        return;
+    }
+
+    (void)QtConcurrent::run(&pdfPool(), [this, path, text, finished]() {
+        int found = -1;
+        {
+            QMutexLocker locker(&m_pdfMutex);
+            std::shared_ptr<Poppler::Document> doc = pdfDocument(path);
+            if (doc && !doc->isLocked()) {
+                // Bounded so a term that appears nowhere cannot scan an entire
+                // multi-thousand-page document while holding up page rendering.
+                constexpr int MaxPagesToScan = 400;
+                const int limit = qMin(doc->numPages(), MaxPagesToScan);
+                for (int page = 0; page < limit; ++page) {
+                    std::unique_ptr<Poppler::Page> documentPage(doc->page(page));
+                    if (documentPage &&
+                        documentPage->text(QRectF()).contains(text, Qt::CaseInsensitive)) {
+                        found = page;
+                        break;
+                    }
+                }
+            }
+        }
+        QMetaObject::invokeMethod(
+            this,
+            [finished, found]() {
+                if (finished)
+                    finished(found);
+            },
+            Qt::QueuedConnection);
+    });
+}
+
 int PreviewManager::findPdfPage(const QString& path, const QString& text) const {
 #ifdef HAVE_POPPLER
     if (text.trimmed().isEmpty())
         return -1;
-    std::unique_ptr<Poppler::Document> doc(Poppler::Document::load(path));
+    // Const method but the document cache is a mutable implementation detail.
+    QMutexLocker locker(&m_pdfMutex);
+    std::shared_ptr<Poppler::Document> doc = pdfDocument(path);
     if (!doc || doc->isLocked())
         return -1;
     for (int page = 0; page < doc->numPages(); ++page) {
@@ -721,7 +890,8 @@ int PreviewManager::findPdfPage(const QString& path, const QString& text) const 
 
 int PreviewManager::pdfPageCount(const QString& path) const {
 #ifdef HAVE_POPPLER
-    std::unique_ptr<Poppler::Document> doc(Poppler::Document::load(path));
+    QMutexLocker locker(&m_pdfMutex);
+    std::shared_ptr<Poppler::Document> doc = pdfDocument(path);
     if (!doc || doc->isLocked())
         return 0;
     return doc->numPages();

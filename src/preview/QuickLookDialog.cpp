@@ -311,6 +311,9 @@ QuickLookDialog::QuickLookDialog(QWidget* parent)
 }
 
 QuickLookDialog::~QuickLookDialog() {
+    if (m_alive) {
+        *m_alive = false;
+    }
     if (m_fontId >= 0) {
         QFontDatabase::removeApplicationFont(m_fontId);
     }
@@ -356,6 +359,8 @@ void QuickLookDialog::resetPdfState() {
     m_pdfPath.clear();
     m_pdfPage = 0;
     m_pdfPageCount = 0;
+    m_pdfPagePending = false;
+    ++m_pdfRequestId; // drop any in-flight render for the previous document
     if (m_pageLabel)
         m_pageLabel->hide();
     if (m_prevPageBtn)
@@ -368,36 +373,89 @@ void QuickLookDialog::displayPdfPage() {
     if (m_pdfPath.isEmpty()) {
         return;
     }
-    const QPixmap pix =
-        PreviewManager::instance().getPdfPreview(m_pdfPath, QSize(680, 440), m_pdfPage);
-    if (pix.isNull()) {
+
+    // Rendering a scanned page can take ~270 ms, so never do it inline. Show
+    // the previous page (or a placeholder) and swap in the new render when the
+    // worker finishes.
+    const quint64 requestId = ++m_pdfRequestId;
+    m_pdfPagePending = true;
+    if (m_imageBase.isNull()) {
+        m_fallbackIconLabel->setPixmap(
+            QIcon::fromTheme(QStringLiteral("application-pdf")).pixmap(96, 96));
+        m_fallbackTextLabel->setText(QStringLiteral("Rendering page…"));
+        m_fallbackWidget->show();
+        m_imageScrollArea->hide();
+        m_textViewer->hide();
+    }
+    updatePdfPageControls();
+
+    const int requestedPage = m_pdfPage;
+    std::shared_ptr<bool> alive = m_alive;
+    PreviewManager::instance().requestPdfPage(
+        m_pdfPath, QSize(680, 440), requestedPage,
+        [this, requestId, requestedPage, alive](const QPixmap& pixmap) {
+            if (!alive || !*alive) {
+                return; // the dialog went away while rendering
+            }
+            if (requestId != m_pdfRequestId) {
+                return; // superseded by a newer page or document
+            }
+            m_pdfPagePending = false;
+            applyPdfPage(pixmap, requestedPage);
+        });
+}
+
+void QuickLookDialog::updatePdfPageControls() {
+    const bool multipage = m_pdfPageCount > 1;
+    m_pageLabel->setText(QStringLiteral("Page %1 of %2").arg(m_pdfPage + 1).arg(m_pdfPageCount));
+    m_pageLabel->setVisible(multipage);
+    m_prevPageBtn->setVisible(multipage);
+    m_nextPageBtn->setVisible(multipage);
+    if (m_pdfSearchBar) {
+        m_pdfSearchBar->show();
+    }
+    m_prevPageBtn->setEnabled(!m_pdfPagePending && m_pdfPage > 0);
+    m_nextPageBtn->setEnabled(!m_pdfPagePending && m_pdfPage + 1 < m_pdfPageCount);
+}
+
+void QuickLookDialog::applyPdfPage(const QPixmap& pixmap, int page) {
+    if (pixmap.isNull()) {
+        // A stale render for a page we already left must not clear the view.
+        if (page != m_pdfPage) {
+            return;
+        }
         m_fallbackIconLabel->setPixmap(
             QIcon::fromTheme(QStringLiteral("dialog-error")).pixmap(96, 96));
         m_fallbackTextLabel->setText(QStringLiteral("Could not render this document page."));
         m_fallbackWidget->show();
         m_imageScrollArea->hide();
         m_textViewer->hide();
+        updatePdfPageControls();
         return;
     }
 
-    m_imageBase = pix;
-    m_zoom = 1.0;
-    m_rotation = 0;
+    m_imageBase = pixmap;
     m_fitImage = true;
     QTimer::singleShot(0, this, &QuickLookDialog::fitImageToView);
     m_imageScrollArea->show();
     m_fallbackWidget->hide();
     m_textViewer->hide();
+    updatePdfPageControls();
+}
 
-    const bool multipage = m_pdfPageCount > 1;
-    m_pageLabel->setText(QStringLiteral("Page %1 of %2").arg(m_pdfPage + 1).arg(m_pdfPageCount));
-    m_pageLabel->setVisible(multipage);
-    m_prevPageBtn->setVisible(multipage);
-    m_nextPageBtn->setVisible(multipage);
-    if (m_pdfSearchBar)
-        m_pdfSearchBar->show();
-    m_prevPageBtn->setEnabled(m_pdfPage > 0);
-    m_nextPageBtn->setEnabled(m_pdfPage + 1 < m_pdfPageCount);
+void QuickLookDialog::applyPdfPageCount(int count) {
+    m_pdfPageCount = count;
+    if (count > 0) {
+        displayPdfPage();
+        return;
+    }
+    m_fallbackIconLabel->setPixmap(
+        m_imageBase.isNull() ? QIcon::fromTheme(QStringLiteral("application-pdf")).pixmap(96, 96)
+                             : QPixmap());
+    m_fallbackTextLabel->setText(QStringLiteral("PDF Preview unavailable"));
+    m_fallbackWidget->show();
+    m_imageScrollArea->hide();
+    m_textViewer->hide();
 }
 
 void QuickLookDialog::applyImageTransform() {
@@ -538,16 +596,25 @@ void QuickLookDialog::updateContent() {
     } else if (pm.isPdf(currentPath)) {
         m_pdfPath = currentPath;
         m_pdfPage = 0;
-        m_pdfPageCount = pm.pdfPageCount(currentPath);
-        if (m_pdfPageCount > 0) {
-            displayPdfPage();
-        } else {
-            m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
-            m_fallbackTextLabel->setText(QStringLiteral("PDF Preview unavailable"));
-            m_fallbackWidget->show();
-            m_imageScrollArea->hide();
-            m_textViewer->hide();
-        }
+        m_pdfPageCount = 0;
+        ++m_pdfRequestId; // invalidate any in-flight render from the previous file
+        m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
+        m_fallbackTextLabel->setText(
+            QStringLiteral("<b>%1</b><br>Loading preview…").arg(item.fileName()));
+        m_fallbackWidget->show();
+        m_imageScrollArea->hide();
+        m_textViewer->hide();
+        std::shared_ptr<bool> alive = m_alive;
+        pm.requestPdfPageCount(currentPath, [this, currentPath, alive](int count) {
+            if (!alive || !*alive) {
+                return;
+            }
+            // Ignore a late answer for a document the user already left.
+            if (m_pdfPath != currentPath) {
+                return;
+            }
+            applyPdfPageCount(count);
+        });
     } else if (pm.isOffice(currentPath)) {
         m_fallbackIconLabel->setPixmap(item.icon().pixmap(96, 96));
         m_fallbackTextLabel->setText(
@@ -713,8 +780,18 @@ void QuickLookDialog::onOfficePreviewReady(const QString& sourcePath, const QStr
 
     m_pdfPath = pdfPath;
     m_pdfPage = 0;
-    m_pdfPageCount = PreviewManager::instance().pdfPageCount(pdfPath);
-    displayPdfPage();
+    m_pdfPageCount = 0;
+    ++m_pdfRequestId;
+    std::shared_ptr<bool> alive = m_alive;
+    PreviewManager::instance().requestPdfPageCount(pdfPath, [this, pdfPath, alive](int count) {
+        if (!alive || !*alive) {
+            return;
+        }
+        if (m_pdfPath != pdfPath) {
+            return;
+        }
+        applyPdfPageCount(count);
+    });
 }
 
 void QuickLookDialog::resizeEvent(QResizeEvent* event) {
@@ -727,17 +804,34 @@ void QuickLookDialog::resizeEvent(QResizeEvent* event) {
 void QuickLookDialog::findPdfMatch() {
     if (!m_pdfSearchEdit || m_pdfPath.isEmpty())
         return;
-    const int page = PreviewManager::instance().findPdfPage(m_pdfPath, m_pdfSearchEdit->text());
-    if (page >= 0) {
-        m_pdfPage = page;
-        displayPdfPage();
-    } else {
-        m_pdfSearchEdit->setStyleSheet(QStringLiteral("QLineEdit { color: #ff7777; }"));
-        QTimer::singleShot(1000, this, [this]() {
-            if (m_pdfSearchEdit)
-                m_pdfSearchEdit->setStyleSheet(QString());
+    const QString documentPath = m_pdfPath;
+    const QString term = m_pdfSearchEdit->text();
+    m_pdfSearchEdit->setEnabled(false);
+    std::shared_ptr<bool> alive = m_alive;
+    PreviewManager::instance().requestPdfFind(
+        documentPath, term, [this, documentPath, alive](int page) {
+            if (!alive || !*alive) {
+                return;
+            }
+            if (m_pdfSearchEdit) {
+                m_pdfSearchEdit->setEnabled(true);
+            }
+            if (m_pdfPath != documentPath) {
+                return; // the document changed while searching
+            }
+            if (page >= 0) {
+                m_pdfPage = page;
+                displayPdfPage();
+                return;
+            }
+            if (m_pdfSearchEdit) {
+                m_pdfSearchEdit->setStyleSheet(QStringLiteral("QLineEdit { color: #ff7777; }"));
+                QTimer::singleShot(1000, this, [this]() {
+                    if (m_pdfSearchEdit)
+                        m_pdfSearchEdit->setStyleSheet(QString());
+                });
+            }
         });
-    }
 }
 
 void QuickLookDialog::onOpenWith() {

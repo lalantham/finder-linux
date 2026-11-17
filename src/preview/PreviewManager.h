@@ -2,10 +2,20 @@
 
 #include "FileItem.h"
 #include <QCache>
+#include <QHash>
+#include <QMutex>
 #include <QObject>
 #include <QPixmap>
 #include <QSet>
 #include <QSize>
+#include <functional>
+#include <memory>
+
+#ifdef HAVE_POPPLER
+namespace Poppler {
+class Document;
+}
+#endif
 
 class PreviewManager : public QObject {
     Q_OBJECT
@@ -26,6 +36,21 @@ public:
                           int page = 0);
     [[nodiscard]] int pdfPageCount(const QString& path) const;
     [[nodiscard]] int findPdfPage(const QString& path, const QString& text) const;
+
+    // Asynchronous page rendering for the UI. Rendering a large page costs
+    // hundreds of milliseconds, so the interactive paths must not block the
+    // event loop. The callback is invoked on the UI thread with a null pixmap
+    // when the page cannot be rendered. Requests for the same page supersede
+    // any still-queued request for that document.
+    void requestPdfPage(const QString& path, const QSize& targetSize, int page,
+                        std::function<void(const QPixmap&)> finished);
+    // Asynchronously counts pages, then reports the result on the UI thread.
+    void requestPdfPageCount(const QString& path, std::function<void(int)> finished);
+    // Asynchronously searches the document text, reporting the page index on
+    // the UI thread (-1 when not found).
+    void requestPdfFind(const QString& path, const QString& text,
+                        std::function<void(int)> finished);
+
     // Convert an Office document to a cached PDF on demand. Blocking; use
     // requestOfficePreview() from UI code to keep the event loop responsive.
     QString officePdfPath(const QString& path, QString* error = nullptr);
@@ -59,8 +84,29 @@ private:
     QImage generateThumbnailImage(const QString& path, int bucket);
     QString ensureOfficePdf(const QString& path, QString* error);
 
+#ifdef HAVE_POPPLER
+    // Loading a Poppler document parses the cross-reference table, which costs
+    // ~130 ms on a large scan. Keep the open document so turning pages reuses it
+    // instead of re-parsing the file every time. Guarded by m_pdfMutex.
+    std::shared_ptr<Poppler::Document> pdfDocument(const QString& path) const;
+#endif
+
     QCache<QString, QPixmap> m_thumbnailCache;
     QSet<QString> m_pending;
-    QSet<QString> m_failed;
+    // Thumbnail failures keyed by cache key, remembering the mtime they failed
+    // at. A regenerated or replaced file gets a new key, so it is retried
+    // instead of being blacklisted for the rest of the session.
+    QHash<QString, qint64> m_failed;
     QSet<QString> m_officePending;
+
+#ifdef HAVE_POPPLER
+    // Guards the document cache and, because a Poppler::Document is not
+    // thread-safe, also serialises rendering. Page rendering already runs on a
+    // single-threaded pool, so this costs nothing in throughput.
+    mutable QMutex m_pdfMutex;
+    mutable QString m_cachedPdfPath;
+    mutable std::shared_ptr<Poppler::Document> m_cachedPdfDocument;
+#endif
+    // Incremented per document so a stale in-flight request can be discarded.
+    quint64 m_pdfGeneration{0};
 };
