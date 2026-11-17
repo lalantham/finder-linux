@@ -1,9 +1,9 @@
 #pragma once
 
-#include <QWidget>
+#include <QProcess>
 #include <QString>
 #include <QStringList>
-#include <QProcess>
+#include <QWidget>
 
 class QTextEdit;
 class QLineEdit;
@@ -18,7 +18,9 @@ public:
     ~TerminalPanel() override;
 
     void setCurrentDirectory(const QString& path);
-    [[nodiscard]] QString currentDirectory() const noexcept { return m_currentDirectory; }
+    [[nodiscard]] QString currentDirectory() const noexcept {
+        return m_currentDirectory;
+    }
     void focusInput();
 
 signals:
@@ -39,7 +41,10 @@ private slots:
 private:
     void setupUi();
     void updatePrompt();
+    void applyThemeStyles();
     void appendAnsiText(const QByteArray& data);
+    void appendCommandEcho(const QString& prompt, const QString& command);
+    void interruptProcess();
     void handleCdCommand(const QString& argument);
     void executeExternalCommand(const QString& command);
 
@@ -51,6 +56,8 @@ private:
     QPushButton* m_externalBtn{nullptr};
     QPushButton* m_clearBtn{nullptr};
     QPushButton* m_closeBtn{nullptr};
+    QWidget* m_headerBar{nullptr};
+    QWidget* m_inputRow{nullptr};
 
     QTextEdit* m_outputView{nullptr};
     QLabel* m_promptLabel{nullptr};
@@ -59,4 +66,6 @@ private:
     QStringList m_history;
     int m_historyIndex{-1};
     QString m_savedInput;
+    QTimer* m_interruptTimer{nullptr};
+    bool m_interruptPending{false};
 };
