@@ -52,6 +52,8 @@ private slots:
     void onNavigateUp();
     void onPathChanged(const QString& path);
     void onViewModeChanged(ViewMode mode);
+    void onRememberFolderViewToggled(bool checked);
+    void onUseViewAsGlobalDefault();
     void onToggleSplitView();
     void onActivePageChanged(TabPage* page);
 
@@ -94,6 +96,8 @@ private slots:
     void onToggleHidden();
     void onOpenTerminal();
     void onViewOptions();
+    void setGlobalViewMode(ViewMode mode);
+    void refreshAllViewModes();
     void onSaveSearch();
     void onNewSmartFolder();
     void onEditSmartFolder(const QString& name);
@@ -159,9 +163,14 @@ private:
     QAction* m_showStatusBarAction{nullptr};
     QAction* m_showPreviewPaneAction{nullptr};
     QAction* m_fullScreenAction{nullptr};
+    QAction* m_rememberFolderViewAction{nullptr};
 
     QStringList m_clipboardPaths;
     bool m_isCutOperation{false};
     bool m_kwinActivationPending{false};
+    // Disk-image mounting and ISO creation block on external tools; keep them
+    // single-flight now that they no longer freeze the window.
+    bool m_diskImageTaskRunning{false};
+    bool m_emptyTrashRunning{false};
     qint64 m_operationStartTime{0};
 };

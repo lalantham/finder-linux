@@ -26,6 +26,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QClipboard>
 #include <QCryptographicHash>
 #include <QDBusConnection>
@@ -202,6 +203,13 @@ QStringList existingPathsOnly(const QStringList& paths) {
     return result;
 }
 
+// Result of a blocking disk-image or Trash task that runs on a worker thread.
+struct AsyncTaskResult {
+    bool ok{false};
+    QString error;
+    QString path; // mount point or created archive
+};
+
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -288,7 +296,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             if (viewMode >= static_cast<int>(ViewMode::Icon) &&
                 viewMode <= static_cast<int>(ViewMode::Gallery)) {
                 if (TabPage* page = m_tabManager->currentPage()) {
-                    page->setViewMode(static_cast<ViewMode>(viewMode));
+                    // Session artefact, not a user choice: applying it must not
+                    // rewrite folder overrides or the global default on launch.
+                    page->applyViewMode(static_cast<ViewMode>(viewMode));
                 }
             }
         }
@@ -321,6 +331,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }));
         });
     }
+
+    // The metadata store records every item ever browsed, so it only grows unless
+    // stale entries are removed. Prune once shortly after startup, off the UI
+    // thread, since it stats every known path.
+    QTimer::singleShot(5000, this, []() {
+        auto* watcher = new QFutureWatcher<int>();
+        QObject::connect(watcher, &QFutureWatcher<int>::finished, watcher, [watcher]() {
+            const int removed = watcher->result();
+            watcher->deleteLater();
+            if (removed > 0) {
+                // Persist the trimmed store; save() is now a cheap linear pass.
+                FileMetadataManager::instance().save();
+            }
+        });
+        watcher->setFuture(QtConcurrent::run([]() {
+            constexpr int MaxTrackedItems = 50000;
+            return FileMetadataManager::instance().pruneMissingEntries(MaxTrackedItems);
+        }));
+    });
+
+    // Folder view overrides are only written by explicit user choices, but they
+    // still accumulate over years of browsing. Cap them on the GUI thread (the
+    // sort is microseconds); deliberately no filesystem access, so removable
+    // media keeps its overrides for the next time it is plugged in.
+    QTimer::singleShot(5200, this, []() { AppSettings::instance().pruneFolderViewModes(1000); });
 }
 
 MainWindow::~MainWindow() {
@@ -737,6 +772,19 @@ void MainWindow::setupMenusAndShortcuts() {
                         &MainWindow::onGetInfo);
     fileMenu->addAction(QStringLiteral("Quick Look"), QKeySequence(Qt::Key_Space), this,
                         &MainWindow::onQuickLook);
+    fileMenu->addAction(QStringLiteral("Mount Disk Image..."), this, [this]() {
+        const QString image =
+            QFileDialog::getOpenFileName(this, QStringLiteral("Mount Disk Image"), QDir::homePath(),
+                                         DiskImageManager::fileDialogFilter());
+        if (!image.isEmpty()) {
+            mountDiskImage(image);
+        }
+    });
+    fileMenu->addAction(QStringLiteral("Create Disk Image from Current Folder..."), this, [this]() {
+        if (TabPage* page = m_tabManager->currentPage()) {
+            createDiskImageFromFolder(page->currentPath());
+        }
+    });
     fileMenu->addAction(QStringLiteral("Duplicate"), QKeySequence(Qt::CTRL | Qt::Key_D), this,
                         &MainWindow::onDuplicate);
     fileMenu->addAction(QStringLiteral("Compress"), this,
@@ -804,6 +852,27 @@ void MainWindow::setupMenusAndShortcuts() {
                         [this]() { onViewModeChanged(ViewMode::Column); });
     viewMenu->addAction(QStringLiteral("as Gallery"), QKeySequence(Qt::CTRL | Qt::Key_4), this,
                         [this]() { onViewModeChanged(ViewMode::Gallery); });
+    viewMenu->addSeparator();
+    m_rememberFolderViewAction = viewMenu->addAction(QStringLiteral("Remember This Folder's View"));
+    m_rememberFolderViewAction->setCheckable(true);
+    m_rememberFolderViewAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D));
+    m_rememberFolderViewAction->setToolTip(
+        QStringLiteral("Uncheck to forget this folder's view and use the default again."));
+    connect(m_rememberFolderViewAction, &QAction::toggled, this,
+            &MainWindow::onRememberFolderViewToggled);
+    viewMenu->addAction(QStringLiteral("Use This View as Default for All Folders"), this,
+                        &MainWindow::onUseViewAsGlobalDefault);
+    connect(viewMenu, &QMenu::aboutToShow, this, [this]() {
+        if (!m_rememberFolderViewAction) {
+            return;
+        }
+        TabPage* page = m_tabManager->currentPage();
+        const bool canRemember = page && page->canRememberViewMode();
+        m_rememberFolderViewAction->setEnabled(canRemember);
+        const QSignalBlocker blocker(m_rememberFolderViewAction);
+        m_rememberFolderViewAction->setChecked(canRemember && page->hasFolderViewModeOverride());
+    });
+    viewMenu->addSeparator();
     viewMenu->addAction(QStringLiteral("Show View Options..."), QKeySequence(Qt::CTRL | Qt::Key_J),
                         this, &MainWindow::onViewOptions);
     viewMenu->addSeparator();
@@ -1069,6 +1138,25 @@ void MainWindow::setupMenusAndShortcuts() {
             p->refresh();
         m_sidebar->refresh();
     });
+
+    auto* helpMenu = mBar->addMenu(QStringLiteral("&Help"));
+    helpMenu->addAction(QStringLiteral("About File Manager"), this, [this]() {
+        // The build stamp matters: while developing, the launcher often points at
+        // an older installed copy, which makes new features look broken.
+        const QString buildStamp =
+            qEnvironmentVariable("FINDER_BUILD_STAMP", QStringLiteral("unknown"));
+        QMessageBox::about(
+            this, QStringLiteral("About File Manager"),
+            QStringLiteral("<h3>File Manager %1</h3>"
+                           "<p>A native Linux file manager built with Qt %2.</p>"
+                           "<p><b>Build:</b> %3<br>"
+                           "<b>Executable:</b> %4</p>"
+                           "<p style='color:gray;'>If a recently added feature is missing, this "
+                           "build may be out of date. Rebuild or reinstall to update.</p>")
+                .arg(QCoreApplication::applicationVersion(), QString::fromLatin1(qVersion()),
+                     buildStamp.toHtmlEscaped(),
+                     QCoreApplication::applicationFilePath().toHtmlEscaped()));
+    });
 }
 
 void MainWindow::openPath(const QString& path) {
@@ -1222,11 +1310,69 @@ void MainWindow::onPathChanged(const QString& path) {
 }
 
 void MainWindow::onViewModeChanged(ViewMode mode) {
-    AppSettings::instance().setViewMode(mode);
-    m_toolbar->setViewMode(mode);
-    if (TabPage* page = m_tabManager->currentPage()) {
-        page->setViewMode(mode);
+    TabPage* page = m_tabManager->currentPage();
+    auto& settings = AppSettings::instance();
+
+    if (!page) {
+        setGlobalViewMode(mode);
+    } else if (!page->canRememberViewMode()) {
+        // tag://, smart://, recent://, remote: the change is tab-local.
+        page->applyViewMode(mode);
+    } else if (settings.directViewModeScope() == ViewModeScope::CurrentFolder) {
+        page->rememberViewModeForFolder(mode);
+    } else {
+        setGlobalViewMode(mode);
     }
+    m_toolbar->setViewMode(page ? page->viewMode() : mode);
+}
+
+void MainWindow::setGlobalViewMode(ViewMode mode) {
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(mode);
+    settings.save();
+    m_toolbar->setViewMode(mode);
+    refreshAllViewModes();
+}
+
+void MainWindow::refreshAllViewModes() {
+    // Re-resolve every pane. Folders with their own override keep it; folders
+    // without one follow the (possibly new) global default.
+    for (int i = 0; i < m_tabManager->count(); ++i) {
+        if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
+            if (split->primaryPage())
+                split->primaryPage()->refreshViewModeFromSettings();
+            if (split->secondaryPage())
+                split->secondaryPage()->refreshViewModeFromSettings();
+        }
+    }
+    if (TabPage* page = m_tabManager->currentPage()) {
+        m_toolbar->setViewMode(page->viewMode());
+    }
+}
+
+void MainWindow::onRememberFolderViewToggled(bool checked) {
+    TabPage* page = m_tabManager->currentPage();
+    if (!page || !page->canRememberViewMode()) {
+        return;
+    }
+    if (checked) {
+        page->rememberViewModeForFolder(page->viewMode());
+    } else {
+        page->clearFolderViewModeOverride();
+    }
+}
+
+void MainWindow::onUseViewAsGlobalDefault() {
+    TabPage* page = m_tabManager->currentPage();
+    if (!page) {
+        return;
+    }
+    // Also applies right here, otherwise a folder that already has an override
+    // would make the command look like a no-op.
+    if (page->canRememberViewMode()) {
+        AppSettings::instance().clearFolderViewMode(page->currentPath());
+    }
+    setGlobalViewMode(page->viewMode());
 }
 
 void MainWindow::onToggleSplitView() {
@@ -1941,21 +2087,41 @@ void MainWindow::onDeleteSmartFolder(const QString& name) {
 }
 
 void MainWindow::mountDiskImage(const QString& path) {
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    QString mountPath;
-    QString error;
-    const bool ok = DiskImageManager::mountImage(path, &mountPath, nullptr, &error);
-    QApplication::restoreOverrideCursor();
-
-    if (!ok) {
-        QMessageBox::warning(
-            this, QStringLiteral("Cannot Mount Disk Image"),
-            error.isEmpty() ? QStringLiteral("The disk image could not be mounted.") : error);
+    if (path.trimmed().isEmpty()) {
+        return;
+    }
+    if (m_diskImageTaskRunning) {
         return;
     }
 
-    m_sidebar->refresh();
-    openPath(mountPath);
+    // Loop setup, DMG conversion and mounting can each take tens of seconds
+    // (polkit prompts included), so keep all of it off the GUI thread.
+    m_diskImageTaskRunning = true;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    auto* watcher = new QFutureWatcher<AsyncTaskResult>(this);
+    connect(watcher, &QFutureWatcher<AsyncTaskResult>::finished, this, [this, watcher]() {
+        QApplication::restoreOverrideCursor();
+        m_diskImageTaskRunning = false;
+        const AsyncTaskResult result = watcher->result();
+        watcher->deleteLater();
+
+        if (!result.ok) {
+            QMessageBox::warning(this, QStringLiteral("Cannot Mount Disk Image"),
+                                 result.error.isEmpty()
+                                     ? QStringLiteral("The disk image could not be mounted.")
+                                     : result.error);
+            return;
+        }
+
+        m_sidebar->refresh();
+        openPath(result.path);
+    });
+
+    watcher->setFuture(QtConcurrent::run([path]() {
+        AsyncTaskResult result;
+        result.ok = DiskImageManager::mountImage(path, &result.path, nullptr, &result.error);
+        return result;
+    }));
 }
 
 void MainWindow::createDiskImageFromFolder(const QString& folder) {
@@ -1963,6 +2129,9 @@ void MainWindow::createDiskImageFromFolder(const QString& folder) {
     if (!info.isDir()) {
         QMessageBox::warning(this, QStringLiteral("Create Disk Image"),
                              QStringLiteral("Select a folder first."));
+        return;
+    }
+    if (m_diskImageTaskRunning) {
         return;
     }
 
@@ -1974,23 +2143,37 @@ void MainWindow::createDiskImageFromFolder(const QString& folder) {
     if (output.isEmpty())
         return;
 
+    // xorriso can run for minutes on a large folder; never block the window.
+    m_diskImageTaskRunning = true;
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    QString error;
-    const bool ok = DiskImageManager::createIso(folder, output, &error);
-    QApplication::restoreOverrideCursor();
+    auto* watcher = new QFutureWatcher<AsyncTaskResult>(this);
+    connect(watcher, &QFutureWatcher<AsyncTaskResult>::finished, this, [this, watcher, output]() {
+        QApplication::restoreOverrideCursor();
+        m_diskImageTaskRunning = false;
+        const AsyncTaskResult result = watcher->result();
+        watcher->deleteLater();
 
-    if (!ok) {
-        QMessageBox::warning(
-            this, QStringLiteral("Create Disk Image"),
-            error.isEmpty() ? QStringLiteral("The disk image could not be created.") : error);
-        return;
-    }
+        if (!result.ok) {
+            QMessageBox::warning(this, QStringLiteral("Create Disk Image"),
+                                 result.error.isEmpty()
+                                     ? QStringLiteral("The disk image could not be created.")
+                                     : result.error);
+            return;
+        }
 
-    if (TabPage* page = m_tabManager->currentPage())
-        page->refresh(QFileInfo(output).fileName());
-    m_sidebar->refresh();
-    QMessageBox::information(this, QStringLiteral("Disk Image Created"),
-                             QStringLiteral("Created %1").arg(output));
+        if (TabPage* page = m_tabManager->currentPage())
+            page->refresh(QFileInfo(output).fileName());
+        m_sidebar->refresh();
+        QMessageBox::information(this, QStringLiteral("Disk Image Created"),
+                                 QStringLiteral("Created %1").arg(output));
+    });
+
+    watcher->setFuture(QtConcurrent::run([folder, output]() {
+        AsyncTaskResult result;
+        result.path = output;
+        result.ok = DiskImageManager::createIso(folder, output, &result.error);
+        return result;
+    }));
 }
 
 void MainWindow::onViewOptions() {
@@ -2034,8 +2217,11 @@ void MainWindow::onPreferences() {
     layout->addWidget(dirsFirst);
 
     auto* rememberFolderViews =
-        new QCheckBox(QStringLiteral("Remember view mode for each folder"), &dialog);
-    rememberFolderViews->setChecked(settings.rememberFolderViewModes());
+        new QCheckBox(QStringLiteral("Remember view modes for individual folders"), &dialog);
+    rememberFolderViews->setChecked(settings.folderViewModesEnabled());
+    rememberFolderViews->setToolTip(
+        QStringLiteral("When off, every folder uses the default view and per-folder choices are "
+                       "ignored (they are kept, not deleted)."));
     layout->addWidget(rememberFolderViews);
 
     auto* calcFolderSizes =
@@ -2046,6 +2232,15 @@ void MainWindow::onPreferences() {
     auto* springLoaded = new QCheckBox(QStringLiteral("Enable spring-loaded folders"), &dialog);
     springLoaded->setChecked(settings.springLoadedFoldersEnabled());
     layout->addWidget(springLoaded);
+
+    auto* durableCopies = new QCheckBox(
+        QStringLiteral("Flush every copied file to disk (slower, survives power loss)"), &dialog);
+    durableCopies->setChecked(settings.durableFileCopies());
+    durableCopies->setToolTip(
+        QStringLiteral("When off, copies are written to the disk cache and renamed into place. "
+                       "A power loss can lose an unfinished copy, but existing files are never "
+                       "corrupted or half-overwritten."));
+    layout->addWidget(durableCopies);
 
     auto* form = new QFormLayout();
     auto* springDelay = new QSpinBox(&dialog);
@@ -2069,6 +2264,16 @@ void MainWindow::onPreferences() {
     trashPurgeDays->setSuffix(QStringLiteral(" days"));
     trashPurgeDays->setValue(settings.trashAutoPurgeDays());
     form->addRow(QStringLiteral("Auto-purge Trash older than:"), trashPurgeDays);
+
+    auto* viewScope = new QComboBox(&dialog);
+    viewScope->addItem(QStringLiteral("Only the current folder"));
+    viewScope->addItem(QStringLiteral("All folders (the default view)"));
+    viewScope->setCurrentIndex(settings.directViewModeScope() == ViewModeScope::AllFolders ? 1 : 0);
+    viewScope->setToolTip(
+        QStringLiteral("What the view buttons, Ctrl+1-4, and View > as ... change. "
+                       "You can always use View > Use This View as Default for All Folders, "
+                       "or View > Remember This Folder's View."));
+    form->addRow(QStringLiteral("View buttons change:"), viewScope);
     layout->addLayout(form);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -2079,44 +2284,69 @@ void MainWindow::onPreferences() {
     auto* defaultFileManagerBtn =
         new QPushButton(QStringLiteral("Set File Manager as the default file manager"), &dialog);
     layout->addWidget(defaultFileManagerBtn);
-    connect(defaultFileManagerBtn, &QPushButton::clicked, this, [this]() {
-        bool registered = false;
+    connect(defaultFileManagerBtn, &QPushButton::clicked, this, [this, defaultFileManagerBtn]() {
+        // xdg-mime and gio each block for up to 2 s; run them off the GUI
+        // thread so the Preferences dialog stays responsive.
+        defaultFileManagerBtn->setEnabled(false);
+        QApplication::setOverrideCursor(Qt::WaitCursor);
 
-        QProcess xdg;
-        xdg.start(QStringLiteral("xdg-mime"),
-                  {QStringLiteral("default"), QStringLiteral("org.finderlinux.Finder.desktop"),
-                   QStringLiteral("inode/directory")});
-        if (xdg.waitForFinished(2000) && xdg.exitCode() == 0) {
-            registered = true;
-        }
+        auto* watcher = new QFutureWatcher<AsyncTaskResult>(this);
+        connect(watcher, &QFutureWatcher<AsyncTaskResult>::finished, this,
+                [this, watcher, defaultFileManagerBtn]() {
+                    QApplication::restoreOverrideCursor();
+                    defaultFileManagerBtn->setEnabled(true);
+                    const AsyncTaskResult result = watcher->result();
+                    watcher->deleteLater();
 
-        QProcess gio;
-        gio.start(QStringLiteral("gio"), {QStringLiteral("mime"), QStringLiteral("inode/directory"),
-                                          QStringLiteral("org.finderlinux.Finder.desktop")});
-        if (gio.waitForFinished(2000) && gio.exitCode() == 0) {
-            registered = true;
-        }
+                    QMessageBox::information(
+                        this, QStringLiteral("Default File Manager"),
+                        result.ok
+                            ? QStringLiteral(
+                                  "File Manager is now registered as the default file manager for "
+                                  "folders.\n\n"
+                                  "If another file manager was handling \"Show in folder\", "
+                                  "restarting the session (or that file manager) once will hand it "
+                                  "over to File Manager.")
+                            : QStringLiteral(
+                                  "Could not register File Manager as the default file manager."));
+                });
 
-        // Also install the FileManager1 and Application activation files so
-        // browsers and launchers can start File Manager when it is not running yet.
-        if (FileManager1Service::installActivationFile()) {
-            registered = true;
-        }
-        if (ApplicationService::installActivationFile()) {
-            registered = true;
-        }
+        watcher->setFuture(QtConcurrent::run([]() {
+            AsyncTaskResult result;
+            bool registered = false;
 
-        QProcess::startDetached(QStringLiteral("kbuildsycoca6"),
-                                {QStringLiteral("--noincremental")});
+            QProcess xdg;
+            xdg.start(QStringLiteral("xdg-mime"),
+                      {QStringLiteral("default"), QStringLiteral("org.finderlinux.Finder.desktop"),
+                       QStringLiteral("inode/directory")});
+            if (xdg.waitForFinished(2000) && xdg.exitCode() == 0) {
+                registered = true;
+            }
 
-        QMessageBox::information(
-            this, QStringLiteral("Default File Manager"),
-            registered
-                ? QStringLiteral(
-                      "File Manager is now registered as the default file manager for folders.\n\n"
-                      "If another file manager was handling \"Show in folder\", restarting "
-                      "the session (or that file manager) once will hand it over to File Manager.")
-                : QStringLiteral("Could not register File Manager as the default file manager."));
+            QProcess gio;
+            gio.start(QStringLiteral("gio"),
+                      {QStringLiteral("mime"), QStringLiteral("inode/directory"),
+                       QStringLiteral("org.finderlinux.Finder.desktop")});
+            if (gio.waitForFinished(2000) && gio.exitCode() == 0) {
+                registered = true;
+            }
+
+            // Also install the FileManager1 and Application activation files so
+            // browsers and launchers can start File Manager when it is not running yet.
+            if (FileManager1Service::installActivationFile()) {
+                registered = true;
+            }
+            if (ApplicationService::installActivationFile()) {
+                registered = true;
+            }
+
+            // Refresh Plasma's service cache so the new default takes effect.
+            QProcess::startDetached(QStringLiteral("kbuildsycoca6"),
+                                    {QStringLiteral("--noincremental")});
+
+            result.ok = registered;
+            return result;
+        }));
     });
 
     if (dialog.exec() != QDialog::Accepted) {
@@ -2128,13 +2358,20 @@ void MainWindow::onPreferences() {
     settings.setSpringLoadDelayMs(springDelay->value());
     settings.setDirectoriesFirst(dirsFirst->isChecked());
     settings.setRememberFolderViewModes(rememberFolderViews->isChecked());
+    settings.setDirectViewModeScope(viewScope->currentIndex() == 1 ? ViewModeScope::AllFolders
+                                                                   : ViewModeScope::CurrentFolder);
     settings.setCalculateFolderSizes(calcFolderSizes->isChecked());
     settings.setTrashAutoPurgeDays(trashPurgeDays->value());
+    settings.setDurableFileCopies(durableCopies->isChecked());
     settings.save();
 
     m_tabManager->setCalculateFolderSizes(calcFolderSizes->isChecked());
 
     applyIconSizeToAll(iconSize->value());
+
+    // Toggling the feature or changing the scope can change which mode folders
+    // should show, so re-resolve every pane now.
+    refreshAllViewModes();
 
     for (int i = 0; i < m_tabManager->count(); ++i) {
         if (auto* split = qobject_cast<SplitTabWidget*>(m_tabManager->widget(i))) {
@@ -2413,21 +2650,43 @@ void MainWindow::onDeletePermanently() {
 }
 
 void MainWindow::onEmptyTrash() {
+    if (m_emptyTrashRunning) {
+        return;
+    }
+
     auto btn = QMessageBox::warning(
         this, QStringLiteral("Empty Trash"),
         QStringLiteral("Are you sure you want to permanently erase the items in the Trash?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
 
-    if (btn == QMessageBox::Yes) {
-        QString error;
-        if (!XdgTrash::emptyTrash(&error)) {
-            QMessageBox::warning(this, QStringLiteral("Empty Trash Error"), error);
+    if (btn != QMessageBox::Yes) {
+        return;
+    }
+
+    // Deleting a large Trash tree can take a while; keep the UI responsive.
+    m_emptyTrashRunning = true;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    auto* watcher = new QFutureWatcher<AsyncTaskResult>(this);
+    connect(watcher, &QFutureWatcher<AsyncTaskResult>::finished, this, [this, watcher]() {
+        QApplication::restoreOverrideCursor();
+        m_emptyTrashRunning = false;
+        const AsyncTaskResult result = watcher->result();
+        watcher->deleteLater();
+
+        if (!result.ok && !result.error.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("Empty Trash Error"), result.error);
         }
         if (TabPage* page = m_tabManager->currentPage()) {
             page->refresh();
         }
         m_sidebar->refresh();
-    }
+    });
+
+    watcher->setFuture(QtConcurrent::run([]() {
+        AsyncTaskResult result;
+        result.ok = XdgTrash::emptyTrash(&result.error);
+        return result;
+    }));
 }
 
 void MainWindow::onPutBack() {
@@ -2911,6 +3170,9 @@ void MainWindow::onContextMenuRequested(const QPoint& globalPos, const QStringLi
                             });
                     }
                 }
+
+                menu.addAction(QStringLiteral("Create Disk Image..."), this,
+                               [this, primaryPath]() { createDiskImageFromFolder(primaryPath); });
 
                 bool isMount = VolumeManager::isMountPoint(primaryPath);
                 if (isMount && primaryPath != QStringLiteral("/")) {

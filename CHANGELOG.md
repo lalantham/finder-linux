@@ -4,6 +4,18 @@ All notable changes to File Manager for Linux are documented here.
 
 ## [Unreleased]
 
+### Per-folder view modes
+- Added a **global default view mode** with **per-folder overrides**. A folder without an override
+  now falls back to the default instead of inheriting the mode of the folder you just left.
+- Overrides apply to the exact folder only; subfolders use the default unless set explicitly.
+- Added **View → Remember This Folder's View** (`Ctrl+Shift+D`): uncheck it to forget the folder's
+  view and return to the default.
+- Added **View → Use This View as Default for All Folders**.
+- Added a **Preferences → “View buttons change:”** option choosing whether `Ctrl+1-4`, the view
+  pills and View → as … apply to *only the current folder* (default) or *all folders*.
+- Per-folder view modes are now enabled by default; existing overrides are preserved and migrated.
+- Overrides are capped (least-recently-used first) so settings cannot grow without bound.
+
 ### Search and Smart Folders
 - Added real metadata, tag, comment, size, date, extension, and content search.
 - Added structured search tokens such as `kind:`, `tag:`, `size:`, `modified:`, `ext:`,

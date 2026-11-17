@@ -12,16 +12,26 @@
 #include <QDataStream>
 #include <QDir>
 #include <QFileInfo>
+#include <QIcon>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QSessionManager>
 #include <QSet>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QUrl>
 #include <memory>
 #include <unistd.h>
 
 #ifndef FINDER_VERSION
 #define FINDER_VERSION "1.0.1"
+#endif
+
+// Stamped at compile time so a stale binary is immediately identifiable: when
+// running an old install it is otherwise impossible to tell why a new feature
+// is missing.
+#ifndef FINDER_BUILD_STAMP
+#define FINDER_BUILD_STAMP __DATE__ " " __TIME__
 #endif
 
 static QString resolveInputPath(const QString& input) {
@@ -32,6 +42,58 @@ static QString resolveInputPath(const QString& input) {
         return url.toLocalFile();
     }
     return input;
+}
+
+static bool iconThemeAvailable(const QString& theme) {
+    if (theme.trimmed().isEmpty())
+        return false;
+    QStringList roots = QStandardPaths::standardLocations(QStandardPaths::GenericDataLocation);
+    roots.append(QStringLiteral("/usr/share"));
+    roots.append(QStringLiteral("/usr/local/share"));
+    roots.removeDuplicates();
+    for (const QString& root : roots) {
+        if (QFileInfo(root + QStringLiteral("/icons/") + theme + QStringLiteral("/index.theme"))
+                .isFile()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static QString configuredHostIconTheme() {
+    const QString home = QDir::homePath();
+
+    // KDE stores the selected icon theme in kdeglobals. This is the common
+    // case for Plasma, where the AppImage cannot load the host's Qt platform
+    // theme plugin.
+    QSettings kde(home + QStringLiteral("/.config/kdeglobals"), QSettings::IniFormat);
+    QString theme = kde.value(QStringLiteral("Icons/Theme")).toString();
+    if (iconThemeAvailable(theme))
+        return theme;
+
+    // GTK/Xfce/Cinnamon fallback.
+    QSettings gtk(home + QStringLiteral("/.config/gtk-3.0/settings.ini"), QSettings::IniFormat);
+    theme = gtk.value(QStringLiteral("Settings/gtk-icon-theme-name")).toString();
+    if (iconThemeAvailable(theme))
+        return theme;
+
+    // Sensible Plasma defaults if no explicit setting is readable.
+    for (const QString& candidate : {QStringLiteral("breeze-dark"), QStringLiteral("breeze"),
+                                     QStringLiteral("Adwaita"), QStringLiteral("Papirus")}) {
+        if (iconThemeAvailable(candidate))
+            return candidate;
+    }
+    return {};
+}
+
+static void applyAppImageIconTheme() {
+    if (!qEnvironmentVariableIsSet("APPIMAGE"))
+        return;
+    const QString theme = configuredHostIconTheme();
+    if (!theme.isEmpty()) {
+        QIcon::setThemeName(theme);
+        QIcon::setFallbackThemeName(QStringLiteral("breeze"));
+    }
 }
 
 static bool isRemoteUri(const QString& input) {
@@ -176,7 +238,11 @@ int main(int argc, char* argv[]) {
     app.setOrganizationName(QStringLiteral("FinderLinux"));
     app.setOrganizationDomain(QStringLiteral("finder.linux"));
     app.setApplicationVersion(QStringLiteral(FINDER_VERSION));
+
+    // Expose the build stamp so the UI can show exactly which build is running.
+    qputenv("FINDER_BUILD_STAMP", QByteArrayLiteral(FINDER_BUILD_STAMP));
     app.setDesktopFileName(QStringLiteral("org.finderlinux.Finder"));
+    applyAppImageIconTheme();
     app.setWindowIcon(QIcon::fromTheme(QStringLiteral("finder-linux"),
                                        QIcon(QStringLiteral(":/icons/finder-linux.svg"))));
 
