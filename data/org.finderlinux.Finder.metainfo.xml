@@ -45,6 +45,16 @@
   </keywords>
   <icon type="stock">finder-linux</icon>
   <releases>
+    <release version="1.1.4" date="2026-11-17">
+      <description>
+        <p>Icon theme fix: custom themes are now used instead of the guessed default.</p>
+        <ul>
+          <li>The AppImage now uses the icon theme configured for your desktop. When Qt
+              could not load the platform theme it guessed "breeze" and that guess was
+              trusted, so Breeze icons were shown even when a custom theme was configured.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.3" date="2026-11-17">
       <description>
         <p>Distribution support for Fedora and better packaging.</p>

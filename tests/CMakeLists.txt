@@ -24,6 +24,7 @@ add_finder_test(test_servicemenus test_servicemenus.cpp)
 add_finder_test(test_recentfiles test_recentfiles.cpp)
 add_finder_test(test_columns test_columns.cpp)
 add_finder_test(test_viewmodes test_viewmodes.cpp)
+add_finder_test(test_icontheme test_icontheme.cpp)
 
 add_executable(test_selection test_selection.cpp)
 target_link_libraries(test_selection PRIVATE

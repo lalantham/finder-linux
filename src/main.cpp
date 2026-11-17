@@ -2,6 +2,7 @@
 #include "ApplicationService.h"
 #include "FileManager1Service.h"
 #include "FileSystemModel.h"
+#include "IconTheme.h"
 #include "MainWindow.h"
 #include "ThemeManager.h"
 #include <QApplication>
@@ -24,7 +25,7 @@
 #include <unistd.h>
 
 #ifndef FINDER_VERSION
-#define FINDER_VERSION "1.1.3"
+#define FINDER_VERSION "1.1.4"
 #endif
 
 // Stamped at compile time so a stale binary is immediately identifiable: when
@@ -44,103 +45,33 @@ static QString resolveInputPath(const QString& input) {
     return input;
 }
 
-static bool iconThemeAvailable(const QString& theme) {
-    if (theme.trimmed().isEmpty())
-        return false;
-    for (const QString& root : QIcon::themeSearchPaths()) {
-        if (root.startsWith(QLatin1Char(':'))) {
-            continue; // Qt's built-in resources cannot hold a host theme
-        }
-        if (QFileInfo(root + QLatin1Char('/') + theme + QStringLiteral("/index.theme")).isFile()) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// Qt only seeds themeSearchPaths() from the platform theme. When that theme
-// cannot load - an AppImage on a host whose platform-theme plugin is not
-// bundled, or a bare offscreen/session-less run - the list collapses to
-// ":/icons" and every QIcon::fromTheme() lookup falls back to the generic
-// built-in pixmaps. That is why the AppImage looked like a different icon set
-// from the same binary installed system-wide. Add the standard host icon
-// directories explicitly so both builds use the user's theme.
-static void ensureHostIconThemePaths() {
-    QStringList paths = QIcon::themeSearchPaths();
-    const QString home = QDir::homePath();
-    const QStringList hostRoots = {
-        home + QStringLiteral("/.local/share/icons"),
-        home + QStringLiteral("/.icons"),
-        QStringLiteral("/usr/local/share/icons"),
-        QStringLiteral("/usr/share/icons"),
-        home + QStringLiteral("/.local/share/flatpak/exports/share/icons"),
-        QStringLiteral("/var/lib/flatpak/exports/share/icons"),
-        QStringLiteral("/var/lib/snapd/desktop/icons"),
-    };
-    bool changed = false;
-    for (const QString& root : hostRoots) {
-        if (QFileInfo(root).isDir() && !paths.contains(root)) {
-            paths.append(root);
-            changed = true;
-        }
-    }
-    if (changed) {
-        QIcon::setThemeSearchPaths(paths);
-    }
-}
-
-static QString configuredHostIconTheme() {
-    const QString home = QDir::homePath();
-
-    // KDE stores the selected icon theme in kdeglobals. This is the common
-    // case for Plasma, where the AppImage cannot load the host's Qt platform
-    // theme plugin.
-    QSettings kde(home + QStringLiteral("/.config/kdeglobals"), QSettings::IniFormat);
-    QString theme = kde.value(QStringLiteral("Icons/Theme")).toString();
-    if (iconThemeAvailable(theme))
-        return theme;
-
-    // GTK/Xfce/Cinnamon fallback.
-    QSettings gtk(home + QStringLiteral("/.config/gtk-3.0/settings.ini"), QSettings::IniFormat);
-    theme = gtk.value(QStringLiteral("Settings/gtk-icon-theme-name")).toString();
-    if (iconThemeAvailable(theme))
-        return theme;
-
-    // Xfce/GNOME also record it through xsettings.
-    QSettings gtk4(home + QStringLiteral("/.config/gtk-4.0/settings.ini"), QSettings::IniFormat);
-    theme = gtk4.value(QStringLiteral("Settings/gtk-icon-theme-name")).toString();
-    if (iconThemeAvailable(theme))
-        return theme;
-
-    // Sensible Plasma defaults if no explicit setting is readable.
-    for (const QString& candidate : {QStringLiteral("breeze-dark"), QStringLiteral("breeze"),
-                                     QStringLiteral("Adwaita"), QStringLiteral("Papirus")}) {
-        if (iconThemeAvailable(candidate)) {
-            return candidate;
-        }
-    }
-    return {};
-}
-
 static void applyHostIconTheme() {
     // Must run before any widget is created, otherwise icons already rendered
     // keep their fallback pixmaps.
-    const QString existing = QIcon::themeName();
-    ensureHostIconThemePaths();
-
-    if (!existing.isEmpty() && iconThemeAvailable(existing)) {
-        // The platform theme already picked a usable host theme; keep it.
-        if (QIcon::fallbackThemeName().isEmpty()) {
-            QIcon::setFallbackThemeName(QStringLiteral("breeze"));
+    //
+    // Qt only learns the icon theme from the platform theme plugin. When that
+    // plugin is missing - which is the normal AppImage case - Qt guesses, and its
+    // generic unix theme hard-codes "breeze" on a KDE host. That guess used to be
+    // trusted whenever it happened to resolve, so the AppImage showed Breeze
+    // icons while the same binary installed natively showed the user's theme.
+    // IconTheme::resolveTheme gives an explicitly configured theme priority.
+    QStringList searchPaths = QIcon::themeSearchPaths();
+    for (const QString& path : IconTheme::hostThemeSearchPaths()) {
+        if (!searchPaths.contains(path) && QFileInfo(path).isDir()) {
+            searchPaths.append(path);
         }
+    }
+    if (searchPaths != QIcon::themeSearchPaths()) {
+        QIcon::setThemeSearchPaths(searchPaths);
+    }
+
+    const QString theme =
+        IconTheme::resolveTheme(IconTheme::configuredTheme(), QIcon::themeName(), searchPaths);
+    if (theme.isEmpty()) {
         return;
     }
-
-    const QString theme = configuredHostIconTheme();
-    if (!theme.isEmpty()) {
-        QIcon::setThemeName(theme);
-        QIcon::setFallbackThemeName(QStringLiteral("breeze"));
-    }
+    QIcon::setThemeName(theme);
+    QIcon::setFallbackThemeName(QStringLiteral("breeze"));
 }
 
 static bool isRemoteUri(const QString& input) {

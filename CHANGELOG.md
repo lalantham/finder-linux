@@ -4,6 +4,20 @@ All notable changes to File Manager for Linux are documented here.
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-11-17
+
+### Icon theme fix (custom themes)
+- **Your configured icon theme is now used instead of a guessed default.** Qt only learns the
+  icon theme from the platform-theme plugin; inside an AppImage that plugin is missing, so Qt
+  falls back to a hard-coded guess of `breeze` on KDE hosts. That guess was trusted whenever the
+  theme happened to be installed, so the AppImage showed Breeze icons even though `kdeglobals`
+  specified a custom theme such as Tela. An explicitly configured theme now always takes
+  precedence; Qt's guess is only used when nothing is configured.
+- The lookup reads KDE (`kdeglobals`, home and `/etc/xdg`), GTK 4, GTK 3 and LXQt, preferring the
+  newer GTK 4 value, and ignores a configured theme that is not actually installed.
+- The precedence logic moved into `IconTheme` so it is unit-tested; a regression test pins
+  "configured theme beats Qt's guess".
+
 ## [1.1.3] - 2026-11-17
 
 ### Fedora and distribution packaging
