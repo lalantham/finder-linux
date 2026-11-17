@@ -36,12 +36,14 @@ protected:
 private slots:
     void onItemActivated(const QModelIndex& index);
     void onSpringTimeout();
+    void onModelSortChanged(int column, Qt::SortOrder order);
 
 private:
     void resetSpringTimer();
     void showHeaderMenu(const QPoint& pos);
     void saveColumnSettings();
     void setColumnVisible(int column, bool visible);
+    void syncSortIndicator(int column, Qt::SortOrder order);
     [[nodiscard]] int defaultColumnWidth(int column) const;
 
     FileSystemModel* m_fsModel{nullptr};
@@ -50,4 +52,5 @@ private:
     QTimer* m_layoutSaveTimer{nullptr};
     QString m_springHoverPath;
     bool m_applyingColumns{false};
+    bool m_syncingSort{false};
 };

@@ -61,9 +61,51 @@ ListView::ListView(QWidget* parent) : QTreeView(parent) {
 }
 
 void ListView::setFileSystemModel(FileSystemModel* model) {
-    m_fsModel = model;
+    if (m_fsModel != model) {
+        if (m_fsModel) {
+            disconnect(m_fsModel, &FileSystemModel::sortChanged, this,
+                       &ListView::onModelSortChanged);
+        }
+        m_fsModel = model;
+        if (model) {
+            connect(model, &FileSystemModel::sortChanged, this, &ListView::onModelSortChanged);
+        }
+    }
+
+    // QTreeView::setModel() sorts through the header's sort indicator, which
+    // still defaults to column 0 ascending. Seed it from the model first,
+    // otherwise attaching the model silently discards the sort order the
+    // caller restored from settings (and then persists the wrong one).
+    if (model) {
+        syncSortIndicator(model->sortColumn(), model->sortOrder());
+    }
     setModel(model);
     applyColumnConfiguration();
+}
+
+void ListView::syncSortIndicator(int column, Qt::SortOrder order) {
+    if (column < 0 || column >= FileSystemModel::ColumnCount) {
+        return;
+    }
+    if (header()->sortIndicatorSection() == column && header()->sortIndicatorOrder() == order &&
+        header()->isSortIndicatorShown()) {
+        return;
+    }
+
+    // Updating the indicator drives QTreeView's own sortByColumn(); the model
+    // already holds this order, so suppress the feedback loop.
+    m_syncingSort = true;
+    const QSignalBlocker blocker(header());
+    header()->setSortIndicatorShown(true);
+    header()->setSortIndicator(column, order);
+    m_syncingSort = false;
+}
+
+void ListView::onModelSortChanged(int column, Qt::SortOrder order) {
+    if (m_syncingSort) {
+        return;
+    }
+    syncSortIndicator(column, order);
 }
 
 void ListView::setTextSize(int size) {
@@ -305,12 +347,10 @@ void ListView::dragMoveEvent(QDragMoveEvent* event) {
 
             bool safe = true;
             for (const auto& url : event->mimeData()->urls()) {
-                if (url.isLocalFile()) {
-                    QString src = url.toLocalFile();
-                    if (targetPath == src || targetPath.startsWith(src + QLatin1Char('/'))) {
-                        safe = false;
-                        break;
-                    }
+                if (url.isLocalFile() &&
+                    FileSystemModel::isSameOrInsidePath(targetPath, url.toLocalFile())) {
+                    safe = false;
+                    break;
                 }
             }
 

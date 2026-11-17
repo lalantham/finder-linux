@@ -251,6 +251,28 @@ void FileSystemModel::onDirectoryChanged(const QString& path) {
     }
 }
 
+bool FileSystemModel::isSameOrInsidePath(const QString& candidate, const QString& ancestor) {
+    // Compare cleaned, slash-normalised paths so that a prefix match only
+    // succeeds on a real directory boundary: /data/report-2026 is NOT inside
+    // /data/report even though it starts with that string.
+    QString parent = QDir::cleanPath(ancestor);
+    if (parent.isEmpty()) {
+        return false;
+    }
+    if (parent != QStringLiteral("/") && parent.endsWith(QLatin1Char('/'))) {
+        parent.chop(1);
+    }
+
+    const QString child = QDir::cleanPath(candidate);
+    if (child == parent) {
+        return true;
+    }
+    if (parent == QStringLiteral("/")) {
+        return child.startsWith(QLatin1Char('/'));
+    }
+    return child.startsWith(parent + QLatin1Char('/'));
+}
+
 bool FileSystemModel::isLocalFileSystem(const QString& path) {
     if (path.startsWith(QStringLiteral("tag://"))) {
         return false;
@@ -1212,9 +1234,9 @@ bool FileSystemModel::dropMimeData(const QMimeData* data, Qt::DropAction action,
     QStringList sources;
     for (const auto& url : data->urls()) {
         if (url.isLocalFile()) {
-            QString localPath = url.toLocalFile();
-            // Do not drop a directory into itself or its children
-            if (targetDir.startsWith(localPath)) {
+            const QString localPath = url.toLocalFile();
+            // Refuse to drop a folder into itself or one of its descendants.
+            if (isSameOrInsidePath(targetDir, localPath)) {
                 continue;
             }
             sources.append(localPath);

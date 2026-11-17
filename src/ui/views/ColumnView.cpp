@@ -455,12 +455,10 @@ void ColumnBrowserList::dragMoveEvent(QDragMoveEvent* event) {
 
         bool safe = true;
         for (const auto& url : event->mimeData()->urls()) {
-            if (url.isLocalFile()) {
-                QString src = url.toLocalFile();
-                if (targetPath == src || targetPath.startsWith(src + QLatin1Char('/'))) {
-                    safe = false;
-                    break;
-                }
+            if (url.isLocalFile() &&
+                FileSystemModel::isSameOrInsidePath(targetPath, url.toLocalFile())) {
+                safe = false;
+                break;
             }
         }
 

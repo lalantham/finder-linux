@@ -13,23 +13,33 @@
 #include "TabPage.h"
 #include "TagManager.h"
 #include "TearOffTabBar.h"
+#include "TerminalPanel.h"
 #include "Toolbar.h"
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QHeaderView>
+#include <QImage>
 #include <QLineEdit>
+#include <QPixmapCache>
 #include <QProcess>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTextBlock>
+#include <QTextDocument>
+#include <QTextEdit>
+#include <QTextFragment>
 
 class TestSelection : public QObject {
     Q_OBJECT
 
 private slots:
     void initTestCase();
+    void init();
+
     void cleanup();
     void testIconViewSelection();
     void testListViewSelection();
@@ -47,6 +57,7 @@ private slots:
     void testTabTearOffSignal();
     void testColumnWidthPersistence();
     void testListViewColumnSettings();
+    void testListViewSortPersistence();
     void testIconViewViewOptions();
     void testManualIconPositions();
     void testTabPageSmartFolder();
@@ -57,15 +68,34 @@ private slots:
     void testRecentFolderHistory();
     void testOfficePreviewDetection();
     void testOfficePreviewConversion();
+    void testPdfAsyncRendering();
+    void testPdfAsyncPageCount();
+    void testPdfAsyncFind();
+    void testThumbnailRetryAfterFileChanges();
+    void testIconSizeDoesNotClearGlobalPixmapCache();
+    void testTerminalScrollbackIsCapped();
+    void testTerminalAnsiRendering();
+    void testTerminalCtrlCInterruptsProcessGroup();
+    void testFolderViewModeFallsBackToGlobal();
+    void testFolderViewModeNeverLeaksBetweenFolders();
+    void testFolderOverrideDoesNotInheritToSubfolder();
+    void testChangingViewInFolderRecordsOverride();
+    void testChangingViewWithGlobalScope();
+    void testVirtualViewSwitchDoesNotPersist();
+    void testClearOverrideFallsBackImmediately();
+    void testSplitPanesKeepIndependentModes();
+    void testSessionRestoreDoesNotPersist();
     void testAppChooserDialog();
 
 private:
     QTemporaryDir m_tempDir;
+    QTemporaryDir m_settingsDir;
     QStringList m_createdFiles;
 };
 
 void TestSelection::initTestCase() {
     QVERIFY(m_tempDir.isValid());
+    QVERIFY(m_settingsDir.isValid());
     QDir dir(m_tempDir.path());
     for (int i = 1; i <= 5; ++i) {
         QString fileName = QString("file%1.txt").arg(i);
@@ -79,6 +109,14 @@ void TestSelection::initTestCase() {
 
 void TestSelection::cleanup() {
     AppSettings::setSettingsFilePath(QString());
+}
+
+// Every test gets its own settings file: per-folder view modes default to on,
+// so a test that changes the view would otherwise write to the real config.
+void TestSelection::init() {
+    static int counter = 0;
+    AppSettings::setSettingsFilePath(
+        m_settingsDir.filePath(QStringLiteral("selection-%1.ini").arg(++counter)));
 }
 
 void TestSelection::testColumnWidthPersistence() {
@@ -640,6 +678,63 @@ void TestSelection::testListViewColumnSettings() {
     QVERIFY(listView.isColumnHidden(FileSystemModel::ColSize));
 }
 
+void TestSelection::testListViewSortPersistence() {
+    QTemporaryDir settingsDirectory;
+    QVERIFY(settingsDirectory.isValid());
+    AppSettings::setSettingsFilePath(settingsDirectory.path() + QStringLiteral("/settings.ini"));
+
+    // A restored non-default sort order must survive attaching the list view.
+    auto* model = new FileSystemModel(this);
+    model->setRootPath(m_tempDir.path());
+    model->sort(FileSystemModel::ColDateModified, Qt::DescendingOrder);
+
+    ListView listView;
+    listView.setFileSystemModel(model);
+
+    QCOMPARE(model->sortColumn(), static_cast<int>(FileSystemModel::ColDateModified));
+    QCOMPARE(model->sortOrder(), Qt::DescendingOrder);
+    QCOMPARE(listView.header()->sortIndicatorSection(),
+             static_cast<int>(FileSystemModel::ColDateModified));
+    QCOMPARE(listView.header()->sortIndicatorOrder(), Qt::DescendingOrder);
+    QVERIFY(listView.header()->isSortIndicatorShown());
+
+    // Sorting through the View menu / shortcuts updates the header arrow too.
+    model->sort(FileSystemModel::ColSize, Qt::AscendingOrder);
+    QCOMPARE(listView.header()->sortIndicatorSection(), static_cast<int>(FileSystemModel::ColSize));
+    QCOMPARE(listView.header()->sortIndicatorOrder(), Qt::AscendingOrder);
+
+    // Clicking a header keeps model and view in sync.
+    listView.header()->setSortIndicator(FileSystemModel::ColName, Qt::DescendingOrder);
+    QCOMPARE(model->sortColumn(), static_cast<int>(FileSystemModel::ColName));
+    QCOMPARE(model->sortOrder(), Qt::DescendingOrder);
+
+    // Re-attaching the same model must not reset the order either.
+    listView.setFileSystemModel(model);
+    QCOMPARE(model->sortColumn(), static_cast<int>(FileSystemModel::ColName));
+    QCOMPARE(model->sortOrder(), Qt::DescendingOrder);
+    QCOMPARE(listView.header()->sortIndicatorSection(), static_cast<int>(FileSystemModel::ColName));
+
+    // End-to-end: a TabPage restored from settings keeps the saved sort order
+    // instead of silently falling back to Name/Ascending.
+    AppSettings::instance().setSortColumn(FileSystemModel::ColSize);
+    AppSettings::instance().setSortOrder(Qt::DescendingOrder);
+    TabPage page(m_tempDir.path());
+    page.setViewMode(ViewMode::List);
+
+    auto* pageModel = page.model();
+    QVERIFY(pageModel);
+    QCOMPARE(pageModel->sortColumn(), static_cast<int>(FileSystemModel::ColSize));
+    QCOMPARE(pageModel->sortOrder(), Qt::DescendingOrder);
+    QCOMPARE(AppSettings::instance().sortColumn(), static_cast<int>(FileSystemModel::ColSize));
+    QCOMPARE(AppSettings::instance().sortOrder(), Qt::DescendingOrder);
+
+    auto* pageList = page.findChild<ListView*>();
+    QVERIFY(pageList);
+    QCOMPARE(pageList->header()->sortIndicatorSection(),
+             static_cast<int>(FileSystemModel::ColSize));
+    QCOMPARE(pageList->header()->sortIndicatorOrder(), Qt::DescendingOrder);
+}
+
 void TestSelection::testIconViewViewOptions() {
     QTemporaryDir settingsDirectory;
     QVERIFY(settingsDirectory.isValid());
@@ -913,6 +1008,491 @@ void TestSelection::testOfficePreviewConversion() {
     QVERIFY(readySpy.wait(20000));
     QCOMPARE(readySpy.at(0).at(0).toString(), docx);
     QVERIFY(QFile::exists(readySpy.at(0).at(1).toString()));
+}
+
+void TestSelection::testPdfAsyncRendering() {
+    auto& previews = PreviewManager::instance();
+
+    // A missing document must still report back, asynchronously, with a null
+    // pixmap instead of crashing or hanging the caller.
+    bool returnedBeforeCallback = false;
+    bool callbackRan = false;
+    QPixmap received;
+    bool callFinished = false;
+
+    previews.requestPdfPage(QStringLiteral("/nonexistent/missing.pdf"), QSize(200, 150), 0,
+                            [&](const QPixmap& pixmap) {
+                                returnedBeforeCallback = callFinished;
+                                callbackRan = true;
+                                received = pixmap;
+                            });
+    callFinished = true;
+
+    // Rendering must not happen inline on the caller's thread.
+    QVERIFY2(!callbackRan, "requestPdfPage must not invoke its callback synchronously");
+    QTRY_VERIFY_WITH_TIMEOUT(callbackRan, 10000);
+    QVERIFY2(returnedBeforeCallback, "callback should run after the request returns");
+    QVERIFY(received.isNull());
+
+    // A newer request for the same document supersedes a queued one, so a slow
+    // render cannot paint a page the user already navigated away from.
+    QString order;
+    previews.requestPdfPage(QStringLiteral("/nonexistent/missing.pdf"), QSize(200, 150), 0,
+                            [&order](const QPixmap&) { order += QLatin1Char('A'); });
+    previews.requestPdfPage(QStringLiteral("/nonexistent/missing.pdf"), QSize(200, 150), 0,
+                            [&order](const QPixmap&) { order += QLatin1Char('B'); });
+    QTRY_VERIFY_WITH_TIMEOUT(order.endsWith(QLatin1Char('B')), 10000);
+    QVERIFY2(!order.contains(QLatin1Char('A')), "superseded render must be discarded");
+}
+
+void TestSelection::testPdfAsyncPageCount() {
+    auto& previews = PreviewManager::instance();
+
+    bool callbackRan = false;
+    int pages = -99;
+    previews.requestPdfPageCount(QStringLiteral("/nonexistent/missing.pdf"), [&](int count) {
+        pages = count;
+        callbackRan = true;
+    });
+    QVERIFY2(!callbackRan, "requestPdfPageCount must not run inline");
+    QTRY_VERIFY_WITH_TIMEOUT(callbackRan, 10000);
+    QCOMPARE(pages, 0);
+
+    // An empty path is answered immediately without touching the disk.
+    bool emptyAnswered = false;
+    previews.requestPdfPageCount(QString(), [&](int count) { emptyAnswered = (count == 0); });
+    QVERIFY(emptyAnswered);
+}
+
+void TestSelection::testPdfAsyncFind() {
+    auto& previews = PreviewManager::instance();
+
+    bool callbackRan = false;
+    int found = 0;
+    previews.requestPdfFind(QStringLiteral("/nonexistent/missing.pdf"), QStringLiteral("needle"),
+                            [&](int page) {
+                                found = page;
+                                callbackRan = true;
+                            });
+    QVERIFY2(!callbackRan, "requestPdfFind must not run inline");
+    QTRY_VERIFY_WITH_TIMEOUT(callbackRan, 10000);
+    QCOMPARE(found, -1);
+
+    // An empty search term is rejected without scanning anything.
+    bool emptyAnswered = false;
+    previews.requestPdfFind(QStringLiteral("/nonexistent/missing.pdf"), QString(),
+                            [&](int page) { emptyAnswered = (page == -1); });
+    QVERIFY(emptyAnswered);
+}
+
+void TestSelection::testThumbnailRetryAfterFileChanges() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    auto& previews = PreviewManager::instance();
+
+    const QString path = dir.filePath(QStringLiteral("broken.png"));
+    {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("this is not a png");
+    }
+    const qint64 brokenModified = QFileInfo(path).lastModified().toMSecsSinceEpoch();
+
+    int readyCount = 0;
+    auto connection = connect(&previews, &PreviewManager::thumbnailReady, this,
+                              [&readyCount](const QString&) { ++readyCount; });
+
+    // A file that cannot be thumbnailed must not produce a thumbnail...
+    previews.iconThumbnail(path, 128);
+    QTest::qWait(700);
+    QCOMPARE(readyCount, 0);
+
+    // ...and repeated repaints must not queue the same doomed work again.
+    for (int i = 0; i < 4; ++i) {
+        previews.iconThumbnail(path, 128);
+    }
+    QTest::qWait(400);
+    QCOMPARE(readyCount, 0);
+
+    // Replacing the file with a valid image changes its mtime, so the failure
+    // record no longer applies and the thumbnail must be regenerated. Before
+    // this fix the path stayed blacklisted for the whole session.
+    {
+        QImage image(64, 64, QImage::Format_ARGB32);
+        image.fill(Qt::green);
+        QVERIFY(image.save(path, "PNG"));
+    }
+    const qint64 fixedModified = QFileInfo(path).lastModified().toMSecsSinceEpoch();
+    QVERIFY2(fixedModified != brokenModified, "fixture must change the mtime");
+
+    previews.iconThumbnail(path, 128);
+    QTRY_VERIFY_WITH_TIMEOUT(readyCount >= 1, 10000);
+
+    disconnect(connection);
+}
+
+void TestSelection::testIconSizeDoesNotClearGlobalPixmapCache() {
+    // Changing the icon size must not flush Qt's global pixmap cache: the
+    // delegate already keys its entries by scaled size and DPR, so unrelated
+    // toolbar, sidebar and menu pixmaps would be evicted for nothing.
+    QPixmap marker(32, 32);
+    marker.fill(Qt::magenta);
+    const QString markerKey = QStringLiteral("test-selection#marker-pixmap");
+    QPixmapCache::insert(markerKey, marker);
+
+    auto* model = new FileSystemModel(this);
+    model->setRootPath(m_tempDir.path());
+
+    IconView view;
+    view.setFileSystemModel(model);
+    view.setIconSizeValue(72); // triggers the delegate's setIconSize
+    view.setIconSizeValue(96);
+
+    QPixmap retrieved;
+    QVERIFY2(QPixmapCache::find(markerKey, &retrieved),
+             "changing the icon size must not clear the global QPixmapCache");
+    QCOMPARE(retrieved.size(), QSize(32, 32));
+
+    QPixmapCache::remove(markerKey);
+}
+
+void TestSelection::testTerminalScrollbackIsCapped() {
+    // Without a cap a chatty command appends forever and every further insert
+    // re-lays out an ever-growing document, freezing the window.
+    TerminalPanel panel;
+    auto* output = panel.findChild<QTextEdit*>();
+    QVERIFY(output);
+    QCOMPARE(output->document()->maximumBlockCount(), 5000);
+}
+
+void TestSelection::testTerminalAnsiRendering() {
+    TerminalPanel panel;
+    panel.resize(700, 400);
+    panel.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&panel));
+
+    auto* input = panel.findChild<QLineEdit*>();
+    auto* output = panel.findChild<QTextEdit*>();
+    QVERIFY(input);
+    QVERIFY(output);
+
+    // Colour codes must be interpreted, not printed literally. Wait for the
+    // child process to actually produce its output, not just for the echo.
+    input->setText(QStringLiteral("printf '\\033[32mGREENTEXT\\033[0m plain\\n'"));
+    QMetaObject::invokeMethod(&panel, "onCommandEntered", Qt::DirectConnection);
+    QTRY_VERIFY_WITH_TIMEOUT(output->toPlainText().contains(QStringLiteral("GREENTEXT plain")),
+                             15000);
+
+    const QString text = output->toPlainText();
+    // The echoed command line legitimately contains the escape text, so only
+    // inspect the rendered output line that follows it.
+    QVERIFY2(!text.contains(QStringLiteral("\x1b")), "raw ESC byte leaked into output");
+
+    const qsizetype commandEnd = text.indexOf(QStringLiteral("GREENTEXT plain"));
+    QVERIFY(commandEnd >= 0);
+    const QString rendered = text.mid(commandEnd, 15);
+    QVERIFY2(!rendered.contains(QStringLiteral("[32m")), "escape sequence leaked into output");
+
+    // The coloured run must carry an explicit foreground colour.
+    bool foundColoured = false;
+    for (QTextBlock block = output->document()->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (fragment.isValid() && fragment.text().contains(QStringLiteral("GREENTEXT"))) {
+                foundColoured = fragment.charFormat().hasProperty(QTextFormat::ForegroundBrush);
+            }
+        }
+    }
+    QVERIFY2(foundColoured, "ANSI colour was not applied to the text");
+
+    // Unsupported sequences must be swallowed without garbling the text.
+    // The echoed command line still shows the literal escape, so check the
+    // rendered output line that starts with the marker.
+    input->setText(QStringLiteral("printf '\\033[999mZZSTARTZZ ZZENDZZ\\n'"));
+    QMetaObject::invokeMethod(&panel, "onCommandEntered", Qt::DirectConnection);
+    QTRY_VERIFY_WITH_TIMEOUT(output->toPlainText().contains(QStringLiteral("ZZSTARTZZ ZZENDZZ")),
+                             15000);
+
+    const QString full = output->toPlainText();
+    const qsizetype renderedStart = full.lastIndexOf(QStringLiteral("ZZSTARTZZ ZZENDZZ"));
+    QVERIFY(renderedStart >= 0);
+    const QString renderedLine = full.mid(renderedStart, 19);
+    QVERIFY2(renderedLine.startsWith(QStringLiteral("ZZSTARTZZ ZZENDZZ")),
+             qPrintable(QStringLiteral("unexpected output: %1").arg(renderedLine)));
+    QVERIFY2(!renderedLine.contains(QStringLiteral("999m")),
+             "unsupported escape was not swallowed");
+}
+
+void TestSelection::testTerminalCtrlCInterruptsProcessGroup() {
+    TerminalPanel panel;
+    panel.resize(700, 400);
+    panel.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&panel));
+    panel.focusInput();
+
+    auto* input = panel.findChild<QLineEdit*>();
+    auto* output = panel.findChild<QTextEdit*>();
+    QVERIFY(input);
+    QVERIFY(output);
+
+    // A multi-command line forces `sh` to fork, so the child is a separate
+    // process. This is what exposes the bug: killing only the shell orphans the
+    // child, which keeps running invisibly.
+    const QString marker = QStringLiteral("ZZ_CHILD_SURVIVED_MARKER");
+    input->setText(QStringLiteral("sleep 30; echo %1").arg(marker));
+    QMetaObject::invokeMethod(&panel, "onCommandEntered", Qt::DirectConnection);
+
+    auto* process = panel.findChild<QProcess*>();
+    QVERIFY(process);
+    QTRY_COMPARE_WITH_TIMEOUT(process->state(), QProcess::Running, 10000);
+
+    // Wait until `sh` has actually forked its child, otherwise the shell may be
+    // killed before the child exists and there is nothing to orphan.
+    const qint64 leaderPid = process->processId();
+    QVERIFY(leaderPid > 0);
+    QList<qint64> childPids;
+    for (int attempt = 0; attempt < 40 && childPids.isEmpty(); ++attempt) {
+        QTest::qWait(100);
+        QProcess probe;
+        probe.start(QStringLiteral("/bin/sh"),
+                    {QStringLiteral("-c"), QStringLiteral("pgrep -P %1 || true").arg(leaderPid)});
+        probe.waitForFinished(2000);
+        const QStringList lines = QString::fromUtf8(probe.readAllStandardOutput())
+                                      .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        for (const QString& line : lines) {
+            bool ok = false;
+            const qint64 pid = line.trimmed().toLongLong(&ok);
+            if (ok && pid > 0) {
+                childPids.append(pid);
+            }
+        }
+    }
+    QVERIFY2(!childPids.isEmpty(), "the shell never forked a child");
+
+    QTest::keyClick(input, Qt::Key_C, Qt::ControlModifier);
+    QTRY_COMPARE_WITH_TIMEOUT(process->state(), QProcess::NotRunning, 15000);
+    QVERIFY2(output->toPlainText().contains(QStringLiteral("^C")), "no interrupt feedback shown");
+
+    // The forked child must be gone too. Checking liveness directly avoids
+    // having to wait for an orphan to finish and print its marker.
+    QTest::qWait(700);
+    for (qint64 childPid : childPids) {
+        QProcess alive;
+        alive.start(
+            QStringLiteral("/bin/sh"),
+            {QStringLiteral("-c"),
+             QStringLiteral("kill -0 %1 2>/dev/null && echo alive || echo gone").arg(childPid)});
+        alive.waitForFinished(2000);
+        const QString state = QString::fromUtf8(alive.readAllStandardOutput()).trimmed();
+        QVERIFY2(state == QStringLiteral("gone"),
+                 qPrintable(QStringLiteral("child process %1 survived Ctrl+C; the process "
+                                           "group was not signalled")
+                                .arg(childPid)));
+    }
+}
+
+void TestSelection::testFolderViewModeFallsBackToGlobal() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    const QString docs = root.filePath(QStringLiteral("docs"));
+    QVERIFY(QDir().mkpath(photos));
+    QVERIFY(QDir().mkpath(docs));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column); // the global default
+    settings.setFolderViewModesEnabled(true);
+    settings.setFolderViewMode(photos, ViewMode::Gallery);
+
+    TabPage page(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+
+    // The reported bug: docs used to keep Gallery because the mode of the
+    // folder just left was never replaced by the default.
+    page.navigateTo(docs);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+}
+
+void TestSelection::testFolderViewModeNeverLeaksBetweenFolders() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    const QString docs = root.filePath(QStringLiteral("docs"));
+    QVERIFY(QDir().mkpath(photos));
+    QVERIFY(QDir().mkpath(docs));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    settings.setFolderViewMode(photos, ViewMode::Gallery);
+
+    TabPage page(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+    page.navigateTo(docs);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+    page.navigateTo(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+    page.navigateTo(docs);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+}
+
+void TestSelection::testFolderOverrideDoesNotInheritToSubfolder() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    const QString year = photos + QStringLiteral("/2024");
+    QVERIFY(QDir().mkpath(year));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    settings.setFolderViewMode(photos, ViewMode::Gallery);
+
+    TabPage page(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+
+    // Exact-folder only: a child without its own override uses the default.
+    page.navigateTo(year);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+
+    page.navigateTo(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+}
+
+void TestSelection::testChangingViewInFolderRecordsOverride() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString docs = root.filePath(QStringLiteral("docs"));
+    QVERIFY(QDir().mkpath(docs));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    settings.setDirectViewModeScope(ViewModeScope::CurrentFolder);
+
+    TabPage page(docs);
+    page.setViewMode(ViewMode::Gallery);
+
+    QCOMPARE(settings.folderViewMode(docs).value_or(ViewMode::Icon), ViewMode::Gallery);
+    // ...and the global default must be untouched.
+    QCOMPARE(settings.viewMode(), ViewMode::Column);
+}
+
+void TestSelection::testChangingViewWithGlobalScope() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString docs = root.filePath(QStringLiteral("docs"));
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    QVERIFY(QDir().mkpath(docs));
+    QVERIFY(QDir().mkpath(photos));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    settings.setDirectViewModeScope(ViewModeScope::AllFolders);
+
+    TabPage page(docs);
+    page.setViewMode(ViewMode::List);
+
+    QCOMPARE(settings.viewMode(), ViewMode::List);
+    QVERIFY(!settings.hasFolderViewModeOverride(docs));
+
+    // Another folder without an override follows the new default.
+    page.navigateTo(photos);
+    QCOMPARE(page.viewMode(), ViewMode::List);
+}
+
+void TestSelection::testVirtualViewSwitchDoesNotPersist() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    QVERIFY(QDir().mkpath(photos));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    // Column view is the case that forces a switch to List for flat collections.
+    settings.setFolderViewMode(photos, ViewMode::Column);
+
+    TabPage page(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+
+    // A virtual collection is shown as a list, but that must not overwrite the
+    // real folder's override (nor create a tag:// entry).
+    page.showTaggedFiles(QStringLiteral("SomeTag"));
+    QCOMPARE(page.viewMode(), ViewMode::List);
+    QCOMPARE(settings.folderViewMode(photos).value_or(ViewMode::Icon), ViewMode::Column);
+    QVERIFY(!settings.hasFolderViewModeOverride(QStringLiteral("tag://SomeTag")));
+
+    // Returning shows the folder's own mode again.
+    page.navigateTo(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+}
+
+void TestSelection::testClearOverrideFallsBackImmediately() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    QVERIFY(QDir().mkpath(photos));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    settings.setFolderViewMode(photos, ViewMode::Gallery);
+
+    TabPage page(photos);
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+    QVERIFY(page.hasFolderViewModeOverride());
+
+    page.clearFolderViewModeOverride();
+    QCOMPARE(page.viewMode(), ViewMode::Column);
+    QVERIFY(!page.hasFolderViewModeOverride());
+}
+
+void TestSelection::testSplitPanesKeepIndependentModes() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString photos = root.filePath(QStringLiteral("photos"));
+    const QString docs = root.filePath(QStringLiteral("docs"));
+    QVERIFY(QDir().mkpath(photos));
+    QVERIFY(QDir().mkpath(docs));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+    settings.setFolderViewMode(photos, ViewMode::Gallery);
+
+    SplitTabWidget split(photos);
+    split.toggleSplit();
+    QVERIFY(split.isSplit());
+    QVERIFY(split.primaryPage());
+    QVERIFY(split.secondaryPage());
+
+    split.secondaryPage()->navigateTo(docs);
+
+    // Each pane resolves its own folder; they must not influence each other.
+    QCOMPARE(split.primaryPage()->viewMode(), ViewMode::Gallery);
+    QCOMPARE(split.secondaryPage()->viewMode(), ViewMode::Column);
+}
+
+void TestSelection::testSessionRestoreDoesNotPersist() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString docs = root.filePath(QStringLiteral("docs"));
+    QVERIFY(QDir().mkpath(docs));
+
+    auto& settings = AppSettings::instance();
+    settings.setViewMode(ViewMode::Column);
+    settings.setFolderViewModesEnabled(true);
+
+    TabPage page(docs);
+    // Session restore applies a stored per-tab mode; it must not be recorded as
+    // a user choice, or every launch would rewrite the settings.
+    page.applyViewMode(ViewMode::Gallery);
+
+    QCOMPARE(page.viewMode(), ViewMode::Gallery);
+    QVERIFY(!settings.hasFolderViewModeOverride(docs));
+    QCOMPARE(settings.viewMode(), ViewMode::Column);
 }
 
 void TestSelection::testAppChooserDialog() {

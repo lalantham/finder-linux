@@ -174,6 +174,11 @@ public:
         return m_longestFileName;
     }
 
+    // True when candidate is ancestor itself or a path below it. Uses path
+    // separators for the comparison so sibling names sharing a prefix are not
+    // mistaken for descendants.
+    [[nodiscard]] static bool isSameOrInsidePath(const QString& candidate, const QString& ancestor);
+
 signals:
     void rootPathChanged(const QString& newPath);
     void directoryLoading(const QString& path);

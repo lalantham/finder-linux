@@ -1,12 +1,15 @@
 #include "FileSystemModel.h"
 #include "SearchEngine.h"
 #include "SearchQuery.h"
+#include <QDir>
 #include <QFile>
 #include <QItemSelectionModel>
+#include <QMimeData>
 #include <QPersistentModelIndex>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QUrl>
 
 class TestSearch : public QObject {
     Q_OBJECT
@@ -28,6 +31,8 @@ private slots:
     void testRelevanceSorting();
     void testSearchResultsRefineFilter();
     void testDirectoryChangeDuringSearchKeepsResults();
+    void testPathContainmentHelper();
+    void testDropRejectsFolderIntoItself();
 };
 
 void TestSearch::testSearchMatching() {
@@ -484,6 +489,102 @@ void TestSearch::testDirectoryChangeDuringSearchKeepsResults() {
                                       Q_ARG(QString, tempDir.path())));
     QCOMPARE(changeSpy.count(), 1);
     QCOMPARE(model.rowCount(), 1);
+}
+
+void TestSearch::testPathContainmentHelper() {
+    // A path is inside itself and inside its ancestors...
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report"),
+                                                QStringLiteral("/data/report")));
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report/a.txt"),
+                                                QStringLiteral("/data/report")));
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report/sub/deep/x"),
+                                                QStringLiteral("/data/report")));
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/data"), QStringLiteral("/")));
+
+    // ...but a sibling that merely shares a name prefix is NOT a descendant.
+    QVERIFY(!FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report-2026"),
+                                                 QStringLiteral("/data/report")));
+    QVERIFY(!FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report_old/x"),
+                                                 QStringLiteral("/data/report")));
+    QVERIFY(!FileSystemModel::isSameOrInsidePath(QStringLiteral("/data"),
+                                                 QStringLiteral("/data/report")));
+    QVERIFY(!FileSystemModel::isSameOrInsidePath(QStringLiteral("/other/x"),
+                                                 QStringLiteral("/data/report")));
+
+    // Trailing slashes and redundant separators are normalised away.
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report/"),
+                                                QStringLiteral("/data/report")));
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/data//report/a"),
+                                                QStringLiteral("/data/report")));
+    QVERIFY(!FileSystemModel::isSameOrInsidePath(QStringLiteral("/data/report-2026/"),
+                                                 QStringLiteral("/data/report/")));
+
+    // The root filesystem is an ancestor of every absolute path.
+    QVERIFY(FileSystemModel::isSameOrInsidePath(QStringLiteral("/anything"), QStringLiteral("/")));
+    QVERIFY(!FileSystemModel::isSameOrInsidePath(QStringLiteral("/"), QStringLiteral("/data")));
+}
+
+void TestSearch::testDropRejectsFolderIntoItself() {
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    // Sibling folders whose names share a prefix: the historic bug treated
+    // "report-2026" as a descendant of "report".
+    QVERIFY(QDir(tempDir.path()).mkdir(QStringLiteral("report")));
+    QVERIFY(QDir(tempDir.path()).mkdir(QStringLiteral("report-2026")));
+    QVERIFY(QDir(tempDir.path()).mkdir(QStringLiteral("report/sub")));
+
+    const QString report = tempDir.filePath(QStringLiteral("report"));
+    const QString sibling = tempDir.filePath(QStringLiteral("report-2026"));
+    const QString child = report + QStringLiteral("/sub");
+
+    // Model rooted at tempDir sees "report", "report-2026" and "report/sub" is
+    // not a direct child, so drip tests that need it use a model on "report".
+    FileSystemModel model;
+    model.setRootPath(tempDir.path());
+    QSignalSpy dropSpy(&model, &FileSystemModel::fileDropRequested);
+
+    // Dropping a folder onto itself must be rejected.
+    QMimeData ontoSelf;
+    ontoSelf.setUrls({QUrl::fromLocalFile(report)});
+    QVERIFY(!model.dropMimeData(&ontoSelf, Qt::MoveAction, -1, -1, model.indexForPath(report)));
+    QCOMPARE(dropSpy.count(), 0);
+
+    // The sibling folder is a legitimate target even though its name starts
+    // with the dragged folder's name. This is the regression under test: a
+    // plain startsWith() check silently dropped this drop.
+    QMimeData ontoSibling;
+    ontoSibling.setUrls({QUrl::fromLocalFile(report)});
+    QVERIFY(model.dropMimeData(&ontoSibling, Qt::MoveAction, -1, -1, model.indexForPath(sibling)));
+    QCOMPARE(dropSpy.count(), 1);
+    QCOMPARE(dropSpy.at(0).at(0).toStringList(), QStringList{report});
+    QCOMPARE(dropSpy.at(0).at(1).toString(), sibling);
+
+    // Dropping a folder onto one of its real descendants must be rejected.
+    FileSystemModel parentModel;
+    parentModel.setRootPath(report);
+    QSignalSpy childSpy(&parentModel, &FileSystemModel::fileDropRequested);
+    QMimeData ontoChild;
+    ontoChild.setUrls({QUrl::fromLocalFile(report)});
+    QVERIFY(!parentModel.dropMimeData(&ontoChild, Qt::MoveAction, -1, -1,
+                                      parentModel.indexForPath(child)));
+    QCOMPARE(childSpy.count(), 0);
+
+    // Dropping onto the view background targets the model root and works for
+    // unrelated sources.
+    QFile outside(tempDir.filePath(QStringLiteral("notes.txt")));
+    QVERIFY(outside.open(QIODevice::WriteOnly));
+    outside.write("x");
+    outside.close();
+
+    FileSystemModel siblingModel;
+    siblingModel.setRootPath(sibling);
+    QSignalSpy rootSpy(&siblingModel, &FileSystemModel::fileDropRequested);
+    QMimeData intoFolder;
+    intoFolder.setUrls({QUrl::fromLocalFile(tempDir.filePath(QStringLiteral("notes.txt")))});
+    QVERIFY(siblingModel.dropMimeData(&intoFolder, Qt::CopyAction, -1, -1, QModelIndex()));
+    QCOMPARE(rootSpy.count(), 1);
+    QCOMPARE(rootSpy.at(0).at(1).toString(), sibling);
 }
 
 QTEST_MAIN(TestSearch)
