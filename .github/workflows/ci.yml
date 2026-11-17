@@ -45,7 +45,8 @@ jobs:
             ca-certificates curl git cmake ninja-build g++ pkg-config \
             qt6-base-dev qt6-base-dev-tools qt6-svg-dev qt6-multimedia-dev \
             libarchive-dev libpoppler-qt6-dev \
-            desktop-file-utils appstream
+            desktop-file-utils appstream \
+            dpkg-dev file zstd
 
       - name: Install dependencies (Fedora)
         if: matrix.kind == 'dnf'
