@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-set(FINDER_VERSION "1.0.1" CACHE STRING "File Manager release version")
+# Not a CACHE variable: it must follow the source tree so a version bump in
+# CMakeLists.txt takes effect even when build/ is reused (install.sh does).
+# Passing -DFINDER_VERSION=... on the command line still overrides it.
+if(NOT DEFINED FINDER_VERSION)
+    set(FINDER_VERSION "1.1.0")
+endif()
 project(FinderLinux VERSION ${FINDER_VERSION} LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)

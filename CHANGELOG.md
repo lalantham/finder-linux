@@ -4,6 +4,35 @@ All notable changes to File Manager for Linux are documented here.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-17
+
+### Reliability fixes
+- **Saved sort order now survives restarts.** Attaching the model to the list view sorted through
+  a default header indicator, which discarded the restored order; the header arrow now also
+  follows sorting done from the menu or a header click.
+- **Drag and drop into a folder whose name shares a prefix with the dragged item now works.**
+  Dropping `report` onto `report-2026` was treated as dropping a folder into itself and silently
+  discarded.
+- **Mounting a disk image, creating an ISO, emptying the Trash and registering as the default file
+  manager no longer freeze the window**; each could block for up to several minutes.
+- **The terminal panel no longer freezes on chatty commands.** Output is parsed in a single pass
+  instead of re-laying out an HTML document per append (2000 lines: 7.1 s → 54 ms), scrollback is
+  capped, and `Ctrl+C` now signals the whole process group instead of killing only the shell and
+  leaving children running. The panel also follows the light/dark theme.
+- **Thumbnail failures are retried** instead of blacklisting a path for the session, and changing
+  the icon size no longer flushes Qt's global pixmap cache.
+
+### Performance
+- **Copying is dramatically faster.** Files are cloned with `FICLONE` or copied with
+  `copy_file_range` before falling back to a buffered loop, and the per-file `fsync` is now a
+  preference. Copying 386 MB across 502 files: 691 ms → 16 ms. Sparse files are preserved instead
+  of being materialised (a 1 GiB file with 8 KiB of data stayed at 8 KiB).
+- **PDF pages render asynchronously** and the open document is cached, so page turns no longer
+  block the window (271 ms → 0 ms) and each page no longer re-parses the file.
+- **Metadata saves are linear rather than quadratic** (504 ms → 30 ms at 42k entries), and stale
+  entries are pruned at startup so the store no longer grows without bound.
+- Release builds use link-time optimization (~10% faster on model, sort and classify paths).
+
 ### Per-folder view modes
 - Added a **global default view mode** with **per-folder overrides**. A folder without an override
   now falls back to the default instead of inheriting the mode of the folder you just left.
@@ -11,10 +40,18 @@ All notable changes to File Manager for Linux are documented here.
 - Added **View → Remember This Folder's View** (`Ctrl+Shift+D`): uncheck it to forget the folder's
   view and return to the default.
 - Added **View → Use This View as Default for All Folders**.
-- Added a **Preferences → “View buttons change:”** option choosing whether `Ctrl+1-4`, the view
-  pills and View → as … apply to *only the current folder* (default) or *all folders*.
+- Added **Preferences → “View buttons change:”** choosing whether `Ctrl+1-4`, the view pills and
+  View → as … apply to *only the current folder* (default) or to *all folders*.
 - Per-folder view modes are now enabled by default; existing overrides are preserved and migrated.
 - Overrides are capped (least-recently-used first) so settings cannot grow without bound.
+
+### Diagnostics
+- Added **Help → About File Manager** showing the version, Qt version, build timestamp and
+  executable path, so an out-of-date install is immediately identifiable.
+
+### Internal
+- The file-kind extension tables shared by the instant filter and the search engine now live in one
+  place, with a parity test so the two cannot drift apart.
 
 ### Search and Smart Folders
 - Added real metadata, tag, comment, size, date, extension, and content search.
@@ -155,6 +192,63 @@ All notable changes to File Manager for Linux are documented here.
 - Added locale-aware natural sorting (`file2` before `file10`) and sorting for the new columns.
 - Added show/hide controls for the sidebar, toolbar, path bar, and status bar.
 - Added `F11` full-screen mode.
+
+## [1.0.1] - 2026-11-15
+
+Released with these changes recorded under "Unreleased" at the time:
+
+### Search and Smart Folders
+- Added real metadata, tag, comment, size, date, extension, and content search.
+- Added structured search tokens such as `kind:`, `tag:`, `size:`, `modified:`, `ext:`,
+  `name:`, `content:`, and `-exclude`.
+- Added a **This PC** scope that searches local mounted filesystems with system-directory pruning.
+- Added content search for text/source files and PDFs (via `pdftotext` when available).
+- Added Smart Folders: save, edit, rename, delete, and open saved searches from the sidebar.
+- Added active-filter summaries and a Save Search action to the search bar.
+- `F5` re-runs an active search to pick up filesystem changes.
+
+### Search index support
+- Added optional Baloo, Tracker 3, and Recoll backend detection.
+- Added an **Index** search toggle that appears when a supported index is available.
+- Indexed searches still apply File Manager's metadata, tag, size, date, and content filters, with a
+  full-scan fallback on failure.
+
+### AppImage Wayland fix
+- Bundled Qt's `wayland-graphics-integration-client` plugins in the AppImage.
+- Fixes `Failed to load client buffer integration: "wayland-egl"` on KDE Wayland.
+- AppImages now select Qt's FFmpeg media backend, avoiding missing host GStreamer elements.
+
+### Release packaging
+- Added Debian package generation via CPack.
+- Added AppImage and relocatable tarball packaging scripts.
+- Added a tag-triggered GitHub Release workflow with SHA-256 checksums.
+- Added Qt 6.4 compatibility guards for system color-scheme detection.
+- Release builds target Debian 12 / Ubuntu 23.04+ (glibc 2.36 baseline).
+
+### Search polish
+- Added removable search token chips for kind, tag, extension, size, date, content, and exclusions.
+- Added live recursive search refresh (opt-out) without clobbering results on folder changes.
+- Added relevance/name/date/size result sorting and a "Search in results" refinement field.
+- Remembered search scope, subfolder recursion, live-update preference, and sort mode.
+- Preserved selection across live refreshes and result refinements.
+- Added regression tests for chip parsing, relevance sorting, refinement, and directory-change safety.
+
+### Performance polish
+- Moved thumbnail disk-cache probing and PNG metadata parsing off the UI thread.
+- Coalesced thumbnail repaints, skipped hidden views, and cached scaled thumbnails.
+- Split thumbnail, Office-conversion, and folder-size work into bounded thread pools.
+- Folder-size walks survive unrelated directory refreshes and share in-flight work across Column View.
+- Search uses cached tags first, shortens TagManager lock scope, and budgets cold xattr probes.
+- Debounced AppSettings writes and flush pending settings on exit.
+- Async Quick Look image/PDF rendering and gallery/column preview thumbnails.
+- Moved Get Info media metadata probing to a background task.
+- Render PDF thumbnails at target-appropriate DPI instead of fixed 150 DPI.
+- Copy now uses 1 MB chunks with 100 ms progress throttling.
+- Same-filesystem moves skip recursive pre-walks.
+- Coalesced sidebar refreshes after tag and volume changes.
+
+### Custom tag management
+- Added custom tag creation, color selection, rename, and delete.
 
 ## [1.0.0] - 2026-11-14
 

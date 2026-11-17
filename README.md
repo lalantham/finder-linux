@@ -254,8 +254,8 @@ BUILD_DIR=build-pkg bash packaging/make-tarball.sh 1.0.0
 Releases are created automatically by pushing a version tag:
 
 ```bash
-git tag v1.0.1
-git push origin v1.0.1
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
 ---

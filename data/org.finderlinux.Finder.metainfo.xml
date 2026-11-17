@@ -45,6 +45,20 @@
   </keywords>
   <icon type="stock">finder-linux</icon>
   <releases>
+    <release version="1.1.0" date="2026-11-17">
+      <description>
+        <p>Faster copying and previews, per-folder view modes, and reliability fixes.</p>
+        <ul>
+          <li>Copying uses reflinks and in-kernel copies; 386 MB across 502 files drops from
+              691 ms to 16 ms, and sparse files keep their holes.</li>
+          <li>PDF pages render without blocking the window and the open document is cached.</li>
+          <li>Per-folder view modes with a global default and a per-folder override.</li>
+          <li>Mounting images, creating ISOs and emptying the Trash no longer freeze the window.</li>
+          <li>The terminal panel stays responsive and Ctrl+C stops the whole process group.</li>
+          <li>Saved sort order now survives restarts.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-11-15"/>
     <release version="1.0.0" date="2026-11-14"/>
   </releases>
