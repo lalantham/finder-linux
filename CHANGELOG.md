@@ -4,6 +4,17 @@ All notable changes to File Manager for Linux are documented here.
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-17
+
+### Icon theme fix
+- **The AppImage now uses your desktop's icon theme.** It previously rendered every icon from
+  Qt's built-in fallback set, so it looked like a different, poorer icon pack than the same binary
+  installed system-wide. Two causes: the AppImage bundled no `iconengines` plugin, and almost every
+  Linux icon theme ships SVG icons, so without `libqsvgicon.so` not one of them could be drawn; and
+  Qt only seeds its icon search paths from the platform theme, which an AppImage cannot load, so
+  the paths collapsed to Qt's internal resources. The host icon directories are now added
+  explicitly and the SVG icon engine is bundled.
+
 ## [1.1.0] - 2026-11-17
 
 ### Reliability fixes

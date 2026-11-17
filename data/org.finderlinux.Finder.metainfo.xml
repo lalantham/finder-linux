@@ -45,6 +45,15 @@
   </keywords>
   <icon type="stock">finder-linux</icon>
   <releases>
+    <release version="1.1.1" date="2026-11-17">
+      <description>
+        <p>Icon theme fix for the AppImage.</p>
+        <ul>
+          <li>The AppImage now uses your desktop's icon theme instead of the fallback
+              built-in icons.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.0" date="2026-11-17">
       <description>
         <p>Faster copying and previews, per-folder view modes, and reliability fixes.</p>

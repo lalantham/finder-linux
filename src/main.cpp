@@ -24,7 +24,7 @@
 #include <unistd.h>
 
 #ifndef FINDER_VERSION
-#define FINDER_VERSION "1.1.0"
+#define FINDER_VERSION "1.1.1"
 #endif
 
 // Stamped at compile time so a stale binary is immediately identifiable: when
