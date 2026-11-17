@@ -323,9 +323,10 @@ void TerminalPanel::executeExternalCommand(const QString& command) {
     // session leader (this differed between developer machines and CI). In the
     // child it is deterministic: the shell becomes the group leader, so
     // kill(-pid) always addresses the right group.
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+    // setChildProcessModifier() exists since Qt 6.0 and the project requires
+    // 6.4+, so no version guard: guarding it at 6.7 silently disabled the
+    // process-group setup on Debian 12's Qt 6.4.2.
     m_process->setChildProcessModifier([]() { ::setpgid(0, 0); });
-#endif
     m_process->start(QStringLiteral("/bin/sh"), {QStringLiteral("-c"), command});
 }
 

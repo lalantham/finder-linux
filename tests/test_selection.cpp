@@ -1248,24 +1248,32 @@ void TestSelection::testTerminalCtrlCInterruptsProcessGroup() {
 
     // Wait until `sh` has actually forked its child, otherwise the shell may be
     // killed before the child exists and there is nothing to orphan.
+    //
+    // Read /proc directly instead of shelling out to pgrep: pgrep lives in procps,
+    // which minimal containers (the Debian release image) do not install, and a
+    // missing tool silently produced no output here.
     const qint64 leaderPid = process->processId();
     QVERIFY(leaderPid > 0);
+    const auto directChildren = [](qint64 pid) {
+        QList<qint64> children;
+        QFile childrenFile(QStringLiteral("/proc/%1/task/%1/children").arg(pid));
+        if (!childrenFile.open(QIODevice::ReadOnly)) {
+            return children;
+        }
+        for (const QByteArray& token : childrenFile.readAll().simplified().split(' ')) {
+            bool ok = false;
+            const qint64 child = token.toLongLong(&ok);
+            if (ok && child > 0) {
+                children.append(child);
+            }
+        }
+        return children;
+    };
+
     QList<qint64> childPids;
     for (int attempt = 0; attempt < 40 && childPids.isEmpty(); ++attempt) {
         QTest::qWait(100);
-        QProcess probe;
-        probe.start(QStringLiteral("/bin/sh"),
-                    {QStringLiteral("-c"), QStringLiteral("pgrep -P %1 || true").arg(leaderPid)});
-        probe.waitForFinished(2000);
-        const QStringList lines = QString::fromUtf8(probe.readAllStandardOutput())
-                                      .split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-        for (const QString& line : lines) {
-            bool ok = false;
-            const qint64 pid = line.trimmed().toLongLong(&ok);
-            if (ok && pid > 0) {
-                childPids.append(pid);
-            }
-        }
+        childPids = directChildren(leaderPid);
     }
     QVERIFY2(!childPids.isEmpty(), "the shell never forked a child");
 
@@ -1279,14 +1287,17 @@ void TestSelection::testTerminalCtrlCInterruptsProcessGroup() {
     // kill -0 still reports success. A zombie is dead, so that counts as gone.
     QTest::qWait(700);
     for (qint64 childPid : childPids) {
-        QProcess state;
-        state.start(QStringLiteral("/bin/sh"),
-                    {QStringLiteral("-c"),
-                     QStringLiteral("if [ -r /proc/%1/stat ]; then "
-                                    "awk '{print $3}' /proc/%1/stat; else echo gone; fi")
-                         .arg(childPid)});
-        state.waitForFinished(2000);
-        const QString procState = QString::fromUtf8(state.readAllStandardOutput()).trimmed();
+        // Read /proc directly: 'awk' may not exist either, and a failed helper
+        // would look like a terminated child.
+        QString procState = QStringLiteral("gone");
+        QFile statFile(QStringLiteral("/proc/%1/stat").arg(childPid));
+        if (statFile.open(QIODevice::ReadOnly)) {
+            const QByteArray stat = statFile.readAll();
+            const qsizetype close = stat.lastIndexOf(')');
+            if (close >= 0 && close + 2 < stat.size()) {
+                procState = QString(QChar::fromLatin1(stat.at(close + 2)));
+            }
+        }
         // 'Z' (zombie) and 'X' (dead) mean the process has terminated; only a
         // live state such as R/S/D/T means it survived the interrupt.
         QVERIFY2(procState.isEmpty() || procState == QStringLiteral("gone") ||
