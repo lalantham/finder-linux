@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # CMakeLists.txt takes effect even when build/ is reused (install.sh does).
 # Passing -DFINDER_VERSION=... on the command line still overrides it.
 if(NOT DEFINED FINDER_VERSION)
-    set(FINDER_VERSION "1.1.1")
+    set(FINDER_VERSION "1.1.2")
 endif()
 project(FinderLinux VERSION ${FINDER_VERSION} LANGUAGES CXX)
 
@@ -248,20 +248,28 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 )
 
-# D-Bus service so browsers can activate Finder for "Show in folder"
-# (org.freedesktop.FileManager1).
-configure_file(data/org.freedesktop.FileManager1.service.in
-    ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.FileManager1.service @ONLY)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.FileManager1.service
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services
-)
-
-# Standard org.freedesktop.Application activation (DBusActivatable=true).
+# Standard org.freedesktop.Application activation (DBusActivatable=true). This
+# name is unique to Finder, so it is safe to install system-wide.
 configure_file(data/org.finderlinux.Finder.service.in
     ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.service @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.finderlinux.Finder.service
     DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services
 )
+
+# org.freedesktop.FileManager1 is a *shared* freedesktop name: nautilus,
+# dolphin, elementary-files and others already ship
+# /usr/share/dbus-1/services/org.freedesktop.FileManager1.service, so installing
+# our own copy system-wide makes the package uninstallable alongside any of
+# them ("trying to overwrite ... which is also in package nautilus").
+#
+# It is also unnecessary: D-Bus resolves a well-known name by service-directory
+# precedence, and ~/.local/share comes before /usr/share, so the user-scoped
+# file that FileManager1Service::installActivationFile() writes at runtime wins
+# over whatever the distribution installed. install.sh does the same, and the
+# in-app "Set as default file manager" action refreshes it.
+#
+# So the data/ file is kept for reference and for install.sh-style installs,
+# but deliberately not installed here.
 
 install(FILES data/org.finderlinux.Finder.metainfo.xml
     DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo

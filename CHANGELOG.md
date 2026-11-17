@@ -4,6 +4,19 @@ All notable changes to File Manager for Linux are documented here.
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-17
+
+### Package install fix
+- **The Debian package now installs alongside nautilus, dolphin and elementary Files.**
+  `org.freedesktop.FileManager1` is a shared freedesktop name that those packages already
+  provide, so shipping `/usr/share/dbus-1/services/org.freedesktop.FileManager1.service`
+  aborted the install with "trying to overwrite ... which is also in package nautilus".
+  The name is no longer installed system-wide: the user-scoped activation file that
+  **Set as default file manager** writes to `~/.local/share/dbus-1/services` already takes
+  precedence over the distribution's, per dbus-daemon(1).
+- `uninstall.sh` no longer deletes the system-wide FileManager1 file unless it points at
+  Finder, so uninstalling cannot break "Show in folder" for another file manager.
+
 ## [1.1.1] - 2026-11-17
 
 ### Icon theme fix

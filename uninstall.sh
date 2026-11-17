@@ -52,9 +52,16 @@ ${SUDO} rm -f "${PREFIX}/share/applications/finder-linux.desktop"
 rm -f "${USER_HOME}/.local/share/applications/org.finderlinux.Finder.desktop" 2>/dev/null || true
 rm -f "${USER_HOME}/.local/share/applications/finder-linux.desktop" 2>/dev/null || true
 
-# Remove the FileManager1 and org.freedesktop.Application activation files
+# Remove the FileManager1 and org.freedesktop.Application activation files.
+# org.freedesktop.FileManager1 is a shared name that other file managers also
+# provide, so only delete the system-wide copy if it actually points at Finder;
+# removing it unconditionally would break "Show in folder" for nautilus or
+# dolphin. Package installs no longer ship that file at all.
 echo -e "${BLUE}==>${NC} Removing D-Bus activation registrations..."
-${SUDO} rm -f "${PREFIX}/share/dbus-1/services/org.freedesktop.FileManager1.service"
+SYSTEM_FM1="${PREFIX}/share/dbus-1/services/org.freedesktop.FileManager1.service"
+if [[ -f "${SYSTEM_FM1}" ]] && grep -q "finder-linux" "${SYSTEM_FM1}" 2>/dev/null; then
+  ${SUDO} rm -f "${SYSTEM_FM1}"
+fi
 ${SUDO} rm -f "${PREFIX}/share/dbus-1/services/org.finderlinux.Finder.service"
 ${SUDO} rm -f "${PREFIX}/share/dbus-1/services/finder-linux.service"
 rm -f "${USER_HOME}/.local/share/dbus-1/services/org.freedesktop.FileManager1.service" 2>/dev/null || true

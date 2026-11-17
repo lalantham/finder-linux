@@ -45,6 +45,16 @@
   </keywords>
   <icon type="stock">finder-linux</icon>
   <releases>
+    <release version="1.1.2" date="2026-11-17">
+      <description>
+        <p>Packaging fix for distributions that already ship a file manager.</p>
+        <ul>
+          <li>The Debian package could not be installed alongside nautilus or dolphin: both
+              provide the shared org.freedesktop.FileManager1 D-Bus name. That file is no
+              longer shipped system-wide.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.1.1" date="2026-11-17">
       <description>
         <p>Icon theme fix for the AppImage.</p>

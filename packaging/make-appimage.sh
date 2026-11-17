@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-${FINDER_VERSION:-1.1.1}}"
+VERSION="${1:-${FINDER_VERSION:-1.1.2}}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 TOOLS_DIR="${TOOLS_DIR:-$ROOT/build/appimage-tools}"
