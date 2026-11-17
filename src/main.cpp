@@ -20,6 +20,7 @@
 #include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTextStream>
 #include <QUrl>
 #include <memory>
 #include <unistd.h>
@@ -247,11 +248,45 @@ int main(int argc, char* argv[]) {
         QStringLiteral("Open a new window even if File Manager is already running."));
     parser.addOption(newWindowOption);
 
+    // Diagnostic: print which icon theme was resolved and exit. Icon theming
+    // depends on the desktop, the platform-theme plugin and whether the build is
+    // an AppImage, so being able to inspect the decision from a terminal turns a
+    // cosmetic bug report into something concrete.
+    QCommandLineOption printIconThemeOption(
+        QStringLiteral("print-icon-theme"),
+        QStringLiteral("Print the resolved icon theme and the values it was chosen "
+                       "from, then exit."));
+    parser.addOption(printIconThemeOption);
+
     parser.addPositionalArgument(QStringLiteral("paths"),
                                  QStringLiteral("Files or directories to open"),
                                  QStringLiteral("[paths...]"));
 
     parser.process(app);
+
+    if (parser.isSet(printIconThemeOption)) {
+        const QString configured = IconTheme::configuredTheme();
+        QTextStream out(stdout);
+        out << "configured : " << (configured.isEmpty() ? QStringLiteral("(none)") : configured)
+            << Qt::endl;
+        out << "qt guess   : "
+            << (QIcon::themeName().isEmpty() ? QStringLiteral("(empty)") : QIcon::themeName())
+            << Qt::endl;
+        out << "resolved   : "
+            << (QIcon::themeName().isEmpty() ? QStringLiteral("(empty)") : QIcon::themeName())
+            << Qt::endl;
+        out << "fallback   : "
+            << (QIcon::fallbackThemeName().isEmpty() ? QStringLiteral("(empty)")
+                                                     : QIcon::fallbackThemeName())
+            << Qt::endl;
+        out << "appimage   : " << (qEnvironmentVariableIsSet("APPIMAGE") ? "yes" : "no")
+            << Qt::endl;
+        out << "searchPaths:" << Qt::endl;
+        for (const QString& path : QIcon::themeSearchPaths()) {
+            out << "  " << path << Qt::endl;
+        }
+        return 0;
+    }
 
     const bool forceNewWindow = parser.isSet(newWindowOption);
 
